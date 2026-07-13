@@ -106,6 +106,7 @@
   transition: var(--transition-smooth);
   padding: 0.5rem;
   border-radius: 50%;
+  text-decoration: none;
 }
 
 .cartBtn:hover, .profileBtn:hover {

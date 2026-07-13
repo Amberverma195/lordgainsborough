@@ -27,3 +27,15 @@ export function formatPhoneInput(raw: string): string {
 export function getPhoneDigitCount(formatted: string): number {
   return extractNationalDigits(formatted).length;
 }
+
+/** Formats login input as a phone number when it looks numeric; otherwise leaves email text alone. */
+export function formatLoginIdentifier(raw: string): string {
+  if (/[a-zA-Z@]/.test(raw)) {
+    return raw;
+  }
+  return formatPhoneInput(raw);
+}
+
+export function looksLikeEmail(identifier: string): boolean {
+  return identifier.includes('@');
+}

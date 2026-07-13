@@ -1,13 +1,15 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ShieldCheck, ArrowRight, ArrowLeft, Mail } from 'lucide-react';
+import { ShieldCheck, ArrowRight, Mail } from 'lucide-react';
 import styles from './verify.module.css';
 import { persistAuth } from '@/lib/auth';
 import { API_BASE } from '@/lib/orders';
+
+const RESEND_COOLDOWN_SECONDS = 30;
+const MAX_RESENDS = 5;
 
 interface PendingSignup {
   name: string;
@@ -31,6 +33,8 @@ export default function SignupVerifyPage() {
   const [resending, setResending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [cooldownSeconds, setCooldownSeconds] = useState(RESEND_COOLDOWN_SECONDS);
+  const [resendsRemaining, setResendsRemaining] = useState(MAX_RESENDS);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
@@ -45,6 +49,14 @@ export default function SignupVerifyPage() {
 
     return () => window.clearTimeout(timeout);
   }, [router]);
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = window.setTimeout(() => {
+      setCooldownSeconds((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldownSeconds]);
 
   const handleOtpChange = (index: number, value: string) => {
     const digit = value.replace(/\D/g, '').slice(-1);
@@ -79,7 +91,7 @@ export default function SignupVerifyPage() {
   };
 
   const handleResend = async () => {
-    if (!pendingSignup) return;
+    if (!pendingSignup || cooldownSeconds > 0 || resendsRemaining <= 0) return;
     setResending(true);
     setError('');
     setSuccess('');
@@ -97,9 +109,20 @@ export default function SignupVerifyPage() {
       if (res.ok) {
         setSuccess('A new verification code has been sent to your email.');
         setOtp(['', '', '', '', '', '']);
+        setCooldownSeconds(RESEND_COOLDOWN_SECONDS);
+        setResendsRemaining((prev) => Math.max(0, prev - 1));
         inputRefs.current[0]?.focus();
       } else {
         const message = await res.text();
+        if (res.status === 429) {
+          const retryAfter = Number(res.headers.get('Retry-After'));
+          if (Number.isFinite(retryAfter) && retryAfter > 0) {
+            setCooldownSeconds(retryAfter);
+          }
+          if (message.toLowerCase().includes('maximum')) {
+            setResendsRemaining(0);
+          }
+        }
         setError(message || 'Failed to resend code. Please try again.');
       }
     } catch {
@@ -168,6 +191,18 @@ export default function SignupVerifyPage() {
     );
   }
 
+  const resendDisabled =
+    resending || loading || cooldownSeconds > 0 || resendsRemaining <= 0;
+
+  let resendLabel = 'Resend Code';
+  if (resending) {
+    resendLabel = 'Sending...';
+  } else if (resendsRemaining <= 0) {
+    resendLabel = 'Resend limit reached';
+  } else if (cooldownSeconds > 0) {
+    resendLabel = `Resend Code (${cooldownSeconds}s)`;
+  }
+
   return (
     <div className={styles.container}>
       <motion.div
@@ -227,13 +262,15 @@ export default function SignupVerifyPage() {
             type="button"
             className={styles.resendBtn}
             onClick={handleResend}
-            disabled={resending || loading}
+            disabled={resendDisabled}
           >
-            {resending ? 'Sending...' : 'Resend Code'}
+            {resendLabel}
           </button>
-          <Link href="/signup" className={styles.backLink}>
-            <ArrowLeft size={16} /> Back to Sign Up
-          </Link>
+          {resendsRemaining > 0 && resendsRemaining < MAX_RESENDS && (
+            <p className={styles.resendHint}>
+              {resendsRemaining} resend{resendsRemaining === 1 ? '' : 's'} remaining
+            </p>
+          )}
         </div>
       </motion.div>
     </div>

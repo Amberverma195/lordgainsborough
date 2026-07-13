@@ -7,9 +7,11 @@ import { motion } from 'framer-motion';
 import { LogIn, Mail, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import styles from './login.module.css';
 import { persistAuth } from '@/lib/auth';
+import { formatLoginIdentifier } from '@/lib/phone';
+import { API_BASE } from '@/lib/orders';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -22,10 +24,14 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://localhost:8082/api/auth/login', {
+      const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          emailOrPhone: emailOrPhone.trim(),
+          email: emailOrPhone.trim(),
+          password,
+        }),
       });
 
       if (res.ok) {
@@ -36,12 +42,8 @@ export default function LoginPage() {
         return;
       }
 
-      if (res.status === 401) {
-        setError('Invalid email or password');
-      } else {
-        const message = await res.text();
-        setError(message || 'Something went wrong. Please try again.');
-      }
+      const message = await res.text();
+      setError(message || 'Something went wrong. Please try again.');
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {
@@ -69,12 +71,14 @@ export default function LoginPage() {
 
         <form className={styles.form} onSubmit={handleLogin}>
           <div className={styles.inputGroup}>
-            <label><Mail size={16} /> Email Address</label>
+            <label><Mail size={16} /> Email or Phone Number</label>
             <input 
-              type="email" 
-              placeholder="Enter email address" 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="text" 
+              inputMode="email"
+              autoComplete="username"
+              placeholder="Email or phone number" 
+              value={emailOrPhone}
+              onChange={(e) => setEmailOrPhone(formatLoginIdentifier(e.target.value))}
               required 
             />
           </div>

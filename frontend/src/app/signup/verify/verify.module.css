@@ -182,19 +182,13 @@
 
 .resendBtn:disabled {
   opacity: 0.6;
-  cursor: wait;
+  cursor: not-allowed;
 }
 
-.backLink {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+.resendHint {
+  margin: 0;
   color: var(--text-light);
-  font-size: 0.9rem;
-}
-
-.backLink:hover {
-  color: var(--secondary);
+  font-size: 0.85rem;
 }
 
 .spinner {

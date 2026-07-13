@@ -57,18 +57,14 @@ const Navbar = () => {
             <ShoppingBag size={20} />
             {cartCount > 0 && <span className={styles.cartBadge}>{cartCount}</span>}
           </button>
-          
-          {isLoggedIn ? (
-            <Link href="/profile" className={styles.loginLink} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <User size={18} />
-              <span>Profile</span>
-            </Link>
-          ) : (
-            <div className={styles.authLinks}>
-              <Link href="/login" className={styles.loginLink}>Login</Link>
-              <Link href="/signup" className={styles.signupBtn}>Join Now</Link>
-            </div>
-          )}
+
+          <Link
+            href={isLoggedIn ? '/profile' : '/login'}
+            className={styles.profileBtn}
+            aria-label={isLoggedIn ? 'Profile' : 'Login'}
+          >
+            <User size={20} />
+          </Link>
 
           <Link href="/reserve" className={styles.reservationBtn}>
             Book a Table

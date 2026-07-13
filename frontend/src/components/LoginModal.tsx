@@ -3,9 +3,10 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LogIn, Mail, Lock, ArrowRight, X } from 'lucide-react';
+import { LogIn, Mail, Lock, ArrowRight, X, Eye, EyeOff } from 'lucide-react';
 import styles from './LoginModal.module.css';
 import { persistAuth, type AuthData } from '@/lib/auth';
+import { formatLoginIdentifier } from '@/lib/phone';
 import { API_BASE } from '@/lib/orders';
 
 interface LoginModalProps {
@@ -23,8 +24,9 @@ export default function LoginModal({
   title = 'Sign in to continue',
   subtitle = 'Please log in to place your order.',
 }: LoginModalProps) {
-  const [email, setEmail] = useState('');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -37,26 +39,26 @@ export default function LoginModal({
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          emailOrPhone: emailOrPhone.trim(),
+          email: emailOrPhone.trim(),
+          password,
+        }),
       });
 
       if (res.ok) {
         const data: AuthData = await res.json();
         persistAuth(data);
         window.dispatchEvent(new Event('storage'));
-        setEmail('');
+        setEmailOrPhone('');
         setPassword('');
         onSuccess?.(data);
         onClose();
         return;
       }
 
-      if (res.status === 401) {
-        setError('Invalid email or password');
-      } else {
-        const message = await res.text();
-        setError(message || 'Something went wrong. Please try again.');
-      }
+      const message = await res.text();
+      setError(message || 'Something went wrong. Please try again.');
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {
@@ -101,12 +103,14 @@ export default function LoginModal({
 
             <form className={styles.form} onSubmit={handleLogin}>
               <div className={styles.inputGroup}>
-                <label><Mail size={16} /> Email Address</label>
+                <label><Mail size={16} /> Email or Phone Number</label>
                 <input
-                  type="email"
-                  placeholder="Enter email address"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
+                  type="text"
+                  inputMode="email"
+                  autoComplete="username"
+                  placeholder="Email or phone number"
+                  value={emailOrPhone}
+                  onChange={e => setEmailOrPhone(formatLoginIdentifier(e.target.value))}
                   required
                   autoFocus
                 />
@@ -114,13 +118,23 @@ export default function LoginModal({
 
               <div className={styles.inputGroup}>
                 <label><Lock size={16} /> Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  required
-                />
+                <div className={styles.passwordField}>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className={styles.passwordToggle}
+                    onClick={() => setShowPassword(prev => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
               </div>
 
               <button type="submit" className={styles.loginBtn} disabled={loading}>

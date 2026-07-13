@@ -17,6 +17,7 @@ import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.SignupOtpRateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -54,6 +55,7 @@ public class AuthController {
     private final OrderReviewRepository reviewRepository;
     private final JwtUtil jwtUtil;
     private final OtpService otpService;
+    private final SignupOtpRateLimiter signupOtpRateLimiter;
 
     public AuthController(
             EmailSenderService emailSenderService,
@@ -61,13 +63,15 @@ public class AuthController {
             CustomerOrderRepository orderRepository,
             OrderReviewRepository reviewRepository,
             JwtUtil jwtUtil,
-            OtpService otpService) {
+            OtpService otpService,
+            SignupOtpRateLimiter signupOtpRateLimiter) {
         this.emailSenderService = emailSenderService;
         this.userRepository = userRepository;
         this.orderRepository = orderRepository;
         this.reviewRepository = reviewRepository;
         this.jwtUtil = jwtUtil;
         this.otpService = otpService;
+        this.signupOtpRateLimiter = signupOtpRateLimiter;
     }
 
     @PostMapping("/signup")
@@ -116,25 +120,46 @@ public class AuthController {
 
         // Generate token
         String token = jwtUtil.generateToken(user.getId(), user.getEmail());
+        signupOtpRateLimiter.clear(email);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(createAuthResponse(user, token));
     }
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
-        if (request.getEmail() == null || request.getPassword() == null) {
-            return ResponseEntity.badRequest().body("Email and password are required.");
+        String identifier = request.getEmailOrPhone() == null ? "" : request.getEmailOrPhone().trim();
+        if (identifier.isBlank() || request.getPassword() == null || request.getPassword().isBlank()) {
+            return ResponseEntity.badRequest().body("Email or phone number and password are required.");
         }
 
-        Optional<User> userOpt = userRepository.findByEmail(request.getEmail());
-        
-        if (userOpt.isEmpty() || !PasswordUtil.checkPassword(request.getPassword(), userOpt.get().getPassword())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid email or password.");
+        boolean loginWithEmail = looksLikeEmail(identifier);
+        Optional<User> userOpt;
+
+        if (loginWithEmail) {
+            userOpt = userRepository.findByEmailIgnoreCase(normalizeEmail(identifier));
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body("No account found with this email.");
+            }
+        } else {
+            String normalizedPhone = normalizePhone(identifier);
+            if (normalizedPhone.length() != 10) {
+                return ResponseEntity.badRequest()
+                        .body("Enter a valid email address or 10-digit phone number.");
+            }
+            userOpt = findUserByPhone(normalizedPhone);
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body("No account found with this phone number.");
+            }
         }
 
         User user = userOpt.get();
-        String token = jwtUtil.generateToken(user.getId(), user.getEmail());
+        if (!PasswordUtil.checkPassword(request.getPassword(), user.getPassword())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Incorrect password.");
+        }
 
+        String token = jwtUtil.generateToken(user.getId(), user.getEmail());
         return ResponseEntity.ok(createAuthResponse(user, token));
     }
 
@@ -404,6 +429,13 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(signupConflict.get());
         }
 
+        SignupOtpRateLimiter.AllowResult rateLimit = signupOtpRateLimiter.tryAcquire(email);
+        if (!rateLimit.allowed()) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", String.valueOf(rateLimit.retryAfterSeconds()))
+                    .body(rateLimit.message());
+        }
+
         try {
             String generatedOtp = generateOtp();
             otpService.storeOtp(email, generatedOtp);
@@ -490,6 +522,26 @@ public class AuthController {
 
     private String passwordResetOtpKey(String email) {
         return "password-reset:" + email.trim().toLowerCase();
+    }
+
+    private boolean looksLikeEmail(String identifier) {
+        return identifier != null && identifier.contains("@");
+    }
+
+    private Optional<User> findUserByPhone(String normalizedPhoneDigits) {
+        if (normalizedPhoneDigits == null || normalizedPhoneDigits.length() != 10) {
+            return Optional.empty();
+        }
+
+        List<User> byNormalized = userRepository.findByPhoneNormalized(normalizedPhoneDigits);
+        if (!byNormalized.isEmpty()) {
+            return Optional.of(byNormalized.get(0));
+        }
+
+        return userRepository.findByPhoneIsNotNull().stream()
+                .filter(user -> user.getPhone() != null && !user.getPhone().isBlank())
+                .filter(user -> normalizedPhoneDigits.equals(normalizePhone(user.getPhone())))
+                .findFirst();
     }
 
     private String normalizeEmail(String email) {

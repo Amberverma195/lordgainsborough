@@ -11,6 +11,7 @@ import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.SignupOtpRateLimiter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -39,17 +40,28 @@ class AuthControllerTest {
     private final OrderReviewRepository reviewRepository = mock(OrderReviewRepository.class);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private final OtpService otpService = mock(OtpService.class);
+    private final SignupOtpRateLimiter signupOtpRateLimiter = mock(SignupOtpRateLimiter.class);
     private final AuthController controller = new AuthController(
             emailSenderService,
             userRepository,
             orderRepository,
             reviewRepository,
             jwtUtil,
-            otpService);
+            otpService,
+            signupOtpRateLimiter);
 
     @BeforeEach
     void resetMocks() {
-        org.mockito.Mockito.reset(emailSenderService, userRepository, orderRepository, reviewRepository, jwtUtil, otpService);
+        org.mockito.Mockito.reset(
+                emailSenderService,
+                userRepository,
+                orderRepository,
+                reviewRepository,
+                jwtUtil,
+                otpService,
+                signupOtpRateLimiter);
+        when(signupOtpRateLimiter.tryAcquire(anyString()))
+                .thenReturn(SignupOtpRateLimiter.AllowResult.allowed(5, 30));
     }
 
     @Test
