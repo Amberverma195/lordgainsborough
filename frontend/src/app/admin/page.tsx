@@ -20,7 +20,7 @@ import {
   orderStatusLabel,
   sortOrders,
 } from '@/lib/orders';
-import { BarChart3, CalendarDays, MessageSquareText, MonitorCog, Search, Store } from 'lucide-react';
+import { BarChart3, CalendarDays, MessageSquareText, MonitorCog, Search, Store, UserRoundSearch } from 'lucide-react';
 
 interface Category {
   id: string;
@@ -63,6 +63,18 @@ interface StoreSettings {
   kdsAllowedIp: string;
 }
 
+interface AdminCustomerSearchResult {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  memberSince?: string;
+  noShowCount: number;
+  pickupDisabled: boolean;
+  orders: CustomerOrder[];
+}
+
 const READY_MINUTE_OPTIONS = [10, 15, 20, 25, 30, 35, 40, 45, 60];
 
 function createSalesWindow() {
@@ -74,7 +86,7 @@ function createSalesWindow() {
 
 export default function AdminPage() {
   const isAuthorized = useRequireAdmin();
-  const [activeTab, setActiveTab] = useState<'menu' | 'categories' | 'reservations' | 'orders' | 'reviews' | 'mostloved' | 'settings'>('menu');
+  const [activeTab, setActiveTab] = useState<'menu' | 'categories' | 'reservations' | 'orders' | 'reviews' | 'mostloved' | 'users' | 'settings'>('menu');
   const [categories, setCategories] = useState<Category[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -130,6 +142,11 @@ export default function AdminPage() {
     kdsAllowedIp: '',
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSearchResults, setUserSearchResults] = useState<AdminCustomerSearchResult[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [userSearchError, setUserSearchError] = useState('');
+  const [userSearchSearched, setUserSearchSearched] = useState(false);
   const [salesWindow] = useState(createSalesWindow);
 
   const showNotification = (message: string, type: 'success' | 'error') => {
@@ -295,6 +312,36 @@ export default function AdminPage() {
       }
     });
   };
+
+  const searchUsers = useCallback(async (rawQuery?: string) => {
+    const query = (rawQuery ?? userSearchQuery).trim();
+    setUserSearchError('');
+    setUserSearchSearched(true);
+
+    if (query.length < 2) {
+      setUserSearchResults([]);
+      setUserSearchError('Enter at least 2 characters to search.');
+      return;
+    }
+
+    setUserSearchLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/customers/search?q=${encodeURIComponent(query)}`, {
+        headers: getAuthHeaders(false),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(typeof data?.message === 'string' ? data.message : 'Search failed');
+      }
+      const data = await res.json();
+      setUserSearchResults(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setUserSearchResults([]);
+      setUserSearchError(error instanceof Error ? error.message : 'Search failed');
+    } finally {
+      setUserSearchLoading(false);
+    }
+  }, [userSearchQuery]);
 
   const handleSettingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -686,6 +733,14 @@ export default function AdminPage() {
               <span className={styles.tabIcon}>❤️</span>
               <span className={styles.navLabel}>Most Loved</span>
               <span className={styles.badge}>{menuItems.filter(i => i.mostLoved).length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'users' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('users')}
+            >
+              <UserRoundSearch size={16} />
+              <span className={styles.navLabel}>Search User</span>
             </button>
             <button
               type="button"
@@ -1311,14 +1366,115 @@ export default function AdminPage() {
         </motion.div>
       )}
 
+      {/* Search User Tab */}
+      {activeTab === 'users' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className={styles.sectionHeader}>
+            <div className={styles.sectionLeft}>
+              <h2>Search User</h2>
+              <p style={{ color: 'var(--text-light)', margin: 0 }}>
+                Find a customer by name, email, or phone and review their full order history.
+              </p>
+            </div>
+          </div>
+
+          <form
+            className={styles.userSearchBar}
+            onSubmit={event => {
+              event.preventDefault();
+              void searchUsers();
+            }}
+          >
+            <label className={styles.orderSearchField} htmlFor="adminUserSearch">
+              <Search size={16} aria-hidden />
+              <input
+                id="adminUserSearch"
+                type="search"
+                value={userSearchQuery}
+                onChange={event => setUserSearchQuery(event.target.value)}
+                placeholder="Search by name, email, or phone"
+                autoComplete="off"
+              />
+            </label>
+            <button type="submit" className={styles.addBtn} disabled={userSearchLoading}>
+              {userSearchLoading ? 'Searching...' : 'Search'}
+            </button>
+          </form>
+
+          {userSearchError && <p className={styles.emptyState}>{userSearchError}</p>}
+
+          {!userSearchError && userSearchSearched && !userSearchLoading && userSearchResults.length === 0 && (
+            <div className={styles.emptyState}>
+              <p>No users matched that search.</p>
+            </div>
+          )}
+
+          <div className={styles.userSearchResults}>
+            {userSearchResults.map(user => (
+              <div key={user.id} className={`${styles.formCard} ${styles.userResultCard}`}>
+                <div className={styles.userResultHeader}>
+                  <div>
+                    <h3>{user.name || 'Unnamed customer'}</h3>
+                    <p>
+                      {user.email || 'No email'}
+                      {user.phone ? ` · ${user.phone}` : ''}
+                    </p>
+                    <small>
+                      {user.role || 'MEMBER'}
+                      {user.memberSince ? ` · Member since ${user.memberSince}` : ''}
+                      {` · ${user.orders?.length || 0} orders`}
+                      {` · ${user.noShowCount || 0} no-shows`}
+                      {user.pickupDisabled ? ' · Pickup disabled' : ''}
+                    </small>
+                  </div>
+                </div>
+
+                <div className={styles.menuTable}>
+                  <div className={styles.ordersHeader}>
+                    <span>Order ID</span>
+                    <span>Name &amp; Phone</span>
+                    <span>Pickup</span>
+                    <span>Status</span>
+                    <span>Total</span>
+                  </div>
+                  {(user.orders || []).map(order => (
+                    <button
+                      type="button"
+                      key={order.id}
+                      className={styles.orderRow}
+                      onClick={() => setSelectedOrder(order)}
+                    >
+                      <span className={styles.orderId}>#{formatOrderId(order.id)}</span>
+                      <span className={styles.orderCustomer}>
+                        <strong>{order.customerName}</strong>
+                        <small>{order.customerPhone}</small>
+                      </span>
+                      <span>{formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}</span>
+                      <span>
+                        <span className={`${styles.statusBadge} ${styles.orderStatus}`}>
+                          {orderStatusLabel(order.status)}
+                        </span>
+                      </span>
+                      <span className={styles.colPrice}>{formatMoney(order.total)}</span>
+                    </button>
+                  ))}
+                  {(user.orders || []).length === 0 && (
+                    <div className={styles.emptyState}>
+                      <p>No orders found for this user.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
       {/* Store Settings Tab */}
       {activeTab === 'settings' && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <div className={styles.sectionHeader}>
             <h2>Store Settings</h2>
-            <p style={{ color: 'var(--text-light)', marginTop: '0.5rem' }}>
-              Configure tax and pickup defaults.
-            </p>
           </div>
 
           <form className={styles.formCard} onSubmit={handleSettingsSubmit}>

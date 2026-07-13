@@ -16,5 +16,8 @@ public interface UserRepository extends MongoRepository<User, String> {
     boolean existsByPhone(String phone);
     boolean existsByPhoneNormalized(String phoneNormalized);
     List<User> findByPhoneNormalized(String phoneNormalized);
+    List<User> findByPhoneNormalizedContaining(String phoneNormalized);
     List<User> findByPhoneIsNotNull();
+    List<User> findByNameContainingIgnoreCase(String name);
+    List<User> findByEmailContainingIgnoreCase(String email);
 }

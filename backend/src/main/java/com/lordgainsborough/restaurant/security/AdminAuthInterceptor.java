@@ -91,6 +91,10 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
             return Optional.of(RoleAccess::isAdmin);
         }
 
+        if (path.startsWith("/api/admin")) {
+            return Optional.of(RoleAccess::isAdmin);
+        }
+
         if (path.startsWith("/api/store-settings")) {
             if ("GET".equals(method)) {
                 return Optional.empty();

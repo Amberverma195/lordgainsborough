@@ -33,7 +33,8 @@ public class WebConfig implements WebMvcConfigurer {
                         "/api/categories/**",
                         "/api/reservations/**",
                         "/api/kds/**",
-                        "/api/store-settings/**");
+                        "/api/store-settings/**",
+                        "/api/admin/**");
     }
 
     @Override
