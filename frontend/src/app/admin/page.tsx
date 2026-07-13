@@ -20,7 +20,7 @@ import {
   orderStatusLabel,
   sortOrders,
 } from '@/lib/orders';
-import { BarChart3, MessageSquareText, MonitorCog, Store } from 'lucide-react';
+import { BarChart3, CalendarDays, MessageSquareText, MonitorCog, Search, Store } from 'lucide-react';
 
 interface Category {
   id: string;
@@ -82,6 +82,8 @@ export default function AdminPage() {
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null);
   const [orderStatusFilter, setOrderStatusFilter] = useState<'ALL' | OrderStatus>('ALL');
   const [orderPeriodFilter, setOrderPeriodFilter] = useState<'all' | 'today' | 'week'>('all');
+  const [orderDateFilter, setOrderDateFilter] = useState(getTodayString());
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [showMenuForm, setShowMenuForm] = useState(false);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
@@ -218,8 +220,6 @@ export default function AdminPage() {
     }
   }, []);
 
-  const recentOrders = useMemo(() => orders.slice(0, 8), [orders]);
-
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       fetchCategories();
@@ -238,11 +238,10 @@ export default function AdminPage() {
     }
     const timeout = window.setTimeout(() => {
       fetchStoreSettings({ notifyOnError: true });
-      fetchOrders();
     }, 0);
 
     return () => window.clearTimeout(timeout);
-  }, [activeTab, fetchStoreSettings, fetchOrders]);
+  }, [activeTab, fetchStoreSettings]);
 
   // --- Category CRUD ---
   const handleCategorySubmit = async (e: React.FormEvent) => {
@@ -486,6 +485,9 @@ export default function AdminPage() {
     const { today, weekStart } = salesWindow;
 
     const isInPeriod = (order: CustomerOrder) => {
+      if (orderDateFilter) {
+        return order.pickupDate === orderDateFilter;
+      }
       if (orderPeriodFilter === 'all') {
         return true;
       }
@@ -499,25 +501,57 @@ export default function AdminPage() {
       return created >= weekStart;
     };
 
+    const matchesSearch = (order: CustomerOrder) => {
+      const query = orderSearchQuery.trim().toLowerCase();
+      if (!query) {
+        return true;
+      }
+
+      const queryDigits = query.replace(/\D/g, '');
+      const phoneDigits = (order.customerPhone || '').replace(/\D/g, '');
+      const formattedId = formatOrderId(order.id).toLowerCase();
+      const rawId = (order.id || '').toLowerCase();
+      const name = (order.customerName || '').toLowerCase();
+
+      if (name.includes(query)) {
+        return true;
+      }
+      if (formattedId.includes(query) || rawId.includes(query.replace(/^#/, ''))) {
+        return true;
+      }
+      if (queryDigits && phoneDigits.includes(queryDigits)) {
+        return true;
+      }
+      return false;
+    };
+
     const matchesFilters = (order: CustomerOrder) => {
       if (orderStatusFilter !== 'ALL' && order.status !== orderStatusFilter) {
         return false;
       }
-      return isInPeriod(order);
+      if (!isInPeriod(order)) {
+        return false;
+      }
+      return matchesSearch(order);
     };
 
     const filteredOrders = sortOrders(orders.filter(matchesFilters));
     const completed = orders.filter(order => order.status === 'PICKED_UP');
     const completedInPeriod = completed.filter(isInPeriod);
-    const active = orders.filter(order => order.status !== 'PICKED_UP' && order.status !== 'NO_SHOW');
+    const active = orders.filter(order => {
+      if (order.status === 'PICKED_UP' || order.status === 'NO_SHOW') {
+        return false;
+      }
+      return isInPeriod(order);
+    });
 
-    const statusCounts = orders.reduce<Record<string, number>>((acc, order) => {
+    const statusCounts = orders.filter(isInPeriod).reduce<Record<string, number>>((acc, order) => {
       acc[order.status] = (acc[order.status] || 0) + 1;
       return acc;
     }, {});
 
     const topItemsMap = new Map<string, { name: string; quantity: number; revenue: number }>();
-    completed.forEach(order => {
+    completedInPeriod.forEach(order => {
       order.items.forEach(item => {
         const existing = topItemsMap.get(item.menuItemId) || {
           name: item.name,
@@ -557,7 +591,7 @@ export default function AdminPage() {
       statusCounts,
       topItems,
     };
-  }, [orders, orderPeriodFilter, orderStatusFilter, salesWindow]);
+  }, [orders, orderPeriodFilter, orderStatusFilter, orderDateFilter, orderSearchQuery, salesWindow]);
 
   if (isAuthorized === null) {
     return (
@@ -583,69 +617,82 @@ export default function AdminPage() {
         )}
       </AnimatePresence>
 
-      {/* Header */}
-      <motion.div
-        className={styles.header}
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        <Link href="/kds" className={styles.kdsLink}>
-          <MonitorCog size={18} /> KDS
-        </Link>
-      </motion.div>
+      <div className={styles.adminLayout}>
+        <aside className={styles.sidebar}>
+          <div className={styles.sidebarTop}>
+            <p className={styles.sidebarTitle}>Admin</p>
+            <Link href="/kds" className={styles.kdsLink}>
+              <MonitorCog size={18} /> KDS
+            </Link>
+          </div>
 
-      {/* Tabs */}
-      <div className={styles.tabs}>
-        <button
-          className={`${styles.tab} ${activeTab === 'menu' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('menu')}
-        >
-          <span className={styles.tabIcon}>🍽️</span> Menu Items
-          <span className={styles.badge}>{menuItems.length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'categories' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('categories')}
-        >
-          <span className={styles.tabIcon}>📂</span> Categories
-          <span className={styles.badge}>{categories.length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'reservations' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('reservations')}
-        >
-          <span className={styles.tabIcon}>📅</span> Reservations
-          <span className={styles.badge}>{reservations.length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'orders' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('orders')}
-        >
-          <BarChart3 size={16} /> Sales &amp; Orders
-          <span className={styles.badge}>{orders.length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'reviews' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('reviews')}
-        >
-          <MessageSquareText size={16} /> Reviews
-          <span className={styles.badge}>{reviews.length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'mostloved' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('mostloved')}
-        >
-          <span className={styles.tabIcon}>❤️</span> Most Loved
-          <span className={styles.badge}>{menuItems.filter(i => i.mostLoved).length}</span>
-        </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'settings' ? styles.activeTab : ''}`}
-          onClick={() => setActiveTab('settings')}
-        >
-          <Store size={16} /> Store Settings
-        </button>
-      </div>
+          <nav className={styles.navStack} aria-label="Admin sections">
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'menu' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('menu')}
+            >
+              <span className={styles.tabIcon}>🍽️</span>
+              <span className={styles.navLabel}>Menu Items</span>
+              <span className={styles.badge}>{menuItems.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'categories' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('categories')}
+            >
+              <span className={styles.tabIcon}>📂</span>
+              <span className={styles.navLabel}>Categories</span>
+              <span className={styles.badge}>{categories.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'reservations' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('reservations')}
+            >
+              <span className={styles.tabIcon}>📅</span>
+              <span className={styles.navLabel}>Reservations</span>
+              <span className={styles.badge}>{reservations.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'orders' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('orders')}
+            >
+              <BarChart3 size={16} />
+              <span className={styles.navLabel}>Order History</span>
+              <span className={styles.badge}>{orders.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'reviews' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('reviews')}
+            >
+              <MessageSquareText size={16} />
+              <span className={styles.navLabel}>Reviews</span>
+              <span className={styles.badge}>{reviews.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'mostloved' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('mostloved')}
+            >
+              <span className={styles.tabIcon}>❤️</span>
+              <span className={styles.navLabel}>Most Loved</span>
+              <span className={styles.badge}>{menuItems.filter(i => i.mostLoved).length}</span>
+            </button>
+            <button
+              type="button"
+              className={`${styles.navItem} ${activeTab === 'settings' ? styles.navItemActive : ''}`}
+              onClick={() => setActiveTab('settings')}
+            >
+              <Store size={16} />
+              <span className={styles.navLabel}>Store Settings</span>
+            </button>
+          </nav>
+        </aside>
 
+        <main className={styles.mainPanel}>
       {/* Categories Tab */}
       {activeTab === 'categories' && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -1004,12 +1051,55 @@ export default function AdminPage() {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <div className={styles.sectionHeader}>
             <div className={styles.sectionLeft}>
-              <h2>Sales &amp; Orders</h2>
+              <h2>Order History</h2>
               <p style={{ color: 'var(--text-light)', margin: 0 }}>
-                Revenue from completed pickups · {orders.length} total orders
+                {orderDateFilter
+                  ? `Pickup orders for ${formatPickupDateLabel(orderDateFilter)} · ${salesSummary.filteredOrders.length} shown`
+                  : `Revenue from completed pickups · ${orders.length} total orders`}
               </p>
             </div>
-            <button className={styles.addBtn} onClick={fetchOrders}>Refresh</button>
+            <div className={styles.orderDateControls}>
+              <label className={styles.orderDateField} htmlFor="orderHistoryDate">
+                <CalendarDays size={16} aria-hidden />
+                <span>Pickup date</span>
+                <input
+                  id="orderHistoryDate"
+                  type="date"
+                  value={orderDateFilter || getTodayString()}
+                  onChange={event => {
+                    setOrderDateFilter(event.target.value || getTodayString());
+                    setOrderPeriodFilter('all');
+                  }}
+                />
+              </label>
+              {orderDateFilter !== getTodayString() && (
+                <button
+                  type="button"
+                  className={styles.linkBtn}
+                  onClick={() => {
+                    setOrderDateFilter(getTodayString());
+                    setOrderPeriodFilter('all');
+                  }}
+                >
+                  Today
+                </button>
+              )}
+              <button className={styles.addBtn} onClick={fetchOrders}>Refresh</button>
+            </div>
+          </div>
+
+          <div className={styles.orderSearchRow}>
+            <label className={styles.orderSearchField} htmlFor="orderHistorySearch">
+              <Search size={16} aria-hidden />
+              <input
+                id="orderHistorySearch"
+                type="search"
+                value={orderSearchQuery}
+                onChange={event => setOrderSearchQuery(event.target.value)}
+                placeholder="Search by name, order ID, or phone"
+                autoComplete="off"
+              />
+            </label>
           </div>
 
           <div className={styles.statsGrid}>
@@ -1020,7 +1110,13 @@ export default function AdminPage() {
             </div>
             <div className={styles.statCard}>
               <span className={styles.statLabel}>
-                {orderPeriodFilter === 'today' ? "Today's revenue" : orderPeriodFilter === 'week' ? 'Last 7 days' : 'Filtered revenue'}
+                {orderDateFilter
+                  ? 'Selected day revenue'
+                  : orderPeriodFilter === 'today'
+                    ? "Today's revenue"
+                    : orderPeriodFilter === 'week'
+                      ? 'Last 7 days'
+                      : 'Filtered revenue'}
               </span>
               <strong className={styles.statValue}>{formatMoney(salesSummary.periodRevenue)}</strong>
               <small>{salesSummary.periodCompletedCount} completed in period</small>
@@ -1080,18 +1176,6 @@ export default function AdminPage() {
 
           <div className={styles.salesFilters}>
             <div className={styles.filterPills}>
-              {(['all', 'today', 'week'] as const).map(period => (
-                <button
-                  key={period}
-                  type="button"
-                  className={`${styles.pill} ${orderPeriodFilter === period ? styles.activePill : ''}`}
-                  onClick={() => setOrderPeriodFilter(period)}
-                >
-                  {period === 'all' ? 'All time' : period === 'today' ? 'Today' : 'Last 7 days'}
-                </button>
-              ))}
-            </div>
-            <div className={styles.filterPills}>
               <button
                 type="button"
                 className={`${styles.pill} ${orderStatusFilter === 'ALL' ? styles.activePill : ''}`}
@@ -1149,7 +1233,11 @@ export default function AdminPage() {
             </AnimatePresence>
             {salesSummary.filteredOrders.length === 0 && (
               <div className={styles.emptyState}>
-                <p>No orders match these filters.</p>
+                <p>
+                  {orderSearchQuery.trim()
+                    ? 'No orders match this search for the selected date.'
+                    : 'No orders for the selected date.'}
+                </p>
               </div>
             )}
           </div>
@@ -1287,57 +1375,6 @@ export default function AdminPage() {
               </button>
             </div>
           </form>
-
-          <div className={`${styles.formCard} ${styles.orderHistoryPanel}`}>
-            <div className={styles.orderHistoryHeader}>
-              <div>
-                <h3>Order History</h3>
-                <p>Recent orders across the store. Open Sales &amp; Orders for the full dashboard.</p>
-              </div>
-              <button
-                type="button"
-                className={styles.linkBtn}
-                onClick={() => setActiveTab('orders')}
-              >
-                Open Sales &amp; Orders
-              </button>
-            </div>
-            <div className={styles.menuTable}>
-              <div className={styles.ordersHeader}>
-                <span>Order ID</span>
-                <span>Customer</span>
-                <span>Pickup</span>
-                <span>Status</span>
-                <span>Total</span>
-              </div>
-              {recentOrders.map(order => (
-                <button
-                  type="button"
-                  key={order.id}
-                  className={styles.orderRow}
-                  onClick={() => setSelectedOrder(order)}
-                >
-                  <span className={styles.orderId}>#{formatOrderId(order.id)}</span>
-                  <span className={styles.orderCustomer}>
-                    <strong>{order.customerName}</strong>
-                    <small>{order.customerPhone}</small>
-                  </span>
-                  <span>{formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}</span>
-                  <span>
-                    <span className={`${styles.statusBadge} ${styles.orderStatus}`}>
-                      {orderStatusLabel(order.status)}
-                    </span>
-                  </span>
-                  <span className={styles.colPrice}>{formatMoney(order.total)}</span>
-                </button>
-              ))}
-              {recentOrders.length === 0 && (
-                <div className={styles.emptyState}>
-                  <p>No orders yet.</p>
-                </div>
-              )}
-            </div>
-          </div>
         </motion.div>
       )}
 
@@ -1404,6 +1441,8 @@ export default function AdminPage() {
           </div>
         </motion.div>
       )}
+        </main>
+      </div>
 
       {/* Confirm Modal */}
       <AnimatePresence>

@@ -3,10 +3,88 @@
    ========================================== */
 
 .container {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 1.5rem 2rem 2rem;
   position: relative;
+}
+
+.adminLayout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebarTop {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sidebarTitle {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-light);
+}
+
+.navStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-light);
+  font-size: 0.92rem;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.navItem:hover {
+  color: var(--secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.navItemActive {
+  color: var(--secondary);
+  border-color: rgba(212, 175, 55, 0.35);
+  background: rgba(212, 175, 55, 0.1);
+}
+
+.navLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.mainPanel {
+  min-width: 0;
 }
 
 /* --- Notification --- */
@@ -31,14 +109,6 @@
 }
 
 /* --- Header --- */
-.header {
-  margin-bottom: 1.5rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 1rem;
-}
-
 .kdsLink {
   min-height: 42px;
   padding: 0 1rem;
@@ -53,6 +123,7 @@
   font-weight: 700;
   transition: var(--transition-smooth);
   white-space: nowrap;
+  width: 100%;
 }
 
 .kdsLink:hover {
@@ -60,43 +131,11 @@
   color: var(--primary);
 }
 
-/* --- Tabs --- */
-.tabs {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 2rem;
-  border-bottom: 2px solid var(--glass-border);
-  padding-bottom: 0;
-  flex-wrap: wrap;
-}
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.9rem 1.5rem;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-light);
-  border-bottom: 3px solid transparent;
-  transition: var(--transition-smooth);
-  cursor: pointer;
-  background: none;
-  border-top: none;
-  border-left: none;
-  border-right: none;
-  position: relative;
-  bottom: -2px;
-}
-.tab:hover {
-  color: var(--secondary);
-}
-.activeTab {
-  color: var(--secondary);
-  border-bottom-color: var(--secondary);
-}
 .tabIcon {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
+  line-height: 1;
 }
+
 .badge {
   background: var(--glass);
   border: 1px solid var(--glass-border);
@@ -104,6 +143,7 @@
   padding: 0.15rem 0.55rem;
   border-radius: 20px;
   font-weight: 700;
+  margin-left: auto;
 }
 
 /* --- Section Header --- */
@@ -122,6 +162,74 @@
 }
 .sectionHeader h2 {
   font-size: 1.5rem;
+}
+
+.orderDateControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.orderDateField {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.orderDateField input[type="date"] {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0.15rem 0;
+  min-width: 9.5rem;
+}
+
+.orderDateField input[type="date"]:focus {
+  outline: none;
+}
+
+.orderSearchRow {
+  margin: -0.5rem 0 1.25rem;
+}
+
+.orderSearchField {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  max-width: 420px;
+  padding: 0.7rem 0.95rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-light);
+}
+
+.orderSearchField input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.orderSearchField input::placeholder {
+  color: var(--text-light);
+}
+
+.orderSearchField input:focus {
+  outline: none;
 }
 
 /* --- Filter Pills --- */
@@ -979,6 +1087,21 @@
 }
 
 /* --- Responsive --- */
+@media (max-width: 900px) {
+  .adminLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .navStack {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
   .container {
     padding: 1rem;
