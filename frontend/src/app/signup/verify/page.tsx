@@ -1,22 +1,32 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ShieldCheck, ArrowRight, Mail } from 'lucide-react';
 import styles from './verify.module.css';
 import { persistAuth } from '@/lib/auth';
 import { API_BASE } from '@/lib/orders';
-
-const RESEND_COOLDOWN_SECONDS = 30;
-const MAX_RESENDS = 5;
-
-interface PendingSignup {
-  name: string;
-  email: string;
-  phone: string;
-  password: string;
-}
+import {
+  applyBackendChallengeState,
+  clearAllSignupSession,
+  cooldownSecondsFromServerClocks,
+  fetchSignupOtpStatus,
+  fetchWithIdempotentRetry,
+  isChallengeExpiredState,
+  isResendExhausted,
+  loadPendingSignupCredentials,
+  loadSignupOtpChallengeState,
+  PendingSignupCredentials,
+  readSignupOtpResponse,
+  saveSignupOtpChallengeState,
+  SignupOtpChallengeState,
+} from '@/lib/signupOtp';
+import {
+  applyCrossTabPayload,
+  subscribeSignupOtpCrossTab,
+  toCrossTabPayload,
+} from '@/lib/signupOtpCrossTab';
 
 function maskEmail(email: string): string {
   const [local, domain] = email.split('@');
@@ -27,36 +37,153 @@ function maskEmail(email: string): string {
 
 export default function SignupVerifyPage() {
   const router = useRouter();
-  const [pendingSignup, setPendingSignup] = useState<PendingSignup | null>(null);
+  const [pendingSignup, setPendingSignup] = useState<PendingSignupCredentials | null>(null);
+  const [challenge, setChallenge] = useState<SignupOtpChallengeState | null>(null);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [syncing, setSyncing] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [cooldownSeconds, setCooldownSeconds] = useState(RESEND_COOLDOWN_SECONDS);
-  const [resendsRemaining, setResendsRemaining] = useState(MAX_RESENDS);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const crossTabRef = useRef<ReturnType<typeof subscribeSignupOtpCrossTab> | null>(null);
+
+  const publishChallenge = useCallback((
+    state: SignupOtpChallengeState,
+    type: 'challenge-updated' | 'verified' | 'cleared' = 'challenge-updated'
+  ) => {
+    const handle = crossTabRef.current;
+    if (!handle) return;
+    handle.publish(toCrossTabPayload(state, type, handle.tabId));
+  }, []);
+
+  const applyChallengeFromBackend = useCallback((
+    body: Parameters<typeof applyBackendChallengeState>[1],
+    email: string,
+    broadcast = true
+  ) => {
+    const previous = loadSignupOtpChallengeState();
+    const next = applyBackendChallengeState(previous, body, email);
+    setChallenge(next);
+    saveSignupOtpChallengeState(next);
+    setCooldownSeconds(cooldownSecondsFromServerClocks(next.serverTime, next.nextResendAt));
+    if (broadcast) {
+      publishChallenge(next, body.code === 'OTP_VERIFIED' ? 'verified' : 'challenge-updated');
+    }
+    return next;
+  }, [publishChallenge]);
+
+  const syncChallengeStatus = useCallback(async (credentials: PendingSignupCredentials) => {
+    const cached = loadSignupOtpChallengeState();
+    setSyncing(true);
+    try {
+      const { body } = await fetchSignupOtpStatus(
+        credentials.email,
+        cached?.challengeId
+      );
+      const next = applyBackendChallengeState(cached, body, credentials.email);
+      setChallenge(next);
+      saveSignupOtpChallengeState(next);
+      setCooldownSeconds(cooldownSecondsFromServerClocks(next.serverTime, next.nextResendAt));
+      publishChallenge(next);
+
+      if (body.code === 'OTP_DELIVERY_UNKNOWN') {
+        setSuccess(body.message || 'Delivery status is unknown. Check your inbox before requesting another code.');
+      } else if (body.code === 'OTP_CHALLENGE_EXPIRED') {
+        setError(body.message || 'This verification session has expired. Please start signup again.');
+        setSuccess('');
+      } else if (body.code === 'OTP_RESEND_LIMIT_REACHED') {
+        setError(body.message || 'No more verification codes can be sent for this signup attempt.');
+        setSuccess('');
+      }
+    } catch {
+      // Keep last known non-secret timing until network recovers; do not invent a new timer.
+      if (cached) {
+        setChallenge(cached);
+        setCooldownSeconds(cooldownSecondsFromServerClocks(cached.serverTime, cached.nextResendAt));
+      }
+    } finally {
+      setSyncing(false);
+    }
+  }, [publishChallenge]);
 
   useEffect(() => {
+    const handle = subscribeSignupOtpCrossTab((payload) => {
+      if (payload.type === 'verified') {
+        setError('');
+        setSuccess('This email was verified in another tab. Continuing…');
+        clearAllSignupSession();
+        router.replace('/login');
+        return;
+      }
+      if (payload.type === 'cleared') {
+        setChallenge(null);
+        clearAllSignupSession();
+        router.replace('/signup');
+        return;
+      }
+      const next = applyCrossTabPayload(loadSignupOtpChallengeState(), payload);
+      if (!next) return;
+      setChallenge(next);
+      saveSignupOtpChallengeState(next);
+      setCooldownSeconds(cooldownSecondsFromServerClocks(next.serverTime, next.nextResendAt));
+      if (next.code === 'OTP_CHALLENGE_EXPIRED') {
+        setError(next.message || 'This verification session has expired. Please start signup again.');
+      } else if (next.code === 'OTP_RESEND_LIMIT_REACHED') {
+        setError(next.message || 'No more verification codes can be sent for this signup attempt.');
+      } else if (next.code === 'OTP_DELIVERY_UNKNOWN') {
+        setSuccess(next.message || 'Delivery status is unknown. Check your inbox before requesting another code.');
+      }
+    });
+    crossTabRef.current = handle;
+    return () => {
+      handle.close();
+      crossTabRef.current = null;
+    };
+  }, [router]);
+  useEffect(() => {
     const timeout = window.setTimeout(() => {
-      const stored = sessionStorage.getItem('pendingSignup');
+      const stored = loadPendingSignupCredentials();
       if (!stored) {
         router.replace('/signup');
         return;
       }
-      setPendingSignup(JSON.parse(stored));
+      setPendingSignup(stored);
+      const cached = loadSignupOtpChallengeState();
+      if (cached) {
+        setChallenge(cached);
+        setCooldownSeconds(cooldownSecondsFromServerClocks(cached.serverTime, cached.nextResendAt));
+      }
+      void syncChallengeStatus(stored);
     }, 0);
-
     return () => window.clearTimeout(timeout);
-  }, [router]);
+  }, [router, syncChallengeStatus]);
 
   useEffect(() => {
-    if (cooldownSeconds <= 0) return;
-    const timer = window.setTimeout(() => {
-      setCooldownSeconds((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => window.clearTimeout(timer);
-  }, [cooldownSeconds]);
+    const onFocus = () => {
+      if (pendingSignup) {
+        void syncChallengeStatus(pendingSignup);
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [pendingSignup, syncChallengeStatus]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!challenge) return;
+    setCooldownSeconds(cooldownSecondsFromServerClocks(
+      challenge.serverTime,
+      challenge.nextResendAt,
+      nowTick
+    ));
+  }, [challenge, nowTick]);
 
   const handleOtpChange = (index: number, value: string) => {
     const digit = value.replace(/\D/g, '').slice(-1);
@@ -91,42 +218,59 @@ export default function SignupVerifyPage() {
   };
 
   const handleResend = async () => {
-    if (!pendingSignup || cooldownSeconds > 0 || resendsRemaining <= 0) return;
+    if (!pendingSignup || resending || loading) return;
+    if (cooldownSeconds > 0 || isResendExhausted(challenge) || isChallengeExpiredState(challenge)) {
+      return;
+    }
+
     setResending(true);
     setError('');
     setSuccess('');
 
-    try {
-      const res = await fetch(`${API_BASE}/auth/signup/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: pendingSignup.email,
-          phone: pendingSignup.phone,
-        }),
-      });
+    const idempotencyKey = crypto.randomUUID();
+    const payload = {
+      email: pendingSignup.email,
+      phone: pendingSignup.phone,
+    };
 
-      if (res.ok) {
-        setSuccess('A new verification code has been sent to your email.');
+    try {
+      const res = await fetchWithIdempotentRetry((key) =>
+        fetch(`${API_BASE}/auth/signup/send-otp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': key,
+          },
+          body: JSON.stringify(payload),
+        }), idempotencyKey);
+
+      const body = await readSignupOtpResponse(res);
+      applyChallengeFromBackend(body, pendingSignup.email);
+
+      if (res.status === 202 || res.status === 200) {
+        setSuccess(
+          body.code === 'OTP_DELIVERY_UNKNOWN'
+            ? (body.message || 'Delivery status is unknown. Check your inbox before requesting another code.')
+            : (body.message || 'A new verification code has been sent to your email.')
+        );
         setOtp(['', '', '', '', '', '']);
-        setCooldownSeconds(RESEND_COOLDOWN_SECONDS);
-        setResendsRemaining((prev) => Math.max(0, prev - 1));
         inputRefs.current[0]?.focus();
-      } else {
-        const message = await res.text();
-        if (res.status === 429) {
-          const retryAfter = Number(res.headers.get('Retry-After'));
-          if (Number.isFinite(retryAfter) && retryAfter > 0) {
-            setCooldownSeconds(retryAfter);
-          }
-          if (message.toLowerCase().includes('maximum')) {
-            setResendsRemaining(0);
-          }
+      } else if (res.status === 429) {
+        setError(body.message || 'Please wait before requesting another code.');
+        if (body.code === 'OTP_RESEND_LIMIT_REACHED') {
+          setSuccess('');
         }
-        setError(message || 'Failed to resend code. Please try again.');
+      } else if (res.status === 410) {
+        setError(body.message || 'This verification session has expired.');
+      } else {
+        setError(body.message || 'Failed to resend code. Please try again.');
       }
+
+      // Always re-sync so backend overrides any stale local countdown.
+      await syncChallengeStatus(pendingSignup);
     } catch {
       setError('Unable to connect to the server. Please try again.');
+      await syncChallengeStatus(pendingSignup);
     } finally {
       setResending(false);
     }
@@ -134,11 +278,16 @@ export default function SignupVerifyPage() {
 
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pendingSignup) return;
+    if (!pendingSignup || loading || resending) return;
 
     const code = otp.join('');
     if (code.length !== 6) {
       setError('Please enter the 6-digit verification code');
+      return;
+    }
+
+    if (isChallengeExpiredState(challenge)) {
+      setError('This verification session has expired. Please start signup again.');
       return;
     }
 
@@ -161,20 +310,23 @@ export default function SignupVerifyPage() {
 
       if (res.status === 201) {
         const data = await res.json();
-        sessionStorage.removeItem('pendingSignup');
+        publishChallenge({
+          email: pendingSignup.email,
+          challengeId: challenge?.challengeId,
+          code: 'OTP_VERIFIED',
+        }, 'verified');
+        clearAllSignupSession();
         persistAuth(data);
         window.dispatchEvent(new Event('storage'));
         router.push('/profile');
         return;
       }
 
-      const message = await res.text();
-      if (res.status === 409) {
-        setError(message || 'An account already exists with this email or phone number.');
-      } else if (res.status === 400) {
-        setError(message || 'Invalid verification code');
-      } else {
-        setError(message || 'Something went wrong. Please try again.');
+      const body = await readSignupOtpResponse(res);
+      applyChallengeFromBackend(body, pendingSignup.email);
+      setError(body.message || 'Something went wrong. Please try again.');
+      if (body.code === 'OTP_CHALLENGE_EXPIRED' || body.code === 'OTP_EXPIRED') {
+        await syncChallengeStatus(pendingSignup);
       }
     } catch {
       setError('Unable to connect to the server. Please try again.');
@@ -183,7 +335,7 @@ export default function SignupVerifyPage() {
     }
   };
 
-  if (!pendingSignup) {
+  if (!pendingSignup || (syncing && !challenge)) {
     return (
       <div className={styles.container}>
         <div className={styles.spinner} />
@@ -191,13 +343,20 @@ export default function SignupVerifyPage() {
     );
   }
 
+  const exhausted = isResendExhausted(challenge);
+  const challengeExpired = isChallengeExpiredState(challenge, nowTick);
+  const resendsRemaining = challenge?.resendsRemaining ?? 0;
+  const deliveryUnknown = challenge?.code === 'OTP_DELIVERY_UNKNOWN';
+
   const resendDisabled =
-    resending || loading || cooldownSeconds > 0 || resendsRemaining <= 0;
+    resending || loading || syncing || cooldownSeconds > 0 || exhausted || challengeExpired;
 
   let resendLabel = 'Resend Code';
   if (resending) {
     resendLabel = 'Sending...';
-  } else if (resendsRemaining <= 0) {
+  } else if (challengeExpired) {
+    resendLabel = 'Session expired';
+  } else if (exhausted) {
     resendLabel = 'Resend limit reached';
   } else if (cooldownSeconds > 0) {
     resendLabel = `Resend Code (${cooldownSeconds}s)`;
@@ -229,6 +388,16 @@ export default function SignupVerifyPage() {
 
         {error && <div className={styles.errorBanner}>{error}</div>}
         {success && <div className={styles.successBanner}>{success}</div>}
+        {deliveryUnknown && !success && (
+          <div className={styles.successBanner}>
+            Delivery status is unknown. Check your inbox before requesting another code.
+          </div>
+        )}
+        {challengeExpired && (
+          <div className={styles.errorBanner}>
+            This verification session has expired. Please start signup again.
+          </div>
+        )}
 
         <form className={styles.form} onSubmit={handleCreateAccount}>
           <div className={styles.otpGroup}>
@@ -247,12 +416,13 @@ export default function SignupVerifyPage() {
                   onPaste={index === 0 ? handleOtpPaste : undefined}
                   className={styles.otpInput}
                   aria-label={`Digit ${index + 1}`}
+                  disabled={challengeExpired}
                 />
               ))}
             </div>
           </div>
 
-          <button type="submit" className={styles.verifyBtn} disabled={loading}>
+          <button type="submit" className={styles.verifyBtn} disabled={loading || resending || challengeExpired}>
             {loading ? 'Creating Account...' : 'Create Account'} <ArrowRight size={18} />
           </button>
         </form>
@@ -266,9 +436,12 @@ export default function SignupVerifyPage() {
           >
             {resendLabel}
           </button>
-          {resendsRemaining > 0 && resendsRemaining < MAX_RESENDS && (
+          {exhausted ? (
+            <p className={styles.resendHint}>No resends remaining</p>
+          ) : (
             <p className={styles.resendHint}>
               {resendsRemaining} resend{resendsRemaining === 1 ? '' : 's'} remaining
+              {cooldownSeconds > 0 ? ` · wait ${cooldownSeconds}s` : ''}
             </p>
           )}
         </div>

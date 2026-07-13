@@ -14,6 +14,15 @@ import {
 } from '@/lib/password';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { API_BASE } from '@/lib/orders';
+import {
+  applyBackendChallengeState,
+  clearAllSignupSession,
+  fetchWithIdempotentRetry,
+  readSignupOtpResponse,
+  savePendingSignupCredentials,
+  saveSignupOtpChallengeState,
+} from '@/lib/signupOtp';
+import { subscribeSignupOtpCrossTab, toCrossTabPayload } from '@/lib/signupOtpCrossTab';
 import styles from './signup.module.css';
 
 export default function SignupPage() {
@@ -33,7 +42,7 @@ export default function SignupPage() {
     e.preventDefault();
     setError('');
     setShowPasswordMatchError(true);
-    sessionStorage.removeItem('pendingSignup');
+    clearAllSignupSession();
 
     const passwordError = getPasswordValidationMessage(formData.password, formData.confirmPassword);
     if (passwordError) {
@@ -48,34 +57,44 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/auth/signup/send-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: formData.email.trim().toLowerCase(),
-          phone: formData.phone,
-        }),
-      });
+      clearAllSignupSession();
+      const idempotencyKey = crypto.randomUUID();
+      const email = formData.email.trim().toLowerCase();
+      const payload = {
+        email,
+        phone: formData.phone,
+      };
 
-      if (res.ok) {
-        sessionStorage.setItem('pendingSignup', JSON.stringify({
+      const res = await fetchWithIdempotentRetry((key) =>
+        fetch(`${API_BASE}/auth/signup/send-otp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': key,
+          },
+          body: JSON.stringify(payload),
+        }), idempotencyKey);
+
+      if (res.ok || res.status === 202) {
+        const body = await readSignupOtpResponse(res);
+        const challengeState = applyBackendChallengeState(null, body, email);
+        saveSignupOtpChallengeState(challengeState);
+        savePendingSignupCredentials({
           name: formData.name.trim(),
-          email: formData.email.trim().toLowerCase(),
+          email,
           phone: formData.phone,
           password: sanitizePasswordInput(formData.password),
-        }));
+        });
+        // Notify other tabs that already have the verify page open.
+        const sync = subscribeSignupOtpCrossTab(() => {});
+        sync.publish(toCrossTabPayload(challengeState, 'challenge-updated', sync.tabId));
+        sync.close();
         router.push('/signup/verify');
         return;
       }
 
-      const message = await res.text();
-      if (res.status === 409) {
-        setError(message || 'An account already exists with this email or phone number.');
-      } else if (res.status === 400) {
-        setError(message || 'Validation error');
-      } else {
-        setError(message || 'Something went wrong. Please try again.');
-      }
+      const body = await readSignupOtpResponse(res);
+      setError(body.message || 'Something went wrong. Please try again.');
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {
