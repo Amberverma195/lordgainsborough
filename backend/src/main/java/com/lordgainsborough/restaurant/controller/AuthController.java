@@ -6,6 +6,9 @@ import com.lordgainsborough.restaurant.dto.ProfileVerificationRequest;
 import com.lordgainsborough.restaurant.dto.ProfileVerificationResponse;
 import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
 import com.lordgainsborough.restaurant.dto.SendOtpRequest;
+import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
+import com.lordgainsborough.restaurant.dto.SignupOtpCode;
+import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
 import com.lordgainsborough.restaurant.dto.UpdateProfileRequest;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
@@ -17,9 +20,15 @@ import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.OtpService;
-import com.lordgainsborough.restaurant.service.SignupOtpRateLimiter;
+import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
+import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
+import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
+import com.lordgainsborough.restaurant.service.SignupOtpObservability;
+import com.lordgainsborough.restaurant.security.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -55,7 +64,10 @@ public class AuthController {
     private final OrderReviewRepository reviewRepository;
     private final JwtUtil jwtUtil;
     private final OtpService otpService;
-    private final SignupOtpRateLimiter signupOtpRateLimiter;
+    private final SignupOtpChallengeService signupOtpChallengeService;
+    private final SignupAbuseLimiter signupAbuseLimiter;
+    private final ClientIpResolver clientIpResolver;
+    private final SignupOtpObservability signupOtpObservability;
 
     public AuthController(
             EmailSenderService emailSenderService,
@@ -64,63 +76,102 @@ public class AuthController {
             OrderReviewRepository reviewRepository,
             JwtUtil jwtUtil,
             OtpService otpService,
-            SignupOtpRateLimiter signupOtpRateLimiter) {
+            SignupOtpChallengeService signupOtpChallengeService,
+            SignupAbuseLimiter signupAbuseLimiter,
+            ClientIpResolver clientIpResolver,
+            SignupOtpObservability signupOtpObservability) {
         this.emailSenderService = emailSenderService;
         this.userRepository = userRepository;
         this.orderRepository = orderRepository;
         this.reviewRepository = reviewRepository;
         this.jwtUtil = jwtUtil;
         this.otpService = otpService;
-        this.signupOtpRateLimiter = signupOtpRateLimiter;
+        this.signupOtpChallengeService = signupOtpChallengeService;
+        this.signupAbuseLimiter = signupAbuseLimiter;
+        this.clientIpResolver = clientIpResolver;
+        this.signupOtpObservability = signupOtpObservability;
     }
 
     @PostMapping("/signup")
-    public ResponseEntity<?> signup(@RequestBody SignupRequest request) {
-        // Basic validation
+    public ResponseEntity<?> signup(
+            @RequestBody SignupRequest request,
+            HttpServletRequest httpRequest) {
         if (request.getEmail() == null || request.getPassword() == null || request.getName() == null) {
-            return ResponseEntity.badRequest().body("Name, email, and password are required.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Name, email, and password are required."));
         }
-        
+
         if (request.getPassword().length() < 8) {
-            return ResponseEntity.badRequest().body("Password must be at least 8 characters long.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Password must be at least 8 characters long."));
         }
 
         if (request.getOtp() == null || request.getOtp().isBlank()) {
-            return ResponseEntity.badRequest().body("Verification code is required.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Verification code is required."));
         }
 
         String email = request.getEmail().trim().toLowerCase();
 
-        if (!otpService.verifyOtp(email, request.getOtp().trim())) {
-            return ResponseEntity.badRequest().body("Invalid or expired verification code.");
-        }
-
         String normalizedPhone = normalizePhone(request.getPhone());
         if (normalizedPhone.length() != 10) {
-            return ResponseEntity.badRequest().body("Please enter a valid 10-digit phone number.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Please enter a valid 10-digit phone number."));
         }
 
-        Optional<String> signupConflict = findSignupConflict(email, normalizedPhone);
-        if (signupConflict.isPresent()) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(signupConflict.get());
+        String clientIp = resolveClientIp(httpRequest);
+        ResponseEntity<SignupOtpResponse> verifyLimit = mapAbuseDecision(
+                signupAbuseLimiter.checkAndConsumeVerification(clientIp),
+                signupAbuseLimiter.hashClientIp(clientIp));
+        if (verifyLimit != null) {
+            return verifyLimit;
         }
 
-        // Create user
+        if (findSignupConflict(email, normalizedPhone)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Unable to complete signup with the provided details."));
+        }
+
+        SignupOtpChallengeService.VerifyOtpResult verifyResult =
+                signupOtpChallengeService.verifyOtp(email, request.getOtp().trim());
+        ResponseEntity<SignupOtpResponse> verifyFailure = mapVerifyFailure(verifyResult);
+        if (verifyFailure != null) {
+            return verifyFailure;
+        }
+
         User user = new User();
         user.setName(request.getName().trim());
         user.setEmail(email);
         applyPhoneToUser(user, normalizedPhone);
         user.setPassword(PasswordUtil.hashPassword(request.getPassword()));
-        
-        // Format memberSince (e.g., "May 2026")
+
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMMM yyyy");
         user.setMemberSince(user.getCreatedAt().format(formatter));
-        
-        userRepository.save(user);
 
-        // Generate token
+        try {
+            userRepository.save(user);
+        } catch (DuplicateKeyException ex) {
+            // OTP was already consumed (VERIFIED). Clear so it is not stranded; do not reactivate it.
+            signupOtpChallengeService.clear(email);
+            if (userRepository.findByEmailIgnoreCase(email).isPresent()) {
+                // Concurrent signup already created this account.
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Unable to complete signup with the provided details."));
+            }
+            // Duplicate on another unique field (e.g. phone) — allow a clean restart.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Unable to complete signup with the provided details."));
+        }
+
         String token = jwtUtil.generateToken(user.getId(), user.getEmail());
-        signupOtpRateLimiter.clear(email);
+        signupOtpChallengeService.clear(email);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(createAuthResponse(user, token));
     }
@@ -181,7 +232,7 @@ public class AuthController {
             emailSenderService.sendOtpEmail(userOpt.get().getEmail(), generatedOtp);
             return ResponseEntity.ok("Reset code sent to " + userOpt.get().getEmail() + ".");
         } catch (Exception e) {
-            logger.error("Failed to send password reset OTP to {}", email, e);
+            logSafeAuthFailure("password_reset_otp_send", e);
             return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
         }
     }
@@ -337,7 +388,7 @@ public class AuthController {
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            logger.error("Failed to send profile verification OTP for user {}", user.getEmail(), e);
+            logSafeAuthFailure("profile_verification_otp_send", e);
             return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
         }
     }
@@ -364,43 +415,248 @@ public class AuthController {
         return ResponseEntity.ok(createAuthResponse(user, token));
     }
 
+    @GetMapping("/signup/otp-status")
+    public ResponseEntity<SignupOtpResponse> getSignupOtpStatus(
+            @RequestParam String email,
+            @RequestParam(required = false) String challengeId) {
+        if (email == null || email.isBlank()) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Email is required."));
+        }
+
+        SignupOtpChallengeService.ChallengeStatusResult status =
+                signupOtpChallengeService.getChallengeStatus(email.trim().toLowerCase(), challengeId);
+        return mapChallengeStatus(status);
+    }
+
     @PostMapping("/signup/send-otp")
-    public ResponseEntity<String> sendSignupOtp(@RequestBody SendOtpRequest request) {
+    public ResponseEntity<SignupOtpResponse> sendSignupOtp(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestHeader(value = "X-Captcha-Token", required = false) String captchaToken,
+            @RequestBody SendOtpRequest request,
+            HttpServletRequest httpRequest) {
         if (request.getEmail() == null || request.getEmail().isBlank()) {
-            return ResponseEntity.badRequest().body("Email is required.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Email is required."));
         }
 
         if (request.getPhone() == null || request.getPhone().isBlank()) {
-            return ResponseEntity.badRequest().body("Phone number is required.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Phone number is required."));
         }
 
         String email = request.getEmail().trim().toLowerCase();
         String normalizedPhone = normalizePhone(request.getPhone());
         if (normalizedPhone.length() != 10) {
-            return ResponseEntity.badRequest().body("Please enter a valid 10-digit phone number.");
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Please enter a valid 10-digit phone number."));
         }
 
-        Optional<String> signupConflict = findSignupConflict(email, normalizedPhone);
-        if (signupConflict.isPresent()) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(signupConflict.get());
+        if (findSignupConflict(email, normalizedPhone)) {
+            // Generic wording: do not reveal whether email or phone matched an existing account.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Unable to complete signup with the provided details."));
         }
 
-        SignupOtpRateLimiter.AllowResult rateLimit = signupOtpRateLimiter.tryAcquire(email);
-        if (!rateLimit.allowed()) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .header("Retry-After", String.valueOf(rateLimit.retryAfterSeconds()))
-                    .body(rateLimit.message());
+        String clientIp = resolveClientIp(httpRequest);
+        boolean countAsInitial = signupOtpChallengeService.looksLikeInitialSend(email);
+        ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(
+                signupAbuseLimiter.checkAndConsumeSend(clientIp, countAsInitial, captchaToken),
+                signupAbuseLimiter.hashClientIp(clientIp));
+        if (abuseDenied != null) {
+            return abuseDenied;
         }
 
-        try {
-            String generatedOtp = generateOtp();
-            otpService.storeOtp(email, generatedOtp);
-            emailSenderService.sendOtpEmail(email, generatedOtp);
-            return ResponseEntity.ok("Verification code sent to " + email);
-        } catch (Exception e) {
-            logger.error("Failed to send signup OTP to {}", email, e);
-            return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
+        SignupOtpChallengeService.RequestOtpResult sendResult =
+                signupOtpChallengeService.requestSignupOtp(email, idempotencyKey);
+        return mapSendResult(sendResult);
+    }
+
+    private String resolveClientIp(HttpServletRequest request) {
+        return clientIpResolver.resolve(
+                request.getRemoteAddr(),
+                request.getHeader("X-Forwarded-For"),
+                request.getHeader("X-Real-IP"));
+    }
+
+    private ResponseEntity<SignupOtpResponse> mapAbuseDecision(
+            SignupAbuseLimiter.Decision decision,
+            String clientKey) {
+        if (decision instanceof SignupAbuseLimiter.Decision.Allowed) {
+            return null;
         }
+        SignupAbuseLimiter.Decision.Denied denied = (SignupAbuseLimiter.Decision.Denied) decision;
+        SignupOtpObservability.Event event = switch (denied.reason()) {
+            case INITIAL_SEND_IP, TOTAL_SEND_IP, VERIFY_IP ->
+                    SignupOtpObservability.Event.IP_LIMIT_REJECTED;
+            case GLOBAL_PROVIDER_SEND ->
+                    SignupOtpObservability.Event.GLOBAL_PROVIDER_LIMIT_REJECTED;
+            case CAPTCHA_REQUIRED -> SignupOtpObservability.Event.CAPTCHA_REQUIRED;
+        };
+        signupOtpObservability.record(
+                event,
+                SignupOtpObservability.Context.forClientKey(
+                        clientKey, denied.reason().name()));
+        boolean captcha = denied.reason() == SignupAbuseLimiter.SignupAbuseDenyReason.CAPTCHA_REQUIRED;
+        String message = captcha
+                ? "Additional verification is required before continuing."
+                : "Too many requests. Please try again later.";
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS);
+        if (denied.retryAfterSeconds() > 0) {
+            builder.header("Retry-After", String.valueOf(denied.retryAfterSeconds()));
+        }
+        return builder.body(SignupOtpResponse.rateLimited(message, captcha));
+    }
+
+    private ResponseEntity<SignupOtpResponse> mapChallengeStatus(
+            SignupOtpChallengeService.ChallengeStatusResult status) {
+        return switch (status) {
+            case SignupOtpChallengeService.ChallengeStatusResult.Active active ->
+                    ResponseEntity.ok(fromChallenge(
+                            SignupOtpCode.OTP_ALREADY_ACTIVE,
+                            "Verification challenge is active.",
+                            active.challenge()));
+            case SignupOtpChallengeService.ChallengeStatusResult.Exhausted exhausted ->
+                    ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(fromChallenge(
+                            SignupOtpCode.OTP_RESEND_LIMIT_REACHED,
+                            "No more verification codes can be sent for this signup attempt.",
+                            exhausted.challenge()));
+            case SignupOtpChallengeService.ChallengeStatusResult.Expired expired ->
+                    ResponseEntity.status(HttpStatus.GONE).body(fromChallenge(
+                            SignupOtpCode.OTP_CHALLENGE_EXPIRED,
+                            "This verification session has expired.",
+                            expired.challenge()));
+            case SignupOtpChallengeService.ChallengeStatusResult.Locked locked ->
+                    ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(fromChallenge(
+                            SignupOtpCode.OTP_VERIFICATION_LOCKED,
+                            "Verification is locked for this signup attempt.",
+                            locked.challenge()));
+            case SignupOtpChallengeService.ChallengeStatusResult.DeliveryUnknown unknown ->
+                    ResponseEntity.accepted().body(fromChallenge(
+                            SignupOtpCode.OTP_DELIVERY_UNKNOWN,
+                            "Verification email delivery status is unknown. Check your inbox before requesting another code.",
+                            unknown.challenge()));
+            case SignupOtpChallengeService.ChallengeStatusResult.InFlight inFlight -> {
+                ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.CONFLICT);
+                if (inFlight.retryAfterSeconds() > 0) {
+                    builder.header("Retry-After", String.valueOf(inFlight.retryAfterSeconds()));
+                }
+                yield builder.body(fromChallenge(
+                        SignupOtpCode.OTP_SEND_IN_PROGRESS,
+                        "A verification email send is already in progress.",
+                        inFlight.challenge()));
+            }
+            case SignupOtpChallengeService.ChallengeStatusResult.Missing missing ->
+                    ResponseEntity.status(HttpStatus.NOT_FOUND).body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Unable to load verification status."));
+        };
+    }
+
+    private ResponseEntity<SignupOtpResponse> mapSendResult(
+            SignupOtpChallengeService.RequestOtpResult sendResult) {
+        return switch (sendResult) {
+            case SignupOtpChallengeService.RequestOtpResult.Sent sent -> {
+                SignupOtpCode code = sent.newlyAccepted()
+                        ? SignupOtpCode.OTP_SENT
+                        : SignupOtpCode.OTP_ALREADY_ACTIVE;
+                String message = sent.newlyAccepted()
+                        ? "Verification code accepted for delivery."
+                        : "A verification challenge is already active for this request.";
+                yield ResponseEntity.accepted().body(fromChallenge(code, message, sent.challenge()));
+            }
+            case SignupOtpChallengeService.RequestOtpResult.Denied denied -> {
+                SignupOtpCode code = switch (denied.reason()) {
+                    case COOLDOWN_ACTIVE -> SignupOtpCode.OTP_RESEND_COOLDOWN;
+                    case RESEND_LIMIT_REACHED -> SignupOtpCode.OTP_RESEND_LIMIT_REACHED;
+                    case CHALLENGE_EXPIRED -> SignupOtpCode.OTP_CHALLENGE_EXPIRED;
+                    case CHALLENGE_LOCKED -> SignupOtpCode.OTP_VERIFICATION_LOCKED;
+                    case CHALLENGE_MISSING -> SignupOtpCode.OTP_INVALID;
+                };
+                HttpStatus status = switch (denied.reason()) {
+                    case COOLDOWN_ACTIVE, RESEND_LIMIT_REACHED -> HttpStatus.TOO_MANY_REQUESTS;
+                    case CHALLENGE_EXPIRED -> HttpStatus.GONE;
+                    case CHALLENGE_LOCKED -> HttpStatus.TOO_MANY_REQUESTS;
+                    case CHALLENGE_MISSING -> HttpStatus.BAD_REQUEST;
+                };
+                ResponseEntity.BodyBuilder builder = ResponseEntity.status(status);
+                if (denied.reason() == SignupOtpChallengePersistence.ResendDenialReason.COOLDOWN_ACTIVE
+                        && denied.retryAfterSeconds() > 0) {
+                    builder.header("Retry-After", String.valueOf(denied.retryAfterSeconds()));
+                }
+                yield builder.body(fromChallenge(code, denied.message(), denied.challenge()));
+            }
+            case SignupOtpChallengeService.RequestOtpResult.Failed failed ->
+                    ResponseEntity.unprocessableEntity().body(fromChallenge(
+                            SignupOtpCode.OTP_DELIVERY_UNKNOWN,
+                            "Unable to send a verification email right now. Please try again later.",
+                            failed.challenge()));
+            case SignupOtpChallengeService.RequestOtpResult.DeliveryUnknown unknown ->
+                    ResponseEntity.accepted().body(fromChallenge(
+                            SignupOtpCode.OTP_DELIVERY_UNKNOWN,
+                            "Verification email delivery status is unknown. Check your inbox before requesting another code.",
+                            unknown.challenge()));
+            case SignupOtpChallengeService.RequestOtpResult.InFlight inFlight -> {
+                ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.CONFLICT);
+                if (inFlight.retryAfterSeconds() > 0) {
+                    builder.header("Retry-After", String.valueOf(inFlight.retryAfterSeconds()));
+                }
+                yield builder.body(fromChallenge(
+                        SignupOtpCode.OTP_SEND_IN_PROGRESS,
+                        "A verification email send is already in progress.",
+                        inFlight.challenge()));
+            }
+        };
+    }
+
+    private ResponseEntity<SignupOtpResponse> mapVerifyFailure(
+            SignupOtpChallengeService.VerifyOtpResult verifyResult) {
+        return switch (verifyResult) {
+            case SignupOtpChallengeService.VerifyOtpResult.Verified verified -> null;
+            case SignupOtpChallengeService.VerifyOtpResult.Invalid invalid ->
+                    ResponseEntity.badRequest().body(fromChallenge(
+                            SignupOtpCode.OTP_INVALID,
+                            "Invalid verification code.",
+                            invalid.challenge()));
+            case SignupOtpChallengeService.VerifyOtpResult.OtpExpired expired ->
+                    ResponseEntity.status(HttpStatus.GONE).body(fromChallenge(
+                            SignupOtpCode.OTP_EXPIRED,
+                            "This verification code has expired.",
+                            expired.challenge()));
+            case SignupOtpChallengeService.VerifyOtpResult.ChallengeExpired expired ->
+                    ResponseEntity.status(HttpStatus.GONE).body(fromChallenge(
+                            SignupOtpCode.OTP_CHALLENGE_EXPIRED,
+                            "This verification session has expired.",
+                            expired.challenge()));
+            case SignupOtpChallengeService.VerifyOtpResult.Locked locked ->
+                    ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(fromChallenge(
+                            SignupOtpCode.OTP_VERIFICATION_LOCKED,
+                            "Verification is locked for this signup attempt.",
+                            locked.challenge()));
+            case SignupOtpChallengeService.VerifyOtpResult.Missing missing ->
+                    ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Invalid verification code."));
+        };
+    }
+
+    private static SignupOtpResponse fromChallenge(
+            SignupOtpCode code, String message, SignupOtpChallengeView challenge) {
+        SignupOtpResponse response = SignupOtpResponse.of(code, message);
+        if (challenge != null) {
+            response.setChallengeId(challenge.challengeId());
+            response.setServerTime(challenge.serverTime());
+            response.setNextResendAt(challenge.nextResendAt());
+            response.setOtpExpiresAt(challenge.otpExpiresAt());
+            response.setChallengeExpiresAt(challenge.challengeExpiresAt());
+            response.setResendsRemaining(challenge.resendsRemaining());
+        }
+        return response;
     }
 
     // Moved from root to /api/auth/send-otp
@@ -412,7 +668,7 @@ public class AuthController {
             emailSenderService.sendOtpEmail(email, generatedOtp);
             return ResponseEntity.ok("OTP successfully sent to " + email);
         } catch (Exception e) {
-            logger.error("Failed to send OTP to {}", email, e);
+            logSafeAuthFailure("legacy_otp_send", e);
             return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
         }
     }
@@ -564,18 +820,14 @@ public class AuthController {
         return Optional.empty();
     }
 
-    private Optional<String> findSignupConflict(String email, String normalizedPhoneDigits) {
+    private boolean findSignupConflict(String email, String normalizedPhoneDigits) {
         if (email != null && !email.isBlank() && userRepository.existsByEmailIgnoreCase(email.trim())) {
-            return Optional.of("An account already exists with this email.");
+            return true;
         }
 
-        if (normalizedPhoneDigits != null
+        return normalizedPhoneDigits != null
                 && normalizedPhoneDigits.length() == 10
-                && phoneAlreadyRegistered(normalizedPhoneDigits)) {
-            return Optional.of("An account already exists with this phone number.");
-        }
-
-        return Optional.empty();
+                && phoneAlreadyRegistered(normalizedPhoneDigits);
     }
 
     private boolean phoneAlreadyRegistered(String normalizedPhoneDigits) {
@@ -627,5 +879,13 @@ public class AuthController {
                 digits.substring(0, 3),
                 digits.substring(3, 6),
                 digits.substring(6));
+    }
+
+    private void logSafeAuthFailure(String operation, Exception exception) {
+        logger.atError()
+                .addKeyValue("correlationId", SignupOtpObservability.currentCorrelationId())
+                .addKeyValue("operation", operation)
+                .addKeyValue("exceptionType", exception.getClass().getSimpleName())
+                .log("Authentication operation failed");
     }
 }

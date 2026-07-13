@@ -2,18 +2,23 @@ package com.lordgainsborough.restaurant.service;
 
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
+import org.springframework.mail.MailAuthenticationException;
+import org.springframework.mail.MailSendException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
+/**
+ * Outbound email for OTP and related messages.
+ *
+ * <p><b>Provider idempotency:</b> Brevo REST accepts {@code sendOperationId} via the
+ * {@code idempotencyKey} header. SMTP has no idempotency/deduplication key, so when
+ * mail is sent only over SMTP, absolute exactly-once email delivery cannot be guaranteed
+ * across ambiguous timeouts and client retries.
+ */
 @Service
 public class EmailSenderService {
-
-    private static final Logger logger = LoggerFactory.getLogger(EmailSenderService.class);
 
     private final JavaMailSender mailSender;
     private final BrevoApiEmailService brevoApiEmailService;
@@ -24,38 +29,63 @@ public class EmailSenderService {
     @Value("${app.mail.from-name:Lord Gainsborough}")
     private String fromName;
 
-    @Value("${app.otp.log-to-console:false}")
-    private boolean logOtpToConsole;
-
     public EmailSenderService(JavaMailSender mailSender, BrevoApiEmailService brevoApiEmailService) {
         this.mailSender = mailSender;
         this.brevoApiEmailService = brevoApiEmailService;
     }
 
     public void sendOtpEmail(String recipientEmail, String otpCode) {
+        sendOtpEmail(recipientEmail, otpCode, null);
+    }
+
+    /**
+     * @param sendOperationId server-generated operation id; forwarded to Brevo when configured
+     */
+    public void sendOtpEmail(String recipientEmail, String otpCode, String sendOperationId) {
         String subject = "Lord Gainsborough - Your Verification Code";
         String plainText = buildPlainText(otpCode);
         String htmlContent = buildHtmlContent(otpCode);
 
-        logOtpForTroubleshooting(recipientEmail, otpCode);
-
         if (brevoApiEmailService.isConfigured()) {
             try {
-                brevoApiEmailService.sendEmail(recipientEmail, subject, htmlContent, plainText);
-                logger.info("OTP email dispatched via Brevo API to {}", recipientEmail);
+                brevoApiEmailService.sendEmail(
+                        recipientEmail, subject, htmlContent, plainText, sendOperationId);
                 return;
-            } catch (Exception e) {
-                logger.warn("Brevo API send failed for {}, falling back to SMTP: {}", recipientEmail, e.getMessage());
+            } catch (AmbiguousEmailDeliveryException ambiguous) {
+                // Do not SMTP-fallback after an ambiguous Brevo outcome — that risks a duplicate send.
+                throw ambiguous;
+            } catch (DefiniteEmailRejectionException definite) {
+                // A definite Brevo rejection is safe to retry through SMTP.
+            } catch (RuntimeException e) {
+                // Do not log provider exception messages: they may contain recipient/payload details.
             }
         }
 
         try {
             sendViaSmtp(recipientEmail, subject, plainText, htmlContent);
-            logger.info("OTP email dispatched via SMTP to {}", recipientEmail);
+        } catch (MailAuthenticationException e) {
+            throw new DefiniteEmailRejectionException("SMTP authentication failed", e);
+        } catch (MailSendException e) {
+            throw classifySmtpSendException(e);
+        } catch (MessagingException e) {
+            throw new DefiniteEmailRejectionException("SMTP message rejected", e);
         } catch (Exception e) {
-            logger.error("Failed to send OTP email to {} via SMTP", recipientEmail, e);
-            throw new RuntimeException("Failed to send verification email: " + e.getMessage(), e);
+            throw new AmbiguousEmailDeliveryException(
+                    "SMTP send failed with unknown delivery status", e);
         }
+    }
+
+    private RuntimeException classifySmtpSendException(MailSendException e) {
+        Throwable root = e.getRootCause() != null ? e.getRootCause() : e;
+        String name = root.getClass().getName().toLowerCase();
+        String message = root.getMessage() == null ? "" : root.getMessage().toLowerCase();
+        if (name.contains("timeout") || message.contains("timed out") || message.contains("timeout")) {
+            return new AmbiguousEmailDeliveryException("SMTP timed out; delivery status unknown", e);
+        }
+        if (message.contains("invalid") || message.contains("reject") || message.contains("550")) {
+            return new DefiniteEmailRejectionException("SMTP rejected the message", e);
+        }
+        return new AmbiguousEmailDeliveryException("SMTP send failed; delivery status unknown", e);
     }
 
     private void sendViaSmtp(String recipientEmail, String subject, String plainText, String htmlContent)
@@ -90,10 +120,4 @@ public class EmailSenderService {
                 + "</div>";
     }
 
-    private void logOtpForTroubleshooting(String recipientEmail, String otpCode) {
-        if (logOtpToConsole) {
-            logger.warn("=== OTP for {}: {} (valid 5 min) — check Brevo sender verification if email not received ===",
-                    recipientEmail, otpCode);
-        }
-    }
 }

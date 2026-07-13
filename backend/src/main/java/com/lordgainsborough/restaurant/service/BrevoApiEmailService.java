@@ -3,10 +3,12 @@ package com.lordgainsborough.restaurant.service;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.LinkedHashMap;
@@ -31,7 +33,17 @@ public class BrevoApiEmailService {
         return apiKey != null && !apiKey.isBlank();
     }
 
-    public void sendEmail(String toEmail, String subject, String htmlContent, String textContent) {
+    /**
+     * Sends transactional email via Brevo.
+     * When {@code sendOperationId} is non-blank it is forwarded as Brevo's
+     * {@code idempotencyKey} header so provider-side deduplication is possible.
+     */
+    public void sendEmail(
+            String toEmail,
+            String subject,
+            String htmlContent,
+            String textContent,
+            String sendOperationId) {
         Map<String, Object> sender = new LinkedHashMap<>();
         sender.put("name", fromName);
         sender.put("email", fromEmail);
@@ -48,6 +60,9 @@ public class BrevoApiEmailService {
         HttpHeaders headers = new HttpHeaders();
         headers.set("api-key", apiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
+        if (sendOperationId != null && !sendOperationId.isBlank()) {
+            headers.set("idempotencyKey", sendOperationId);
+        }
 
         try {
             ResponseEntity<String> response = restTemplate.postForEntity(
@@ -57,10 +72,36 @@ public class BrevoApiEmailService {
             );
 
             if (!response.getStatusCode().is2xxSuccessful()) {
-                throw new RuntimeException("Brevo API returned status " + response.getStatusCode());
+                throw classifyHttpFailure(response.getStatusCode(), null);
             }
         } catch (HttpStatusCodeException e) {
-            throw new RuntimeException("Brevo API error: " + e.getResponseBodyAsString(), e);
+            // Never retain the provider response body in an exception: it may echo recipient/content.
+            throw classifyHttpFailure(e.getStatusCode(), e);
+        } catch (ResourceAccessException e) {
+            throw new AmbiguousEmailDeliveryException(
+                    "Brevo API timed out or connection failed; delivery status unknown", e);
         }
+    }
+
+    public void sendEmail(String toEmail, String subject, String htmlContent, String textContent) {
+        sendEmail(toEmail, subject, htmlContent, textContent, null);
+    }
+
+    private RuntimeException classifyHttpFailure(HttpStatusCode status, Throwable cause) {
+        int code = status.value();
+        String message = "Brevo provider request failed with category HTTP_" + code;
+        if (code == 408 || code == 429 || code >= 500) {
+            return cause == null
+                    ? new AmbiguousEmailDeliveryException(message)
+                    : new AmbiguousEmailDeliveryException(message, cause);
+        }
+        if (code >= 400 && code < 500) {
+            return cause == null
+                    ? new DefiniteEmailRejectionException(message)
+                    : new DefiniteEmailRejectionException(message, cause);
+        }
+        return cause == null
+                ? new AmbiguousEmailDeliveryException(message)
+                : new AmbiguousEmailDeliveryException(message, cause);
     }
 }
