@@ -53,6 +53,7 @@ export default function ProfilePage() {
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [ordersError, setOrdersError] = useState('');
+  const [orderTab, setOrderTab] = useState<'active' | 'past'>('active');
   const socketsRef = useRef<Socket[]>([]);
   const [user, setUser] = useState<UserData>({
     name: '',
@@ -345,92 +346,111 @@ export default function ProfilePage() {
 
           {!ordersLoading && !ordersError && orders.length > 0 && (
             <div className={styles.orderSections}>
-              <section className={styles.orderSection}>
-                <h3>
-                  <span className={styles.liveDot} aria-hidden />
+              <div className={styles.orderTabs} role="tablist" aria-label="Order history">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={orderTab === 'active'}
+                  className={`${styles.orderTab} ${orderTab === 'active' ? styles.orderTabActive : ''}`}
+                  onClick={() => setOrderTab('active')}
+                >
+                  {orderTab === 'active' && <span className={styles.liveDot} aria-hidden />}
                   Active orders ({activeOrders.length})
-                </h3>
-                {activeOrders.length === 0 ? (
-                  <p className={styles.sectionEmpty}>No active orders right now.</p>
-                ) : (
-                  <ul className={styles.orderList}>
-                    {activeOrders.map(order => (
-                      <li className={styles.orderCard} key={order.id}>
-                        <div className={styles.orderCardTop}>
-                          <div>
-                            <p className={styles.orderId}>#{formatOrderId(order.id)}</p>
-                            <p className={styles.orderMeta}>
-                              Pickup {formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}
-                            </p>
-                          </div>
-                          <span className={`${styles.statusBadge} ${statusBadgeClass(order.status)}`}>
-                            {orderStatusLabel(order.status)}
-                          </span>
-                        </div>
-                        <ul className={styles.orderItemsPreview}>
-                          {order.items.slice(0, 3).map((item, index) => (
-                            <li key={`${order.id}-${item.menuItemId}-${index}`}>
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>{formatMoney(item.total)}</span>
-                            </li>
-                          ))}
-                          {order.items.length > 3 && (
-                            <li><span>+{order.items.length - 3} more items</span></li>
-                          )}
-                        </ul>
-                        <div className={styles.orderCardFooter}>
-                          <span className={styles.orderTotal}>{formatMoney(order.total)}</span>
-                          <Link href={`/orders/${order.id}`} className={styles.trackLink}>
-                            Track live
-                          </Link>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={orderTab === 'past'}
+                  className={`${styles.orderTab} ${orderTab === 'past' ? styles.orderTabActive : ''}`}
+                  onClick={() => setOrderTab('past')}
+                >
+                  Past orders ({pastOrders.length})
+                </button>
+              </div>
 
-              <section className={styles.orderSection}>
-                <h3>Past orders ({pastOrders.length})</h3>
-                {pastOrders.length === 0 ? (
-                  <p className={styles.sectionEmpty}>No completed orders yet.</p>
-                ) : (
-                  <ul className={styles.orderList}>
-                    {pastOrders.map(order => (
-                      <li className={styles.orderCard} key={order.id}>
-                        <div className={styles.orderCardTop}>
-                          <div>
-                            <p className={styles.orderId}>#{formatOrderId(order.id)}</p>
-                            <p className={styles.orderMeta}>
-                              Pickup {formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}
-                            </p>
+              {orderTab === 'active' ? (
+                <section className={styles.orderSection} role="tabpanel">
+                  {activeOrders.length === 0 ? (
+                    <p className={styles.sectionEmpty}>No active orders right now.</p>
+                  ) : (
+                    <ul className={styles.orderList}>
+                      {activeOrders.map(order => (
+                        <li className={styles.orderCard} key={order.id}>
+                          <div className={styles.orderCardTop}>
+                            <div>
+                              <p className={styles.orderId}>#{formatOrderId(order.id)}</p>
+                              <p className={styles.orderMeta}>
+                                Pickup {formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}
+                              </p>
+                            </div>
+                            <span className={`${styles.statusBadge} ${statusBadgeClass(order.status)}`}>
+                              {orderStatusLabel(order.status)}
+                            </span>
                           </div>
-                          <span className={`${styles.statusBadge} ${statusBadgeClass(order.status)}`}>
-                            {orderStatusLabel(order.status)}
-                          </span>
-                        </div>
-                        <ul className={styles.orderItemsPreview}>
-                          {order.items.slice(0, 3).map((item, index) => (
-                            <li key={`${order.id}-${item.menuItemId}-${index}`}>
-                              <span>{item.quantity}× {item.name}</span>
-                              <span>{formatMoney(item.total)}</span>
-                            </li>
-                          ))}
-                          {order.items.length > 3 && (
-                            <li><span>+{order.items.length - 3} more items</span></li>
-                          )}
-                        </ul>
-                        <div className={styles.orderCardFooter}>
-                          <span className={styles.orderTotal}>{formatMoney(order.total)}</span>
-                          <Link href={`/orders/${order.id}`} className={styles.trackLink}>
-                            View details
-                          </Link>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                          <ul className={styles.orderItemsPreview}>
+                            {order.items.slice(0, 3).map((item, index) => (
+                              <li key={`${order.id}-${item.menuItemId}-${index}`}>
+                                <span>{item.quantity}× {item.name}</span>
+                                <span>{formatMoney(item.total)}</span>
+                              </li>
+                            ))}
+                            {order.items.length > 3 && (
+                              <li><span>+{order.items.length - 3} more items</span></li>
+                            )}
+                          </ul>
+                          <div className={styles.orderCardFooter}>
+                            <span className={styles.orderTotal}>{formatMoney(order.total)}</span>
+                            <Link href={`/orders/${order.id}`} className={styles.trackLink}>
+                              Track live
+                            </Link>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              ) : (
+                <section className={styles.orderSection} role="tabpanel">
+                  {pastOrders.length === 0 ? (
+                    <p className={styles.sectionEmpty}>No past orders</p>
+                  ) : (
+                    <ul className={styles.orderList}>
+                      {pastOrders.map(order => (
+                        <li className={styles.orderCard} key={order.id}>
+                          <div className={styles.orderCardTop}>
+                            <div>
+                              <p className={styles.orderId}>#{formatOrderId(order.id)}</p>
+                              <p className={styles.orderMeta}>
+                                Pickup {formatPickupDateLabel(order.pickupDate)} · {order.pickupTime}
+                              </p>
+                            </div>
+                            <span className={`${styles.statusBadge} ${statusBadgeClass(order.status)}`}>
+                              {orderStatusLabel(order.status)}
+                            </span>
+                          </div>
+                          <ul className={styles.orderItemsPreview}>
+                            {order.items.slice(0, 3).map((item, index) => (
+                              <li key={`${order.id}-${item.menuItemId}-${index}`}>
+                                <span>{item.quantity}× {item.name}</span>
+                                <span>{formatMoney(item.total)}</span>
+                              </li>
+                            ))}
+                            {order.items.length > 3 && (
+                              <li><span>+{order.items.length - 3} more items</span></li>
+                            )}
+                          </ul>
+                          <div className={styles.orderCardFooter}>
+                            <span className={styles.orderTotal}>{formatMoney(order.total)}</span>
+                            <Link href={`/orders/${order.id}`} className={styles.trackLink}>
+                              View details
+                            </Link>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
             </div>
           )}
         </motion.div>

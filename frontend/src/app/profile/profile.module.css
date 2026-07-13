@@ -138,7 +138,41 @@
 .orderSections {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.25rem;
+}
+
+.orderTabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.orderTab {
+  margin: 0;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-light);
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: var(--transition-smooth);
+}
+
+.orderTab:hover {
+  color: var(--primary);
+}
+
+.orderTabActive {
+  color: var(--primary);
+  border-color: rgba(212, 175, 55, 0.35);
+  background: rgba(212, 175, 55, 0.08);
 }
 
 .orderSection h3 {
