@@ -172,10 +172,115 @@
 }
 
 /* Summary Section */
-.summaryCard {
-  padding: 2.5rem;
+.summaryStack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
   position: sticky;
   top: 100px;
+}
+
+.pickupPanel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.pickupToggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pickupToggleMain {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.65rem;
+  min-width: 0;
+}
+
+.pickupToggleTitle {
+  color: var(--primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.pickupToggleSummary {
+  color: var(--text-light);
+  font-size: 0.82rem;
+}
+
+.pickupChevron {
+  flex-shrink: 0;
+  color: var(--text-light);
+  transition: transform 0.2s ease;
+}
+
+.pickupChevronOpen {
+  transform: rotate(180deg);
+}
+
+.pickupPanelBody {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--glass-border);
+}
+
+.pickupFields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.85rem;
+}
+
+.pickupField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pickupField label {
+  font-size: 0.78rem;
+  color: var(--text-light);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pickupField input,
+.pickupSelect {
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: var(--transition-smooth);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pickupField input:focus,
+.pickupSelect:focus {
+  outline: none;
+  border-color: var(--secondary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pickupSelect {
+  border-color: rgba(212, 175, 55, 0.35);
+}
+
+.summaryCard {
+  padding: 2.5rem;
 }
 
 .summaryItems {
@@ -240,21 +345,6 @@
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--glass-border);
-}
-
-.deliveryNote {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 1rem;
-  border-radius: 8px;
-  color: var(--text-light);
-  font-size: 0.95rem;
-}
-
-.deliveryNote strong {
-  color: var(--text);
 }
 
 .emptyState, .successCard {
@@ -344,8 +434,8 @@
     flex-direction: column-reverse;
     display: flex;
   }
-  
-  .summaryCard {
+
+  .summaryStack {
     position: static;
   }
 }

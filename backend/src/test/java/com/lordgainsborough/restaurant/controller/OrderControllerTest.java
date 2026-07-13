@@ -135,11 +135,40 @@ class OrderControllerTest {
     void createOrderRejectsUnknownMenuItem() {
         CustomerOrder order = orderWith("ghost-item", 5.0);
         when(menuItemRepository.findById("ghost-item")).thenReturn(Optional.empty());
+        when(menuItemRepository.findFirstByNameIgnoreCase("Tampered Name")).thenReturn(Optional.empty());
 
         ResponseEntity<?> response = controller.createOrder(order);
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        @SuppressWarnings("unchecked")
+        Map<String, String> body = (Map<String, String>) response.getBody();
+        assertNotNull(body);
+        assertEquals("CART_ITEM_CHANGED", body.get("code"));
         verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void createOrderRepairsStaleMenuItemIdUsingName() {
+        CustomerOrder order = orderWith("old-pizza-id", 1.00);
+        order.getItems().getFirst().setName("Pepperoni Pizza");
+        MenuItem menuItem = new MenuItem("new-pizza-id", "Pepperoni Pizza", "", 17.99, "Pizzas", "", true);
+        when(menuItemRepository.findById("old-pizza-id")).thenReturn(Optional.empty());
+        when(menuItemRepository.findFirstByNameIgnoreCase("Pepperoni Pizza")).thenReturn(Optional.of(menuItem));
+        when(orderAccessService.generateTrackingToken()).thenReturn("plain-token");
+        when(orderAccessService.hashTrackingToken("plain-token")).thenReturn("hashed-token");
+        when(orderRepository.save(any(CustomerOrder.class))).thenAnswer(invocation -> {
+            CustomerOrder saved = invocation.getArgument(0);
+            saved.setId("order-1");
+            return saved;
+        });
+
+        ResponseEntity<?> response = controller.createOrder(order);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        OrderCreationResponse body = (OrderCreationResponse) response.getBody();
+        assertNotNull(body);
+        assertEquals("new-pizza-id", body.getOrder().getItems().getFirst().getMenuItemId());
+        assertEquals(17.99, body.getOrder().getSubtotal());
     }
 
     @Test

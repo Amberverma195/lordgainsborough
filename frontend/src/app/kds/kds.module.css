@@ -191,6 +191,19 @@
   min-width: 130px;
 }
 
+.statButton {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  text-align: left;
+}
+
+.statButton:hover {
+  border-color: var(--secondary);
+  background: rgba(212, 175, 55, 0.1);
+}
+
 .stat svg {
   color: var(--secondary);
 }
@@ -474,6 +487,112 @@
   text-align: center;
 }
 
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.ordersModal {
+  width: min(720px, 100%);
+  max-height: min(82vh, 900px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--background);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.ordersModalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.2rem;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.ordersModalHeader h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.ordersModalHeader p {
+  margin: 0.3rem 0 0;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.ordersModalHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ordersModalList {
+  overflow: auto;
+  padding: 0.85rem 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ordersModalEmpty {
+  margin: 1.5rem 0;
+  text-align: center;
+  color: var(--text-light);
+}
+
+.ordersModalRow {
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 0.85rem 0.95rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ordersModalRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.ordersModalStatus {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--secondary);
+}
+
+.ordersModalMeta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem 0.75rem;
+  color: var(--text-light);
+  font-size: 0.88rem;
+  margin-bottom: 0.55rem;
+}
+
+.ordersModalItems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
 @media (max-width: 760px) {
   .container {
     padding: 1.25rem;
@@ -486,5 +605,13 @@
 
   .board {
     grid-template-columns: repeat(3, 82vw);
+  }
+
+  .ordersModalMeta {
+    grid-template-columns: 1fr;
+  }
+
+  .ordersModalHeader {
+    flex-direction: column;
   }
 }

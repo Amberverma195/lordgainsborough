@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
-import { ChevronDown, Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, X } from 'lucide-react';
+import { Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, Wifi, WifiOff, X } from 'lucide-react';
 import { CartItem, useCart } from '@/context/CartContext';
 import {
   API_BASE,
@@ -12,6 +12,8 @@ import {
   SOCKET_URL,
   formatMoney,
   formatOrderId,
+  formatPickupDateLabel,
+  formatPickupTimeLabel,
   getStoredTrackingToken,
   orderStatusLabel,
 } from '@/lib/orders';
@@ -70,8 +72,8 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewItems, setReviewItems] = useState<Record<string, { rating: number; description: string }>>({});
   const [submittingReview, setSubmittingReview] = useState(false);
-  const [timestampsOpen, setTimestampsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [connected, setConnected] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -79,30 +81,40 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     }
   }, [orderId]);
 
-  useEffect(() => {
-    const loadOrder = async () => {
+  const loadOrder = useCallback(async (showLoading = false) => {
+    if (showLoading) {
       setLoading(true);
-      try {
-        const res = await fetch(`${API_BASE}/orders/${orderId}`, {
-          headers: buildOrderAccessHeaders(orderId),
-        });
-        if (res.status === 404) {
-          notFound();
-          return;
-        }
-        if (!res.ok) {
-          throw new Error('Order load failed.');
-        }
-        setOrder(await res.json());
-      } catch {
+    }
+    try {
+      const res = await fetch(`${API_BASE}/orders/${orderId}`, {
+        headers: buildOrderAccessHeaders(orderId),
+        cache: 'no-store',
+      });
+      if (res.status === 404) {
+        notFound();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error('Order load failed.');
+      }
+      setOrder(await res.json());
+    } catch {
+      if (showLoading) {
         setNotice('Order could not be loaded.');
-      } finally {
+      }
+    } finally {
+      if (showLoading) {
         setLoading(false);
       }
-    };
-
-    loadOrder();
+    }
   }, [orderId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadOrder(true);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadOrder]);
 
   useEffect(() => {
     const authHeaders = getAuthHeadersOnly() as Record<string, string>;
@@ -116,25 +128,40 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
       transports: ['websocket', 'polling'],
     });
 
+    const handleConnect = () => {
+      setConnected(true);
+      // Re-fetch after every connection so status changes missed while offline
+      // are reflected immediately without a browser refresh.
+      void loadOrder();
+    };
+    const handleDisconnect = () => setConnected(false);
+    const handleConnectError = () => setConnected(false);
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
     socket.on('order.updated', applyOrder);
 
     return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
       socket.off('order.updated', applyOrder);
       socket.disconnect();
     };
-  }, [applyOrder, orderId]);
+  }, [applyOrder, loadOrder, orderId]);
 
-  const timestamps = useMemo(() => {
+  const timeline = useMemo(() => {
     if (!order) {
       return [];
     }
 
     return [
-      { label: 'Received', value: order.createdAt },
-      { label: 'Accepted', value: order.acceptedAt },
-      { label: 'Ready', value: order.readyAt },
+      { label: 'Order received', value: order.createdAt },
+      { label: 'Kitchen accepted', value: order.acceptedAt },
+      { label: 'Ready for pickup', value: order.readyAt },
       { label: 'Picked up', value: order.pickedUpAt },
-    ].filter(entry => Boolean(entry.value));
+    ];
   }, [order]);
   const hasReviewInput = useMemo(
     () => Object.values(reviewItems).some(item => item.rating > 0 || item.description.trim().length > 0),
@@ -227,19 +254,34 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     );
   }
 
+  const currentStepIndex = {
+    NEW: 0,
+    ACCEPTED: 1,
+    READY: 2,
+    PICKED_UP: 3,
+    NO_SHOW: 0,
+  }[order.status];
+  const isAsap = order.pickupTime?.trim().toLowerCase() === 'asap';
+
   return (
     <main className={styles.container}>
       <header className={styles.header}>
         <p className={styles.eyebrow}>Order Status</p>
         <h1>#{formatOrderId(order.id)}</h1>
         <div className={styles.orderMeta}>
-          <span>{order.pickupDate}</span>
-          <span>{order.pickupTime}</span>
-          <span>{order.averageReadyMinutes} min average</span>
+          <span>{formatPickupDateLabel(order.pickupDate)}</span>
+          <span>{formatPickupTimeLabel(order.pickupTime)}</span>
+          {isAsap && <span>About {order.averageReadyMinutes} min</span>}
         </div>
-        <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
-          {orderStatusLabel(order.status)}
-        </span>
+        <div className={styles.statusRow}>
+          <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
+            {orderStatusLabel(order.status)}
+          </span>
+          <span className={`${styles.liveBadge} ${connected ? styles.liveBadgeOnline : ''}`}>
+            {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
+            {connected ? 'Live' : 'Reconnecting'}
+          </span>
+        </div>
       </header>
 
       <section className={styles.actionBar}>
@@ -269,26 +311,41 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         </section>
       )}
 
-      <section className={styles.timestampPanel}>
-        <button
-          type="button"
-          className={styles.timestampToggle}
-          onClick={() => setTimestampsOpen(prev => !prev)}
-          aria-expanded={timestampsOpen}
-        >
-          <span><Clock3 size={18} /> Order timestamps</span>
-          <ChevronDown className={timestampsOpen ? styles.chevronOpen : ''} size={18} />
-        </button>
-        {timestampsOpen && (
-          <div className={styles.timestampList}>
-            {timestamps.map(timestamp => (
-              <div key={timestamp.label}>
-                <span>{timestamp.label}</span>
-                <strong>{formatTimestamp(timestamp.value)}</strong>
+      <section className={styles.timelinePanel} aria-live="polite">
+        <h2><Clock3 size={18} /> Live order timeline</h2>
+        <div className={styles.timeline}>
+          {timeline.map((step, index) => (
+            <div
+              key={step.label}
+              className={[
+                styles.timelineStep,
+                index <= currentStepIndex ? styles.timelineStepComplete : '',
+                index === currentStepIndex ? styles.timelineStepActive : '',
+              ].filter(Boolean).join(' ')}
+            >
+              <span className={styles.timelineMarker} aria-hidden />
+              <div>
+                <strong>{step.label}</strong>
+                <span>
+                  {step.value
+                    ? formatTimestamp(step.value)
+                    : index === currentStepIndex
+                      ? 'In progress'
+                      : 'Waiting'}
+                </span>
               </div>
-            ))}
+            </div>
+          ))}
+          {order.status === 'NO_SHOW' && (
+            <div className={`${styles.timelineStep} ${styles.timelineStepNoShow}`}>
+              <span className={styles.timelineMarker} aria-hidden />
+              <div>
+                <strong>Marked as no-show</strong>
+                <span>{formatTimestamp(order.noShowAt)}</span>
+              </div>
+            </div>
+          )}
           </div>
-        )}
       </section>
 
       <section className={styles.summary}>

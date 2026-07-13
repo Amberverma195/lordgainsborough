@@ -119,6 +119,13 @@ export function formatPickupDateLabel(isoDate: string): string {
   });
 }
 
+export function formatPickupTimeLabel(value?: string | null): string {
+  if (!value) {
+    return '';
+  }
+  return value.trim().toLowerCase() === 'asap' ? 'As soon as possible' : value;
+}
+
 export function formatOrderId(id: string): string {
   return `ORD-${id.slice(-6).toUpperCase()}`;
 }

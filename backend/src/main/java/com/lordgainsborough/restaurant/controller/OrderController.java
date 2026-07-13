@@ -55,11 +55,15 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<?> createOrder(@RequestBody CustomerOrder order) {
         if (order.getItems() == null || order.getItems().isEmpty()) {
-            return ResponseEntity.badRequest().build();
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "EMPTY_CART",
+                    "message", "Your cart is empty."));
         }
 
         if (!storeSettingsService.getSettings().getPickupOrdersEnabled()) {
-            return ResponseEntity.status(503).build();
+            return ResponseEntity.status(503).body(Map.of(
+                    "code", "PICKUP_ORDERS_PAUSED",
+                    "message", "Pickup orders are currently paused. Please check back later."));
         }
 
         if (customerNoShowService.isPickupDisabledForCustomer(order.getCustomerEmail(), order.getCustomerPhone())) {
@@ -72,9 +76,11 @@ public class OrderController {
             order.setPickupDate(LocalDate.now().toString());
         }
 
-        // Reject orders whose items/prices cannot be validated against the menu.
-        if (!repriceFromMenu(order)) {
-            return ResponseEntity.badRequest().build();
+        // Reprice against authoritative menu data. Name fallback repairs carts saved
+        // before an older application version regenerated all menu item IDs.
+        Map<String, String> menuValidationError = repriceFromMenu(order);
+        if (menuValidationError != null) {
+            return ResponseEntity.badRequest().body(menuValidationError);
         }
 
         order.setId(null);
@@ -158,26 +164,38 @@ public class OrderController {
 
     /**
      * Overrides client-supplied item names and prices with authoritative menu data so
-     * persisted totals cannot be manipulated by the client. Returns false if any item
-     * is unknown or unavailable.
+     * persisted totals cannot be manipulated by the client. Returns an error payload
+     * if an item is unknown or unavailable, otherwise {@code null}.
      */
-    private boolean repriceFromMenu(CustomerOrder order) {
+    private Map<String, String> repriceFromMenu(CustomerOrder order) {
         for (CustomerOrder.OrderItem item : order.getItems()) {
-            if (item.getMenuItemId() == null || item.getMenuItemId().isBlank()) {
-                return false;
+            Optional<MenuItem> menuItemOpt = Optional.empty();
+            if (item.getMenuItemId() != null && !item.getMenuItemId().isBlank()) {
+                menuItemOpt = menuItemRepository.findById(item.getMenuItemId());
             }
-            Optional<MenuItem> menuItemOpt = menuItemRepository.findById(item.getMenuItemId());
+
+            if (menuItemOpt.isEmpty() && item.getName() != null && !item.getName().isBlank()) {
+                menuItemOpt = menuItemRepository.findFirstByNameIgnoreCase(item.getName().trim());
+            }
+
             if (menuItemOpt.isEmpty()) {
-                return false;
+                return Map.of(
+                        "code", "CART_ITEM_CHANGED",
+                        "message", "An item in your cart is no longer on the menu. Please remove it and try again.");
             }
+
             MenuItem menuItem = menuItemOpt.get();
             if (!menuItem.isAvailable() || menuItem.getPrice() == null) {
-                return false;
+                return Map.of(
+                        "code", "CART_ITEM_UNAVAILABLE",
+                        "message", menuItem.getName() + " is currently unavailable. Please remove it and try again.");
             }
+
+            item.setMenuItemId(menuItem.getId());
             item.setName(menuItem.getName());
             item.setUnitPrice(menuItem.getPrice());
         }
-        return true;
+        return null;
     }
 
     private static final int MAX_INSTRUCTIONS_LENGTH = 500;

@@ -47,10 +47,18 @@
   font-size: 0.9rem;
 }
 
+.statusRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
 .statusBadge {
   display: inline-flex;
   align-items: center;
-  margin-top: 0.85rem;
+  margin-top: 0;
   border-radius: 999px;
   padding: 0.4rem 0.85rem;
   font-size: 0.82rem;
@@ -59,6 +67,23 @@
   border: 1px solid var(--glass-border);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
+}
+
+.liveBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-light);
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.liveBadgeOnline {
+  border-color: rgba(64, 196, 132, 0.38);
+  color: #66d49a;
 }
 
 .statusNew {
@@ -151,67 +176,103 @@
   white-space: pre-wrap;
 }
 
-.timestampPanel {
+.timelinePanel {
   width: min(440px, 100%);
   border: 1px solid var(--glass-border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   margin-bottom: 1rem;
-  overflow: hidden;
+  padding: 1rem;
 }
 
-.timestampToggle {
-  width: 100%;
-  min-height: 40px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  padding: 0 0.85rem;
+.timelinePanel h2 {
+  margin: 0 0 1rem;
+  color: var(--primary);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  font: inherit;
-  font-size: 0.9rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.timestampToggle span {
-  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: 1.05rem;
 }
 
-.timestampToggle svg {
+.timelinePanel h2 svg {
   color: var(--secondary);
-  transition: transform 0.2s ease;
 }
 
-.chevronOpen {
-  transform: rotate(180deg);
-}
-
-.timestampList {
-  border-top: 1px solid var(--glass-border);
-  padding: 0.2rem 0.85rem 0.75rem;
+.timeline {
   display: flex;
   flex-direction: column;
+}
+
+.timelineStep {
+  position: relative;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   gap: 0.7rem;
-}
-
-.timestampList div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
   color: var(--text-light);
-  font-size: 0.9rem;
 }
 
-.timestampList strong {
+.timelineStep:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 16px;
+  bottom: 0;
+  width: 2px;
+  background: var(--glass-border);
+}
+
+.timelineMarker {
+  position: relative;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--glass-border);
+  background: var(--background);
+}
+
+.timelineStep > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-bottom: 0.9rem;
+}
+
+.timelineStep strong {
+  color: var(--text-light);
+  font-size: 0.92rem;
+}
+
+.timelineStep span {
+  color: var(--text-light);
+  font-size: 0.8rem;
+}
+
+.timelineStepComplete .timelineMarker {
+  border-color: var(--secondary);
+  background: var(--secondary);
+}
+
+.timelineStepComplete:not(:last-child)::before {
+  background: rgba(212, 175, 55, 0.5);
+}
+
+.timelineStepComplete strong {
   color: var(--primary);
-  text-align: right;
+}
+
+.timelineStepActive .timelineMarker {
+  box-shadow: 0 0 0 5px rgba(212, 175, 55, 0.14);
+}
+
+.timelineStepNoShow .timelineMarker {
+  border-color: #ff7777;
+  background: #ff7777;
+}
+
+.timelineStepNoShow strong {
+  color: #ff8585;
 }
 
 .summary {
@@ -468,13 +529,4 @@
     width: 100%;
   }
 
-  .timestampList div {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .timestampList strong {
-    text-align: left;
-  }
 }

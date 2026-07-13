@@ -2,12 +2,16 @@ package com.lordgainsborough.restaurant.service;
 
 import com.corundumstudio.socketio.SocketIOServer;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
 
 @Service
 public class OrderRealtimeService {
+    private static final Logger log = LoggerFactory.getLogger(OrderRealtimeService.class);
+
     private final SocketIOServer socketIoServer;
     private final CustomerOrderPresentationService presentationService;
 
@@ -20,14 +24,14 @@ public class OrderRealtimeService {
 
     public void orderCreated(CustomerOrder order) {
         CustomerOrder payload = presentationService.attachCustomerOrderCount(order);
-        socketIoServer.getRoomOperations("kds").sendEvent("order.created", payload);
-        socketIoServer.getRoomOperations("order:" + order.getId()).sendEvent("order.updated", payload);
+        sendEvent("kds", "order.created", payload);
+        sendEvent("order:" + order.getId(), "order.updated", payload);
     }
 
     public void orderUpdated(CustomerOrder order) {
         CustomerOrder payload = presentationService.attachCustomerOrderCount(order);
-        socketIoServer.getRoomOperations("kds").sendEvent("order.updated", payload);
-        socketIoServer.getRoomOperations("order:" + order.getId()).sendEvent("order.updated", payload);
+        sendEvent("kds", "order.updated", payload);
+        sendEvent("order:" + order.getId(), "order.updated", payload);
     }
 
     public void chatMessage(CustomerOrder order, CustomerOrder.OrderMessage message) {
@@ -35,7 +39,17 @@ public class OrderRealtimeService {
                 "orderId", order.getId(),
                 "message", message
         );
-        socketIoServer.getRoomOperations("kds").sendEvent("chat.message", payload);
-        socketIoServer.getRoomOperations("order:" + order.getId()).sendEvent("chat.message", payload);
+        sendEvent("kds", "chat.message", payload);
+        sendEvent("order:" + order.getId(), "chat.message", payload);
+    }
+
+    private void sendEvent(String room, String event, Object payload) {
+        try {
+            socketIoServer.getRoomOperations(room).sendEvent(event, payload);
+        } catch (RuntimeException exception) {
+            // Realtime delivery must never turn an already-persisted order into an
+            // HTTP failure that encourages the customer to submit a duplicate.
+            log.error("Unable to emit Socket.IO event {} to room {}", event, room, exception);
+        }
     }
 }

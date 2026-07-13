@@ -5,13 +5,12 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useCart } from '@/context/CartContext';
 import styles from './checkout.module.css';
-import { CreditCard, MapPin, CheckCircle, Clock, CalendarDays, NotebookPen } from 'lucide-react';
+import { CreditCard, Clock, CalendarDays, NotebookPen, ChevronDown } from 'lucide-react';
 import {
   API_BASE,
-  CustomerOrder,
   StoreSettings,
   fetchStoreSettings,
-  formatOrderId,
+  formatPickupDateLabel,
   getTodayString,
   storeTrackingToken,
 } from '@/lib/orders';
@@ -38,7 +37,7 @@ function generateTimeSlots(): string[] {
   return slots;
 }
 
-function applyAuthToForm(data: AuthData) {
+function profileFromAuth(data: AuthData) {
   const nameParts = (data.name || '').trim().split(/\s+/);
   const firstName = nameParts[0] || '';
   const lastName = nameParts.slice(1).join(' ') || '';
@@ -50,28 +49,25 @@ function applyAuthToForm(data: AuthData) {
   };
 }
 
-function prefillFromStorage() {
+function profileFromStorage() {
   const name = localStorage.getItem('userName') || '';
   const email = localStorage.getItem('userEmail') || '';
   const phone = localStorage.getItem('userPhone') || '';
-  return applyAuthToForm({ name, email, phone });
+  return profileFromAuth({ name, email, phone });
 }
 
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, cartTotal, clearCart } = useCart();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [createdOrder, setCreatedOrder] = useState<CustomerOrder | null>(null);
   const [error, setError] = useState('');
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [storeSettings, setStoreSettings] = useState<StoreSettings | null>(null);
   const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
   const pendingOrderSubmit = useRef(false);
+  const submittingRef = useRef(false);
+  const [pickupTimeOpen, setPickupTimeOpen] = useState(false);
   const [form, setForm] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
     pickupDate: getTodayString(),
     pickupTime: 'asap',
     specialInstructions: '',
@@ -85,7 +81,6 @@ export default function CheckoutPage() {
         ...prev,
         pickupDate: savedDate || prev.pickupDate,
         pickupTime: savedTime || prev.pickupTime,
-        ...(isAuthenticated() ? prefillFromStorage() : {}),
       }));
     }, 0);
 
@@ -94,96 +89,121 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     fetchStoreSettings().then(setStoreSettings);
-    setPickupDisabledForUser(isPickupDisabledForUser());
+    const timeout = window.setTimeout(() => {
+      setPickupDisabledForUser(isPickupDisabledForUser());
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
-
-  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }));
-  };
 
   type CheckoutForm = typeof form;
 
   const placeOrder = useCallback(async (formData: CheckoutForm = form) => {
-    setError('');
-
-    const settings = storeSettings ?? await fetchStoreSettings();
-    if (!settings.pickupOrdersEnabled) {
-      setError('Pickup orders are currently paused. Please check back later.');
+    if (submittingRef.current) {
       return;
     }
 
-    if (isPickupDisabledForUser()) {
-      setPickupDisabledForUser(true);
-      setError(PICKUP_DISABLED_NO_SHOW_MESSAGE);
-      return;
-    }
-
-    if (getPhoneDigitCount(formData.phone) !== 10) {
-      setError('Please enter a valid 10-digit phone number.');
-      return;
-    }
-
+    submittingRef.current = true;
     setIsSubmitting(true);
-
-    const tax = cartTotal * settings.taxRate;
-    const payload = {
-      customerName: `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim(),
-      customerEmail: formData.email.trim(),
-      customerPhone: formData.phone.trim(),
-      pickupDate: formData.pickupDate,
-      pickupTime: formData.pickupTime,
-      specialInstructions: formData.specialInstructions.trim(),
-      averageReadyMinutes: settings.defaultReadyMinutes,
-      items: cart.map(item => ({
-        menuItemId: item.id,
-        name: item.name,
-        quantity: item.quantity,
-        unitPrice: item.price,
-        total: item.price * item.quantity,
-      })),
-      subtotal: cartTotal,
-      tax,
-      total: cartTotal + tax,
-    };
+    setError('');
+    let completed = false;
 
     try {
+      const settings = storeSettings ?? await fetchStoreSettings();
+      if (!settings.pickupOrdersEnabled) {
+        setError('Pickup orders are currently paused. Please check back later.');
+        return;
+      }
+
+      if (isPickupDisabledForUser()) {
+        setPickupDisabledForUser(true);
+        setError(PICKUP_DISABLED_NO_SHOW_MESSAGE);
+        return;
+      }
+
+      const profile = profileFromStorage();
+      if (!profile.firstName || !profile.email) {
+        setError('Your account is missing contact details. Please update your profile and try again.');
+        return;
+      }
+
+      if (getPhoneDigitCount(profile.phone) !== 10) {
+        setError('Your account needs a valid 10-digit phone number. Please update your profile and try again.');
+        return;
+      }
+
+      const tax = cartTotal * settings.taxRate;
+      const payload = {
+        customerName: `${profile.firstName.trim()} ${profile.lastName.trim()}`.trim(),
+        customerEmail: profile.email.trim(),
+        customerPhone: profile.phone.trim(),
+        pickupDate: formData.pickupDate,
+        pickupTime: formData.pickupTime,
+        specialInstructions: formData.specialInstructions.trim(),
+        averageReadyMinutes: settings.defaultReadyMinutes,
+        items: cart.map(item => ({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.price,
+          total: item.price * item.quantity,
+        })),
+        subtotal: cartTotal,
+        tax,
+        total: cartTotal + tax,
+      };
+
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      const data = await res.json().catch(() => null);
 
       if (res.status === 503) {
-        setError('Pickup orders are currently paused. Please check back later.');
+        setError(typeof data?.message === 'string'
+          ? data.message
+          : 'Pickup orders are currently paused. Please check back later.');
         return;
       }
 
       if (res.status === 403) {
-        const data = await res.json().catch(() => null);
         setPickupDisabledForUser(true);
         setError(typeof data?.message === 'string' ? data.message : PICKUP_DISABLED_NO_SHOW_MESSAGE);
         return;
       }
 
       if (!res.ok) {
-        throw new Error('Order could not be placed.');
+        setError(typeof data?.message === 'string'
+          ? data.message
+          : 'The restaurant could not accept this order. Please review your cart and try again.');
+        return;
       }
 
-      const data = await res.json();
-      const order: CustomerOrder = data.order ?? data;
+      const order = data?.order ?? data;
+      if (!order?.id) {
+        throw new Error('The order was created without a valid confirmation.');
+      }
+
       if (data.trackingToken && order?.id) {
         storeTrackingToken(order.id, data.trackingToken);
       }
-      setCreatedOrder(order);
+
       clearCart();
       sessionStorage.removeItem('pickupDate');
       sessionStorage.removeItem('pickupTime');
-    } catch {
-      setError('We could not place the order. Please try again.');
+      completed = true;
+      router.replace(`/orders/${encodeURIComponent(order.id)}/confirmation`);
+    } catch (requestError) {
+      setError(requestError instanceof TypeError
+        ? 'We could not reach the restaurant. Check your connection and try again.'
+        : 'We could not confirm the order. Please try again.');
     } finally {
-      setIsSubmitting(false);
+      if (!completed) {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
     }
-  }, [cart, cartTotal, clearCart, form, storeSettings]);
+  }, [cart, cartTotal, clearCart, form, router, storeSettings]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,42 +222,13 @@ export default function CheckoutPage() {
       setPickupDisabledForUser(true);
       pendingOrderSubmit.current = false;
       setError(PICKUP_DISABLED_NO_SHOW_MESSAGE);
+      return;
     }
-    const profile = applyAuthToForm(data);
-    setForm(prev => {
-      const next = { ...prev, ...profile };
-      if (pendingOrderSubmit.current && !data.pickupDisabled) {
-        pendingOrderSubmit.current = false;
-        void placeOrder(next);
-      }
-      return next;
-    });
+    if (pendingOrderSubmit.current) {
+      pendingOrderSubmit.current = false;
+      void placeOrder();
+    }
   };
-
-  if (createdOrder) {
-    return (
-      <div className={styles.container}>
-        <motion.div
-          className={styles.successCard}
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-        >
-          <CheckCircle size={80} className={styles.successIcon} />
-          <h1 className={styles.title}>Order Confirmed</h1>
-          <p className={styles.subtitle}>Thank you for your order. The kitchen has received it.</p>
-          <p className={styles.orderId}>Order ID: <strong>#{formatOrderId(createdOrder.id)}</strong></p>
-          <div className={styles.successActions}>
-            <button className={styles.primaryBtn} onClick={() => router.push(`/orders/${createdOrder.id}`)}>
-              Track Order
-            </button>
-            <button className={styles.secondaryBtn} onClick={() => router.push('/')}>
-              Return Home
-            </button>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
 
   if (cart.length === 0) {
     return (
@@ -292,96 +283,6 @@ export default function CheckoutPage() {
           <form className={`${styles.card} premium-card`} onSubmit={handleSubmit}>
             <div className={styles.formGroup}>
               <h2 className={styles.sectionTitle}>
-                <MapPin size={24} className={styles.icon} /> Pick-up Information
-              </h2>
-
-              <div className={styles.inputRow}>
-                <div className={styles.inputField}>
-                  <label>First Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Alexander"
-                    value={form.firstName}
-                    onChange={e => setForm(prev => ({ ...prev, firstName: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.inputField}>
-                  <label>Last Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Sterling"
-                    value={form.lastName}
-                    onChange={e => setForm(prev => ({ ...prev, lastName: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              <div className={styles.inputField}>
-                <label>Email Address</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="alexander@example.com"
-                  value={form.email}
-                  onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
-                />
-              </div>
-
-              <div className={styles.inputField}>
-                <label>Phone Number</label>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  autoComplete="tel"
-                  required
-                  maxLength={17}
-                  placeholder="+1 (555) 000-0000"
-                  value={form.phone}
-                  onChange={handlePhoneChange}
-                />
-              </div>
-            </div>
-
-            <div className={styles.divider}></div>
-
-            <div className={styles.formGroup}>
-              <h2 className={styles.sectionTitle}>
-                <Clock size={24} className={styles.icon} /> Pick-up Time
-              </h2>
-              <div className={styles.inputRow}>
-                <div className={styles.inputField}>
-                  <label><CalendarDays size={16} /> Date</label>
-                  <input
-                    type="date"
-                    min={getTodayString()}
-                    required
-                    value={form.pickupDate}
-                    onChange={e => setForm(prev => ({ ...prev, pickupDate: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.inputField}>
-                  <label>Requested Pick-up Time</label>
-                  <select
-                    required
-                    className={styles.selectField}
-                    value={form.pickupTime}
-                    onChange={e => setForm(prev => ({ ...prev, pickupTime: e.target.value }))}
-                  >
-                    <option value="asap">As soon as possible</option>
-                    {timeSlots.map(slot => (
-                      <option key={slot} value={slot}>{slot}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className={styles.divider}></div>
-
-            <div className={styles.formGroup}>
-              <h2 className={styles.sectionTitle}>
                 <NotebookPen size={24} className={styles.icon} /> Special Instructions
               </h2>
               <div className={styles.inputField}>
@@ -434,8 +335,67 @@ export default function CheckoutPage() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <div className={`${styles.summaryCard} premium-card`}>
-            <h2 className={styles.sectionTitle}>Order Summary</h2>
+          <div className={styles.summaryStack}>
+            <div className={`${styles.pickupPanel} premium-card`}>
+              <button
+                type="button"
+                className={styles.pickupToggle}
+                onClick={() => setPickupTimeOpen(open => !open)}
+                aria-expanded={pickupTimeOpen}
+              >
+                <span className={styles.pickupToggleMain}>
+                  <Clock size={16} className={styles.icon} />
+                  <span className={styles.pickupToggleTitle}>Pick-up Time</span>
+                  <span className={styles.pickupToggleSummary}>
+                    {formatPickupDateLabel(form.pickupDate)}
+                    {' · '}
+                    {form.pickupTime === 'asap' ? 'As soon as possible' : form.pickupTime}
+                  </span>
+                </span>
+                <ChevronDown
+                  size={16}
+                  className={`${styles.pickupChevron} ${pickupTimeOpen ? styles.pickupChevronOpen : ''}`}
+                />
+              </button>
+
+              {pickupTimeOpen && (
+                <div className={styles.pickupPanelBody}>
+                  <div className={styles.pickupFields}>
+                    <div className={styles.pickupField}>
+                      <label htmlFor="checkout-pickup-date">
+                        <CalendarDays size={14} /> Date
+                      </label>
+                      <input
+                        id="checkout-pickup-date"
+                        type="date"
+                        min={getTodayString()}
+                        required
+                        value={form.pickupDate}
+                        onChange={e => setForm(prev => ({ ...prev, pickupDate: e.target.value }))}
+                      />
+                    </div>
+                    <div className={styles.pickupField}>
+                      <label htmlFor="checkout-pickup-time">Requested time</label>
+                      <select
+                        id="checkout-pickup-time"
+                        required
+                        className={styles.pickupSelect}
+                        value={form.pickupTime}
+                        onChange={e => setForm(prev => ({ ...prev, pickupTime: e.target.value }))}
+                      >
+                        <option value="asap">As soon as possible</option>
+                        {timeSlots.map(slot => (
+                          <option key={slot} value={slot}>{slot}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className={`${styles.summaryCard} premium-card`}>
+              <h2 className={styles.sectionTitle}>Order Summary</h2>
 
             <div className={styles.summaryItems}>
               {cart.map((item) => (
@@ -463,11 +423,7 @@ export default function CheckoutPage() {
                 <span>${finalTotal.toFixed(2)}</span>
               </div>
             </div>
-
-            <div className={styles.deliveryNote}>
-              <MapPin size={20} className={styles.icon} />
-              <p>Pick-up location: <strong>1800 Hyde Park Rd, London, ON</strong></p>
-            </div>
+          </div>
           </div>
         </motion.div>
       </div>

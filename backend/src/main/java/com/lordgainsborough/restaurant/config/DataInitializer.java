@@ -16,28 +16,27 @@ public class DataInitializer {
     @Bean
     CommandLineRunner initDatabase(MenuItemRepository menuRepo, CategoryRepository categoryRepo) {
         return args -> {
-            // Clear existing data and re-seed
-            categoryRepo.deleteAll();
-            menuRepo.deleteAll();
+            // Seed only empty collections. Replacing the menu on every restart changes
+            // Mongo IDs and leaves customers' saved carts pointing at deleted items.
+            if (categoryRepo.count() == 0) {
+                categoryRepo.saveAll(Arrays.asList(
+                    new Category(null, "Appetizers", "", 1),
+                    new Category(null, "Pizzas", "", 2),
+                    new Category(null, "Salads", "", 3),
+                    new Category(null, "Sandwiches", "", 4),
+                    new Category(null, "Homemade Burgers", "", 5),
+                    new Category(null, "Classics", "", 6),
+                    new Category(null, "Pasta", "", 7),
+                    new Category(null, "Panzerotti", "", 8),
+                    new Category(null, "Kids Menu", "", 9),
+                    new Category(null, "Beverages", "", 10),
+                    new Category(null, "Hot Sandwiches", "", 11)
+                ));
+                System.out.println("MongoDB seeded with categories.");
+            }
 
-            // Seed categories
-            categoryRepo.saveAll(Arrays.asList(
-                new Category(null, "Appetizers", "", 1),
-                new Category(null, "Pizzas", "", 2),
-                new Category(null, "Salads", "", 3),
-                new Category(null, "Sandwiches", "", 4),
-                new Category(null, "Homemade Burgers", "", 5),
-                new Category(null, "Classics", "", 6),
-                new Category(null, "Pasta", "", 7),
-                new Category(null, "Panzerotti", "", 8),
-                new Category(null, "Kids Menu", "", 9),
-                new Category(null, "Beverages", "", 10),
-                new Category(null, "Hot Sandwiches", "", 11)
-            ));
-            System.out.println("MongoDB seeded with categories.");
-
-            // Seed menu items
-            menuRepo.saveAll(Arrays.asList(
+            if (menuRepo.count() == 0) {
+                menuRepo.saveAll(Arrays.asList(
                 // --- Appetizers ---
                 new MenuItem(null, "Chicken Wings", "", 15.99, "Appetizers", "", true),
                 new MenuItem(null, "Nacho Deluxe (Meal Size)", "", 34.99, "Appetizers", "", true),
@@ -140,8 +139,9 @@ public class DataInitializer {
                 new MenuItem(null, "Hot Turkey Sandwich", "", 18.99, "Hot Sandwiches", "", true),
                 new MenuItem(null, "Hot Beef Sandwich", "", 18.99, "Hot Sandwiches", "", true),
                 new MenuItem(null, "Hot Hamburger Sandwich", "", 18.99, "Hot Sandwiches", "", true)
-            ));
-            System.out.println("MongoDB seeded with " + menuRepo.count() + " menu items.");
+                ));
+                System.out.println("MongoDB seeded with " + menuRepo.count() + " menu items.");
+            }
         };
     }
 }

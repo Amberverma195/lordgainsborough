@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
-import { CalendarDays, Check, ChefHat, Clock3, PackageCheck, RefreshCw, ShoppingBag, UserX, Wifi, WifiOff } from 'lucide-react';
+import { CalendarDays, Check, ChefHat, Clock3, PackageCheck, RefreshCw, ShoppingBag, UserX, Wifi, WifiOff, X } from 'lucide-react';
 import { useRequireKdsAccess } from '@/hooks/useRequireKdsAccess';
 import {
   API_BASE,
@@ -15,6 +15,7 @@ import {
   formatTime,
   formatPickupDateLabel,
   getTodayString,
+  orderStatusLabel,
   sortOrders,
 } from '@/lib/orders';
 
@@ -53,18 +54,32 @@ export default function KdsPage() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [connected, setConnected] = useState(false);
+  const [ordersModalOpen, setOrdersModalOpen] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const selectedDateRef = useRef(selectedDate);
-  const dateInputRef = useRef<HTMLInputElement>(null);
+  const modalDateInputRef = useRef<HTMLInputElement>(null);
   const fetchOrdersRef = useRef<() => void>(() => {});
-  const hasConnectedRef = useRef(false);
+
 
   useEffect(() => {
     selectedDateRef.current = selectedDate;
   }, [selectedDate]);
 
-  const openDatePicker = () => {
-    const input = dateInputRef.current;
+  useEffect(() => {
+    if (!ordersModalOpen) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOrdersModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [ordersModalOpen]);
+
+  const openModalDatePicker = () => {
+    const input = modalDateInputRef.current;
     if (!input) {
       return;
     }
@@ -84,11 +99,15 @@ export default function KdsPage() {
   };
 
   const orderMatchesView = useCallback(
-    (order: CustomerOrder) => order.pickupDate === selectedDateRef.current,
+    (order: CustomerOrder) => (order.pickupDate || '').trim() === selectedDateRef.current,
     [],
   );
 
-  const upsertOrder = useCallback((order: CustomerOrder) => {
+  const upsertOrder = useCallback((payload: CustomerOrder | CustomerOrder[]) => {
+    const order = Array.isArray(payload) ? payload[0] : payload;
+    if (!order?.id) {
+      return;
+    }
     setOrders(prev => {
       const withoutOrder = prev.filter(item => item.id !== order.id);
       if (!orderMatchesView(order)) {
@@ -110,7 +129,7 @@ export default function KdsPage() {
       }
 
       const data = await res.json();
-      setOrders(sortOrders(data));
+      setOrders(sortOrders(Array.isArray(data) ? data : []));
     } catch {
       setNotice('Orders could not be loaded.');
     } finally {
@@ -144,17 +163,13 @@ export default function KdsPage() {
     });
 
     socketRef.current = socket;
-    hasConnectedRef.current = false;
 
     const handleConnect = () => {
       setConnected(true);
       setNotice('');
-      // On reconnect, re-sync so no orders were missed while offline.
-      // The initial fetch is already handled by the auth effect.
-      if (hasConnectedRef.current) {
-        fetchOrdersRef.current();
-      }
-      hasConnectedRef.current = true;
+      // Always re-sync on connect so a missed order.created (or a page opened
+      // before the kitchen joined the room) still appears on the board.
+      fetchOrdersRef.current();
     };
 
     const handleDisconnect = () => setConnected(false);
@@ -259,11 +274,16 @@ export default function KdsPage() {
             ))}
           </select>
         </label>
-        <div className={styles.stat}>
+        <button
+          type="button"
+          className={`${styles.stat} ${styles.statButton}`}
+          onClick={() => setOrdersModalOpen(true)}
+          title="View all orders for this date"
+        >
           <ShoppingBag size={18} />
-          <strong>{visibleOrders.length}</strong>
+          <strong>{orders.length}</strong>
           <span>orders</span>
-        </div>
+        </button>
         <div className={styles.stat}>
           <ChefHat size={18} />
           <strong>{counts.ACCEPTED}</strong>
@@ -282,25 +302,6 @@ export default function KdsPage() {
             {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
             {connected ? 'Live' : 'Offline'}
           </span>
-          <button
-            type="button"
-            className={`${styles.dateButton} ${styles.dateButtonActive}`}
-            onClick={openDatePicker}
-            title={`Pickup date: ${selectedDate}`}
-            aria-label="Select pickup date"
-          >
-            <CalendarDays size={18} className={styles.dateIcon} />
-            <span className={styles.dateLabel}>{formatPickupDateLabel(selectedDate)}</span>
-            <input
-              ref={dateInputRef}
-              type="date"
-              className={styles.dateInput}
-              value={selectedDate}
-              onChange={event => handleDateChange(event.target.value)}
-              tabIndex={-1}
-              aria-hidden
-            />
-          </button>
           <button
             className={styles.iconButton}
             onClick={fetchOrders}
@@ -428,6 +429,89 @@ export default function KdsPage() {
           })}
         </section>
       </div>
+
+      {ordersModalOpen && (
+        <div
+          className={styles.modalBackdrop}
+          onClick={() => setOrdersModalOpen(false)}
+          role="presentation"
+        >
+          <div
+            className={styles.ordersModal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kds-orders-modal-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className={styles.ordersModalHeader}>
+              <div>
+                <h2 id="kds-orders-modal-title">All orders</h2>
+                <p>{orders.length} order{orders.length === 1 ? '' : 's'} for {formatPickupDateLabel(selectedDate)}</p>
+              </div>
+              <div className={styles.ordersModalHeaderActions}>
+                <button
+                  type="button"
+                  className={`${styles.dateButton} ${styles.dateButtonActive}`}
+                  onClick={openModalDatePicker}
+                  title={`Pickup date: ${selectedDate}`}
+                  aria-label="Select pickup date"
+                >
+                  <CalendarDays size={18} className={styles.dateIcon} />
+                  <span className={styles.dateLabel}>{formatPickupDateLabel(selectedDate)}</span>
+                  <input
+                    ref={modalDateInputRef}
+                    type="date"
+                    className={styles.dateInput}
+                    value={selectedDate}
+                    onChange={event => handleDateChange(event.target.value)}
+                    tabIndex={-1}
+                    aria-hidden
+                  />
+                </button>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  onClick={() => setOrdersModalOpen(false)}
+                  aria-label="Close orders list"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.ordersModalList}>
+              {orders.length === 0 ? (
+                <p className={styles.ordersModalEmpty}>No orders for this date.</p>
+              ) : (
+                orders.map(order => (
+                  <article key={order.id} className={styles.ordersModalRow}>
+                    <div className={styles.ordersModalRowTop}>
+                      <strong>#{formatOrderId(order.id)}</strong>
+                      <span className={styles.ordersModalStatus}>{orderStatusLabel(order.status)}</span>
+                    </div>
+                    <div className={styles.ordersModalMeta}>
+                      <span>{order.customerName}</span>
+                      <span>{order.customerPhone}</span>
+                      <span>{order.pickupTime}</span>
+                      <span>{formatMoney(order.total)}</span>
+                    </div>
+                    <ul className={styles.ordersModalItems}>
+                      {order.items.slice(0, 4).map((item, index) => (
+                        <li key={`${order.id}-${item.menuItemId}-${index}`}>
+                          {item.quantity}× {item.name}
+                        </li>
+                      ))}
+                      {order.items.length > 4 && (
+                        <li>+{order.items.length - 4} more</li>
+                      )}
+                    </ul>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
