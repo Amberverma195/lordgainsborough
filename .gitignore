@@ -1,0 +1,44 @@
+# Dependencies
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.*
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+
+# Java / Maven
+backend/target/
+backend/.classpath
+backend/.project
+backend/.settings/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+!**/application.properties.example
+
+# Logs & crash dumps
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# TypeScript
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Test / coverage
+frontend/coverage/
+backend/.mvn/wrapper/maven-wrapper.jar

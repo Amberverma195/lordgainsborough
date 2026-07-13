@@ -1,0 +1,242 @@
+.container {
+  min-height: calc(100vh - 80px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background-image: 
+    radial-gradient(circle at 10% 20%, rgba(212, 175, 55, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(212, 175, 55, 0.05) 0%, transparent 40%);
+}
+
+.signupCard {
+  width: 100%;
+  max-width: 600px;
+  padding: 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.iconWrapper {
+  width: 64px;
+  height: 64px;
+  background: var(--glass);
+  border: 1px solid var(--secondary);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--secondary);
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
+}
+
+.header h1 {
+  font-size: 2rem;
+  margin: 0;
+}
+
+.header p {
+  color: var(--text-light);
+  font-size: 0.95rem;
+}
+
+.errorBanner {
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.35);
+  color: #ff8a8a;
+  font-size: 0.9rem;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.inputRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.inputGroup label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-light);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inputGroup input {
+  padding: 1rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  font-size: 1rem;
+  transition: var(--transition-smooth);
+}
+
+.inputGroup input:focus {
+  outline: none;
+  border-color: var(--secondary);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.1);
+}
+
+.inputInvalid {
+  border-color: rgba(220, 53, 69, 0.55) !important;
+}
+
+.inputInvalid:focus {
+  border-color: #ff6b6b !important;
+  box-shadow: 0 0 12px rgba(220, 53, 69, 0.15) !important;
+}
+
+.passwordSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.terms {
+  font-size: 0.85rem;
+  color: var(--text-light);
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  cursor: pointer;
+}
+
+.checkboxLabel input {
+  margin-top: 0.2rem;
+  accent-color: var(--secondary);
+}
+
+.checkboxLabel a {
+  color: var(--secondary);
+  text-decoration: underline;
+}
+
+.signupBtn {
+  width: 100%;
+  padding: 1rem;
+  border-radius: 12px;
+  background: var(--secondary);
+  color: var(--background);
+  font-weight: 700;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  transition: var(--transition-smooth);
+  margin-top: 0.5rem;
+}
+
+.signupBtn:hover:not(:disabled) {
+  background: var(--primary);
+  color: var(--background);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(212, 175, 55, 0.2);
+}
+
+.signupBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--text-light);
+  font-size: 0.85rem;
+}
+
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.divider span {
+  padding: 0 1rem;
+}
+
+.socialLogins {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.socialBtn {
+  padding: 0.8rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  font-weight: 500;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: var(--transition-smooth);
+}
+
+.socialBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--text-light);
+}
+
+.footer {
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--text-light);
+  margin: 0;
+}
+
+.footer a {
+  color: var(--secondary);
+  font-weight: 600;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 600px) {
+  .inputRow {
+    grid-template-columns: 1fr;
+  }
+  
+  .signupCard {
+    padding: 2rem;
+  }
+}

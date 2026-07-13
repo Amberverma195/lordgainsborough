@@ -1,0 +1,34 @@
+Backend secrets are saved as Windows user environment variables.
+You do not need to paste them every time.
+
+If you just saved or changed the environment variables, open a new PowerShell
+window before starting the backend.
+
+Start the backend:
+
+  cd D:\Projects\Websites\LordGainsBorough\Code\backend
+  .\mvnw.cmd spring-boot:run
+
+Start the frontend in a second PowerShell window:
+
+  cd D:\Projects\Websites\LordGainsBorough\Code\frontend
+  npm run dev
+
+Local URLs:
+
+  Frontend: http://localhost:3000
+  Backend:  http://localhost:8082
+  Menu API: http://localhost:8082/api/menu
+
+Environment variables used by the backend:
+
+  MONGODB_URI
+  MONGODB_DATABASE
+  MAIL_USERNAME
+  MAIL_PASSWORD
+  JWT_SECRET
+
+To check that they exist without printing secret values:
+
+  'MONGODB_URI','MONGODB_DATABASE','MAIL_USERNAME','MAIL_PASSWORD','JWT_SECRET' |
+    ForEach-Object { "$_ = " + [bool][Environment]::GetEnvironmentVariable($_, 'User') }

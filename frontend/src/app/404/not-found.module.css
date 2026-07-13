@@ -1,0 +1,44 @@
+.container {
+  min-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  gap: 1rem;
+}
+
+.code {
+  font-size: 6rem;
+  color: var(--secondary);
+  margin: 0;
+  line-height: 1;
+}
+
+.title {
+  font-size: 2rem;
+  margin: 0;
+}
+
+.message {
+  color: var(--text-light);
+  max-width: 420px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.homeBtn {
+  margin-top: 1rem;
+  padding: 0.85rem 2rem;
+  border-radius: 50px;
+  background: var(--secondary);
+  color: var(--background);
+  font-weight: 700;
+  transition: var(--transition-smooth);
+}
+
+.homeBtn:hover {
+  background: var(--primary);
+  transform: translateY(-2px);
+}

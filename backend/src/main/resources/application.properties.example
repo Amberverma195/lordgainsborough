@@ -1,0 +1,27 @@
+# Copy these into your environment before starting the backend.
+# These values are read by application.properties via ${ENV_VAR} placeholders.
+#
+# IMPORTANT: The credentials previously committed to this repo are considered
+# compromised. Rotate them (MongoDB user password, Brevo SMTP key, JWT secret)
+# before relying on these in any shared or production environment.
+#
+# PowerShell (current shell only):
+#   $env:MONGODB_URI = "mongodb+srv://USER:PASS@cluster0.example.mongodb.net/LordGainsBorough?retryWrites=true&w=majority"
+#   $env:MAIL_USERNAME = "your-brevo-smtp-username"
+#   $env:MAIL_PASSWORD = "your-brevo-smtp-password"
+#   $env:JWT_SECRET = "a-long-random-secret-at-least-32-bytes"
+#   .\mvnw spring-boot:run
+#
+# Required:
+MONGODB_URI=
+MAIL_USERNAME=
+MAIL_PASSWORD=
+JWT_SECRET=
+
+# Optional (defaults shown):
+# MONGODB_DATABASE=LordGainsBorough
+# MAIL_FROM=lordgainsborough5@gmail.com
+# MAIL_FROM_NAME=Lord Gainsborough
+# OTP_LOG_TO_CONSOLE=false
+# BREVO_API_KEY=
+# JWT_EXPIRATION=86400000

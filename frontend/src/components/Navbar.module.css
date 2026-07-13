@@ -1,0 +1,204 @@
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4rem;
+  z-index: 1000;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: var(--transition-smooth);
+}
+
+.scrolled {
+  background: var(--glass);
+  backdrop-filter: blur(15px);
+  border-bottom: 1px solid var(--glass-border);
+  height: 70px;
+  box-shadow: var(--shadow);
+}
+
+.logoContainer {
+  display: flex;
+  align-items: center;
+}
+
+.logo {
+  object-fit: contain;
+}
+
+.navLinks {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+}
+
+.navLink {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: var(--transition-smooth);
+  position: relative;
+  white-space: nowrap;
+}
+
+.navLink::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background-color: var(--secondary);
+  transition: var(--transition-smooth);
+}
+
+.navLink:hover {
+  color: var(--secondary);
+}
+
+.navLink:hover::after {
+  width: 100%;
+}
+
+.reservationBtn {
+  padding: 0.75rem 1.8rem;
+  background: var(--gradient);
+  color: var(--background);
+  border-radius: 50px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  transition: var(--transition-smooth);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  box-shadow: 0 4px 15px rgba(212, 175, 55, 0.2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.reservationBtn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(212, 175, 55, 0.4);
+}
+
+.actionsContainer {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-left: 1rem;
+}
+
+.cartBtn, .profileBtn {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: var(--transition-smooth);
+  padding: 0.5rem;
+  border-radius: 50%;
+}
+
+.cartBtn:hover, .profileBtn:hover {
+  color: var(--secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.authLinks {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.loginLink {
+  color: var(--text);
+  font-weight: 500;
+  transition: var(--transition-smooth);
+  white-space: nowrap;
+}
+
+.loginLink:hover {
+  color: var(--secondary);
+}
+
+.signupBtn {
+  background: var(--secondary);
+  color: var(--background);
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  font-weight: 700;
+  transition: var(--transition-smooth);
+  white-space: nowrap;
+}
+
+.signupBtn:hover {
+  background: var(--primary);
+  color: var(--background);
+  transform: translateY(-2px);
+}
+
+.cartBadge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background-color: var(--secondary);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: bold;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transform: translate(25%, -25%);
+}
+
+@media (max-width: 1200px) {
+  .navbar {
+    padding: 0 2rem;
+  }
+  .navLinks {
+    gap: 1.5rem;
+  }
+  .actionsContainer {
+    gap: 1.2rem;
+  }
+}
+
+@media (max-width: 1024px) {
+  .navbar {
+    padding: 0 1.5rem;
+  }
+  .navLinks {
+    gap: 1rem;
+  }
+  .actionsContainer {
+    gap: 0.8rem;
+    margin-left: 0.5rem;
+  }
+  .reservationBtn {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .navbar {
+    padding: 0 1.5rem;
+  }
+  
+  .navLinks {
+    display: none; /* Mobile menu logic can be added later */
+  }
+}

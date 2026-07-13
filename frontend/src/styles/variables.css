@@ -1,0 +1,32 @@
+:root {
+  /* Colors */
+  --primary: #ffffff;
+  --secondary: #d4af37; /* Elegant Gold */
+  --accent: #1a1a1a;
+  --text: #f5f5f5;
+  --text-light: #a0a0a0;
+  --background: #080808; /* Deep rich black */
+  
+  /* Glassmorphism */
+  --glass: rgba(20, 20, 20, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-glow: rgba(212, 175, 55, 0.1);
+  
+  /* Effects */
+  --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+  --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  --gradient: linear-gradient(135deg, #d4af37 0%, #aa8924 100%);
+}
+
+/* Base styles for smooth scrolling and selection */
+* {
+  selection-background: var(--secondary);
+  selection-color: var(--background);
+}
+
+body {
+  background-attachment: fixed;
+  background-image: 
+    radial-gradient(circle at 20% 20%, rgba(212, 175, 55, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(212, 175, 55, 0.05) 0%, transparent 40%);
+}

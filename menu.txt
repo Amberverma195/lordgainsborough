@@ -1,0 +1,92 @@
+Appetizer Menu
+Chicken Wings$15.99
+Nacho Deluxe (Meal Size)$34.99
+Greek Fries$14.99
+Fresh-Cut Fries (Small)$8.99
+Poutine$12.99
+Garlic Bread and Cheese$13.99
+Onion Rings$8.99
+Battered Mushroom Caps$10.99
+Deep Fried Pickle Spears$10.99
+Jalapeno PoppersSpicy $11.99
+Chicken Fingers (4 pcs)$12.99
+Mozzarella Sticks (6 pcs)$13.99
+Homemade Potato Skins (4 pcs)$14.99
+Bruschetta$13.99
+Sweet Potato Fries$8.99
+Butter Chicken Poutine$13.99
+Cheddar Cheese Cubes$11.99
+Pizzas
+Canadian Pizza (Small 10")$21.99
+Meat Lovers Pizza (Small 10")$21.99
+Deluxe Pizza (Small 10")$21.99
+Build Your Own Pizza (Small 10")$15.99
+Pepperoni Pizza (Small 10")$17.99
+Hawaiian Pizza (Small 10")$21.99
+Cheese Pizza (Small 10")$14.99
+BBQ Chicken Pizza (Small 10")$21.99
+Vegetarian Pizza (Small 10")Vegetarian $21.99
+Greek Pizza (Small 10")$21.99
+Butter Chicken Pizza (Small 10")$21.99
+Salads
+Greek Salad (Small)$11.99
+Caesar Salad (Small)$10.99
+Horiatiki (Village) Greek Salad (Small)$11.99
+House Salad (Small)$9.99
+Julienne Salad$16.99
+Buffalo Chicken SaladSpicySpicy $16.99
+Meatless Julienne Salad$14.99
+Sandwiches
+Triple Decker Club House Sandwich$17.99
+Beef Dip Au Jus Sandwich$16.99
+Turkey Sandwich$9.99
+Grilled Cheese with Bacon Sandwich$9.99
+Reuben on Rye Sandwich$11.99
+Corned Beef on Rye Sandwich$9.99
+BLT Sandwich$9.99
+Roast Beef Sandwich$9.99
+Western Sandwich$9.99
+Homemade Burgers
+Banquet Burger$12.99
+Cheeseburger$10.99
+Bacon Cheeseburger$11.99
+Hamburger$9.99
+Greek Burger$12.99
+Classics
+Chicken Souvlaki$10.99
+Homemade Fish and Chips$17.99
+Gyros$10.99
+Chicken Finger Dinner$16.99
+Two Marinated Chicken Skewers with Greek Salad, Fries and Tzatziki$20.99
+Fish Burger$10.99
+Patty Melt$16.99
+Chicken Burger$10.99
+Liver and Onion$18.99
+Pasta
+Chicken Parmesan with Spaghetti$20.99
+Spaghetti with Homemade Meat Sauce$17.99
+Veal Parmesan with Spaghetti$20.99
+Panzerotti
+Build Your Own Panzerotti$16.99
+Deluxe Panzerotti$22.99
+Canadian Panzerotti$22.99
+Meat Lover Panzerotti$24.99
+Kids Menu
+Chicken Finger Dinner (Kids)$9.99
+Spaghetti with Homemade Meat Sauce (Kids)$10.99
+Hamburger (Kids)$9.99
+Fish (1 pc) and Chips (Kids)$10.99
+Grilled Cheese (Kids)$9.99
+Garlic Bread and Cheese (Kids)$8.99
+Beverages
+Chocolate Milk$2.99
+Lemonade$2.99
+Canned Drink$2.99
+Coffee$2.99
+Juice$2.99
+Milk$2.99
+Tea$2.99
+Hot Sandwiches
+Hot Turkey Sandwich$18.99
+Hot Beef Sandwich$18.99
+Hot Hamburger Sandwich$18.99
