@@ -60,6 +60,7 @@ interface StoreSettings {
   taxRate: number;
   defaultReadyMinutes: number;
   pickupOrdersEnabled: boolean;
+  kdsAllowedIp: string;
 }
 
 const READY_MINUTE_OPTIONS = [10, 15, 20, 25, 30, 35, 40, 45, 60];
@@ -126,6 +127,7 @@ export default function AdminPage() {
     taxRate: 0.13,
     defaultReadyMinutes: 25,
     pickupOrdersEnabled: true,
+    kdsAllowedIp: '',
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [salesWindow] = useState(createSalesWindow);
@@ -194,7 +196,9 @@ export default function AdminPage() {
 
   const fetchStoreSettings = useCallback(async (options?: { notifyOnError?: boolean }) => {
     try {
-      const res = await fetch(`${API_BASE}/store-settings`);
+      const res = await fetch(`${API_BASE}/store-settings`, {
+        headers: getAuthHeaders(false),
+      });
       if (res.status === 404) {
         if (options?.notifyOnError) {
           showNotification('Store settings unavailable — restart the backend to enable this feature', 'error');
@@ -212,6 +216,7 @@ export default function AdminPage() {
         taxRate: typeof data.taxRate === 'number' ? data.taxRate : 0.13,
         defaultReadyMinutes: typeof data.defaultReadyMinutes === 'number' ? data.defaultReadyMinutes : 25,
         pickupOrdersEnabled: data.pickupOrdersEnabled !== false,
+        kdsAllowedIp: typeof data.kdsAllowedIp === 'string' ? data.kdsAllowedIp : '',
       });
     } catch {
       if (options?.notifyOnError) {
@@ -311,6 +316,7 @@ export default function AdminPage() {
         taxRate: typeof data.taxRate === 'number' ? data.taxRate : 0.13,
         defaultReadyMinutes: typeof data.defaultReadyMinutes === 'number' ? data.defaultReadyMinutes : 25,
         pickupOrdersEnabled: data.pickupOrdersEnabled !== false,
+        kdsAllowedIp: typeof data.kdsAllowedIp === 'string' ? data.kdsAllowedIp : '',
       });
       showNotification('Store settings saved', 'success');
     } catch {
@@ -1366,6 +1372,32 @@ export default function AdminPage() {
                   />
                   <span>{storeSettings.pickupOrdersEnabled ? 'Accepting pickup orders' : 'Pickup orders paused'}</span>
                 </div>
+              </div>
+            </div>
+
+            <h3 style={{ marginTop: '1.75rem' }}>KDS access</h3>
+            <p style={{ color: 'var(--text-light)', margin: '0 0 1rem', fontSize: '0.92rem' }}>
+              Kitchen Display is separate from login. Only devices whose public IP matches the allowlist can open
+              <code style={{ margin: '0 0.25rem' }}>/kds</code>
+              (page, API, and live updates). Leave blank to lock KDS for everyone. For local testing use
+              <code style={{ margin: '0 0.25rem' }}>127.0.0.1</code>.
+            </p>
+            <div className={styles.formGrid}>
+              <div className={`${styles.field} ${styles.fullWidth}`}>
+                <label htmlFor="kdsAllowedIp">Allowed IP address</label>
+                <textarea
+                  id="kdsAllowedIp"
+                  rows={3}
+                  value={storeSettings.kdsAllowedIp}
+                  onChange={event => setStoreSettings(prev => ({
+                    ...prev,
+                    kdsAllowedIp: event.target.value,
+                  }))}
+                  placeholder={'203.0.113.10\n127.0.0.1'}
+                />
+                <small style={{ color: 'var(--text-light)' }}>
+                  One IP per line (or comma-separated). Optional CIDR like 192.168.1.0/24 is supported.
+                </small>
               </div>
             </div>
 

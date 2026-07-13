@@ -77,7 +77,7 @@ public class ClientIpResolver {
         return normalizeIp(first);
     }
 
-    static String normalizeIp(String ip) {
+    public static String normalizeIp(String ip) {
         if (ip == null) {
             return null;
         }

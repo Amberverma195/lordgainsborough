@@ -1,6 +1,7 @@
 package com.lordgainsborough.restaurant.security;
 
 import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.KdsAccessService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
@@ -14,15 +15,33 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
     private final UserRepository userRepository;
+    private final KdsAccessService kdsAccessService;
 
-    public AdminAuthInterceptor(JwtUtil jwtUtil, UserRepository userRepository) {
+    public AdminAuthInterceptor(JwtUtil jwtUtil, UserRepository userRepository, KdsAccessService kdsAccessService) {
         this.jwtUtil = jwtUtil;
         this.userRepository = userRepository;
+        this.kdsAccessService = kdsAccessService;
     }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        Optional<Predicate<String>> roleCheck = requiredRoleCheck(request);
+        String method = request.getMethod();
+        String path = request.getRequestURI();
+
+        if ("OPTIONS".equals(method)) {
+            return true;
+        }
+
+        // Layer 2: operational KDS is IP-gated only (no login).
+        if (isOperationalKdsPath(path)) {
+            if (!kdsAccessService.isRequestAllowed(request)) {
+                response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                return false;
+            }
+            return true;
+        }
+
+        Optional<Predicate<String>> roleCheck = requiredRoleCheck(method, path);
         if (roleCheck.isEmpty()) {
             return true;
         }
@@ -50,20 +69,26 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
                 });
     }
 
-    private Optional<Predicate<String>> requiredRoleCheck(HttpServletRequest request) {
-        String method = request.getMethod();
-        String path = request.getRequestURI();
-
-        if ("OPTIONS".equals(method)) {
-            return Optional.empty();
+    /**
+     * Kitchen board endpoints: access check + order board mutations.
+     * Admin history/reviews stay JWT-protected.
+     */
+    static boolean isOperationalKdsPath(String path) {
+        if (path == null || !path.startsWith("/api/kds")) {
+            return false;
         }
+        if (path.startsWith("/api/kds/reviews")) {
+            return false;
+        }
+        if ("/api/kds/orders/all".equals(path)) {
+            return false;
+        }
+        return true;
+    }
 
-        if (path.startsWith("/api/kds/reviews") || path.equals("/api/kds/orders/all")) {
+    private Optional<Predicate<String>> requiredRoleCheck(String method, String path) {
+        if (path.startsWith("/api/kds/reviews") || "/api/kds/orders/all".equals(path)) {
             return Optional.of(RoleAccess::isAdmin);
-        }
-
-        if (path.startsWith("/api/kds")) {
-            return Optional.of(RoleAccess::canAccessKds);
         }
 
         if (path.startsWith("/api/store-settings")) {

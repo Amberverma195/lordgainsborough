@@ -27,6 +27,7 @@ public class StoreSettingsService {
         settings.setContactPhone(sanitize(incoming.getContactPhone(), settings.getContactPhone()));
         settings.setContactEmail(sanitize(incoming.getContactEmail(), settings.getContactEmail()));
         settings.setPickupOrdersEnabled(incoming.getPickupOrdersEnabled());
+        settings.setKdsAllowedIp(KdsAccessService.normalizeAllowedIpInput(incoming.getKdsAllowedIp()));
 
         return storeSettingsRepository.save(settings);
     }

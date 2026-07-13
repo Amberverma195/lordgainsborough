@@ -36,6 +36,12 @@ public class KdsController {
         this.customerNoShowService = customerNoShowService;
     }
 
+    @GetMapping("/access")
+    public ResponseEntity<Map<String, Object>> checkAccess() {
+        // Interceptor already enforced the IP allowlist (Layer 2). Reaching here means allowed.
+        return ResponseEntity.ok(Map.of("allowed", true));
+    }
+
     @GetMapping("/orders")
     public List<CustomerOrder> getOrders(@RequestParam(required = false) String date) {
         String pickupDate = date == null || date.isBlank() ? LocalDate.now().toString() : date;

@@ -6,12 +6,16 @@ import com.corundumstudio.socketio.HandshakeData;
 import com.corundumstudio.socketio.SocketIOServer;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.RoleAccess;
+import com.lordgainsborough.restaurant.service.KdsAccessService;
+import com.lordgainsborough.restaurant.service.OrderAccessService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.Map;
 import java.util.Optional;
 
@@ -26,9 +30,10 @@ public class SocketIoConfig {
     @Bean(initMethod = "start", destroyMethod = "stop")
     public SocketIOServer socketIoServer(
             JwtUtil jwtUtil,
-            UserRepository userRepository,
             CustomerOrderRepository orderRepository,
-            com.lordgainsborough.restaurant.service.OrderAccessService orderAccessService) {
+            OrderAccessService orderAccessService,
+            KdsAccessService kdsAccessService,
+            ClientIpResolver clientIpResolver) {
         Configuration config = new Configuration();
         config.setHostname(host);
         config.setPort(port);
@@ -37,16 +42,10 @@ public class SocketIoConfig {
             String role = handshakeData.getSingleUrlParam("role");
             String token = authValue(handshakeData, "token");
 
-            // Staff/admin connections must prove a valid privileged JWT.
-            if (RoleAccess.canAccessKds(role)) {
-                if (token == null || !jwtUtil.validateToken(token)) {
-                    return AuthorizationResult.FAILED_AUTHORIZATION;
-                }
-                String email = jwtUtil.getEmailFromToken(token);
-                boolean authorized = userRepository.findByEmailIgnoreCase(email)
-                        .filter(user -> RoleAccess.canAccessKds(user.getRole()))
-                        .isPresent();
-                return authorized
+            // Layer 3: KDS realtime room is IP-gated (no login).
+            if (isKdsSocketRole(role)) {
+                String clientIp = resolveHandshakeIp(handshakeData, clientIpResolver);
+                return kdsAccessService.isIpAllowed(clientIp)
                         ? AuthorizationResult.SUCCESSFUL_AUTHORIZATION
                         : AuthorizationResult.FAILED_AUTHORIZATION;
             }
@@ -71,7 +70,7 @@ public class SocketIoConfig {
         server.addConnectListener(client -> {
             String role = client.getHandshakeData().getSingleUrlParam("role");
             String orderId = client.getHandshakeData().getSingleUrlParam("orderId");
-            if (RoleAccess.canAccessKds(role)) {
+            if (isKdsSocketRole(role)) {
                 client.joinRoom("kds");
             }
             if (orderId != null && !orderId.isBlank()) {
@@ -80,6 +79,27 @@ public class SocketIoConfig {
         });
 
         return server;
+    }
+
+    private static boolean isKdsSocketRole(String role) {
+        return "KDS".equalsIgnoreCase(role) || RoleAccess.canAccessKds(role);
+    }
+
+    private static String resolveHandshakeIp(HandshakeData handshakeData, ClientIpResolver clientIpResolver) {
+        String remoteAddr = null;
+        SocketAddress address = handshakeData.getAddress();
+        if (address instanceof InetSocketAddress inet) {
+            if (inet.getAddress() != null) {
+                remoteAddr = inet.getAddress().getHostAddress();
+            }
+        }
+        String xff = handshakeData.getHttpHeaders() != null
+                ? handshakeData.getHttpHeaders().get("X-Forwarded-For")
+                : null;
+        String xRealIp = handshakeData.getHttpHeaders() != null
+                ? handshakeData.getHttpHeaders().get("X-Real-IP")
+                : null;
+        return clientIpResolver.resolve(remoteAddr, xff, xRealIp);
     }
 
     /**

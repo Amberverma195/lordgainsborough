@@ -1,37 +1,84 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.StoreSettings;
+import com.lordgainsborough.restaurant.model.User;
+import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.security.JwtUtil;
+import com.lordgainsborough.restaurant.security.RoleAccess;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/store-settings")
 @CrossOrigin(origins = "*")
 public class StoreSettingsController {
     private final StoreSettingsService storeSettingsService;
+    private final JwtUtil jwtUtil;
+    private final UserRepository userRepository;
 
-    public StoreSettingsController(StoreSettingsService storeSettingsService) {
+    public StoreSettingsController(
+            StoreSettingsService storeSettingsService,
+            JwtUtil jwtUtil,
+            UserRepository userRepository) {
         this.storeSettingsService = storeSettingsService;
+        this.jwtUtil = jwtUtil;
+        this.userRepository = userRepository;
     }
 
     @GetMapping
-    public StoreSettings getSettings() {
-        return storeSettingsService.getSettings();
+    public Object getSettings(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        StoreSettings settings = storeSettingsService.getSettings();
+        if (isAdmin(authHeader)) {
+            return settings;
+        }
+        return toPublicView(settings);
     }
 
     @PutMapping
     public ResponseEntity<StoreSettings> updateSettings(@RequestBody Map<String, Object> body) {
+        StoreSettings current = storeSettingsService.getSettings();
         StoreSettings incoming = new StoreSettings();
-        incoming.setTaxRate(toDouble(body.get("taxRate"), storeSettingsService.getSettings().getTaxRate()));
-        incoming.setDefaultReadyMinutes(toInt(body.get("defaultReadyMinutes"), storeSettingsService.getSettings().getDefaultReadyMinutes()));
-        incoming.setStoreName(toString(body.get("storeName"), storeSettingsService.getSettings().getStoreName()));
-        incoming.setContactPhone(toString(body.get("contactPhone"), storeSettingsService.getSettings().getContactPhone()));
-        incoming.setContactEmail(toString(body.get("contactEmail"), storeSettingsService.getSettings().getContactEmail()));
-        incoming.setPickupOrdersEnabled(toBoolean(body.get("pickupOrdersEnabled"), storeSettingsService.getSettings().getPickupOrdersEnabled()));
+        incoming.setTaxRate(toDouble(body.get("taxRate"), current.getTaxRate()));
+        incoming.setDefaultReadyMinutes(toInt(body.get("defaultReadyMinutes"), current.getDefaultReadyMinutes()));
+        incoming.setStoreName(toString(body.get("storeName"), current.getStoreName()));
+        incoming.setContactPhone(toString(body.get("contactPhone"), current.getContactPhone()));
+        incoming.setContactEmail(toString(body.get("contactEmail"), current.getContactEmail()));
+        incoming.setPickupOrdersEnabled(toBoolean(body.get("pickupOrdersEnabled"), current.getPickupOrdersEnabled()));
+        incoming.setKdsAllowedIp(body.containsKey("kdsAllowedIp")
+                ? toString(body.get("kdsAllowedIp"), "")
+                : current.getKdsAllowedIp());
         return ResponseEntity.ok(storeSettingsService.saveSettings(incoming));
+    }
+
+    private Map<String, Object> toPublicView(StoreSettings settings) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("id", settings.getId());
+        view.put("taxRate", settings.getTaxRate());
+        view.put("defaultReadyMinutes", settings.getDefaultReadyMinutes());
+        view.put("storeName", settings.getStoreName());
+        view.put("contactPhone", settings.getContactPhone());
+        view.put("contactEmail", settings.getContactEmail());
+        view.put("pickupOrdersEnabled", settings.getPickupOrdersEnabled());
+        // Intentionally omit kdsAllowedIp from public responses.
+        return view;
+    }
+
+    private boolean isAdmin(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return false;
+        }
+        String token = authHeader.substring(7);
+        if (!jwtUtil.validateToken(token)) {
+            return false;
+        }
+        String email = jwtUtil.getEmailFromToken(token);
+        Optional<User> user = userRepository.findByEmailIgnoreCase(email);
+        return user.filter(value -> RoleAccess.isAdmin(value.getRole())).isPresent();
     }
 
     private double toDouble(Object value, double fallback) {

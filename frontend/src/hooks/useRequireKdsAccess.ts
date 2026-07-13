@@ -2,25 +2,21 @@
 
 import { useEffect, useState } from 'react';
 import { notFound } from 'next/navigation';
-import { persistAuth } from '@/lib/auth';
-import { canAccessKds } from '@/lib/roles';
+import { API_BASE } from '@/lib/orders';
 
-const AUTH_API = 'http://localhost:8082/api/auth';
-
+/**
+ * Layer 1: page gate. Asks the backend whether this browser's IP is on the KDS allowlist.
+ * Denied requests appear as a normal 404 (same as missing pages).
+ */
 export function useRequireKdsAccess() {
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
 
   useEffect(() => {
     const verifyAccess = async () => {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        notFound();
-        return;
-      }
-
       try {
-        const res = await fetch(`${AUTH_API}/me`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await fetch(`${API_BASE}/kds/access`, {
+          method: 'GET',
+          cache: 'no-store',
         });
 
         if (!res.ok) {
@@ -28,13 +24,6 @@ export function useRequireKdsAccess() {
           return;
         }
 
-        const data = await res.json();
-        if (!canAccessKds(data.role)) {
-          notFound();
-          return;
-        }
-
-        persistAuth(data);
         setIsAuthorized(true);
       } catch {
         notFound();

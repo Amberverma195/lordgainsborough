@@ -16,6 +16,12 @@ public class StoreSettings {
     private String contactEmail = "";
     private boolean pickupOrdersEnabled = true;
 
+    /**
+     * Store / kitchen public IP(s) allowed to open KDS. One per line or comma-separated.
+     * Empty means KDS is locked for everyone.
+     */
+    private String kdsAllowedIp = "";
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -36,4 +42,7 @@ public class StoreSettings {
 
     public boolean getPickupOrdersEnabled() { return pickupOrdersEnabled; }
     public void setPickupOrdersEnabled(boolean pickupOrdersEnabled) { this.pickupOrdersEnabled = pickupOrdersEnabled; }
+
+    public String getKdsAllowedIp() { return kdsAllowedIp; }
+    public void setKdsAllowedIp(String kdsAllowedIp) { this.kdsAllowedIp = kdsAllowedIp; }
 }

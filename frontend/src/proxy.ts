@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { canAccessKds, isAdminRole } from '@/lib/roles';
+import { isAdminRole } from '@/lib/roles';
 
 export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -12,12 +12,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
-  if (pathname.startsWith('/kds') && !canAccessKds(role)) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/404';
-    return NextResponse.rewrite(url);
-  }
-
+  // KDS is IP-gated by the backend (page access-check + API + Socket.IO), not by login role.
   return NextResponse.next();
 }
 

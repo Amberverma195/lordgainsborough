@@ -5,7 +5,6 @@ import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import { CalendarDays, Check, ChefHat, Clock3, PackageCheck, RefreshCw, ShoppingBag, UserX, Wifi, WifiOff } from 'lucide-react';
 import { useRequireKdsAccess } from '@/hooks/useRequireKdsAccess';
-import { getAuthHeaders } from '@/lib/auth';
 import {
   API_BASE,
   CustomerOrder,
@@ -104,9 +103,7 @@ export default function KdsPage() {
     setNotice('');
     try {
       const url = `${API_BASE}/kds/orders?date=${selectedDate}`;
-      const res = await fetch(url, {
-        headers: getAuthHeaders(false),
-      });
+      const res = await fetch(url, { cache: 'no-store' });
 
       if (!res.ok) {
         throw new Error('Unable to load KDS orders.');
@@ -137,11 +134,8 @@ export default function KdsPage() {
       return;
     }
 
-    const token = localStorage.getItem('authToken') || '';
-    const role = localStorage.getItem('userRole') || 'STAFF';
     const socket = io(SOCKET_URL, {
-      query: { role },
-      auth: { token },
+      query: { role: 'KDS' },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -201,7 +195,7 @@ export default function KdsPage() {
     try {
       const res = await fetch(`${API_BASE}/kds/orders/${order.id}/status`, {
         method: 'PATCH',
-        headers: getAuthHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status,
           averageReadyMinutes: order.averageReadyMinutes || defaultReadyMinutes,
@@ -223,7 +217,7 @@ export default function KdsPage() {
     try {
       const res = await fetch(`${API_BASE}/kds/orders/${order.id}/ready-time`, {
         method: 'PATCH',
-        headers: getAuthHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ averageReadyMinutes: clampReadyMinutes(minutes) }),
       });
 
