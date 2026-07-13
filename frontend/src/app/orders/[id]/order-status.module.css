@@ -69,23 +69,6 @@
   color: var(--text);
 }
 
-.liveBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  border-radius: 999px;
-  border: 1px solid var(--glass-border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-light);
-  padding: 0.4rem 0.7rem;
-  font-size: 0.78rem;
-}
-
-.liveBadgeOnline {
-  border-color: rgba(64, 196, 132, 0.38);
-  color: #66d49a;
-}
-
 .statusNew {
   border-color: rgba(120, 170, 255, 0.4);
   background: rgba(120, 170, 255, 0.12);
@@ -181,26 +164,48 @@
   border: 1px solid var(--glass-border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
+  margin-top: 1rem;
   margin-bottom: 1rem;
-  padding: 1rem;
+  overflow: hidden;
 }
 
-.timelinePanel h2 {
-  margin: 0 0 1rem;
-  color: var(--primary);
+.timelineToggle {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 0 0.85rem;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 1.05rem;
+  justify-content: space-between;
+  gap: 1rem;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.timelinePanel h2 svg {
+.timelineToggle span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.timelineToggle svg {
   color: var(--secondary);
+  transition: transform 0.2s ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
 }
 
 .timeline {
   display: flex;
   flex-direction: column;
+  border-top: 1px solid var(--glass-border);
+  padding: 0.85rem 1rem 0.25rem;
 }
 
 .timelineStep {

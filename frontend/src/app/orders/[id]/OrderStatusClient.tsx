@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
-import { Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, Wifi, WifiOff, X } from 'lucide-react';
+import { ChevronDown, Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, X } from 'lucide-react';
 import { CartItem, useCart } from '@/context/CartContext';
 import {
   API_BASE,
@@ -72,8 +72,8 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewItems, setReviewItems] = useState<Record<string, { rating: number; description: string }>>({});
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [connected, setConnected] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -129,23 +129,16 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     });
 
     const handleConnect = () => {
-      setConnected(true);
       // Re-fetch after every connection so status changes missed while offline
       // are reflected immediately without a browser refresh.
       void loadOrder();
     };
-    const handleDisconnect = () => setConnected(false);
-    const handleConnectError = () => setConnected(false);
 
     socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('connect_error', handleConnectError);
     socket.on('order.updated', applyOrder);
 
     return () => {
       socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      socket.off('connect_error', handleConnectError);
       socket.off('order.updated', applyOrder);
       socket.disconnect();
     };
@@ -277,10 +270,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
           <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
             {orderStatusLabel(order.status)}
           </span>
-          <span className={`${styles.liveBadge} ${connected ? styles.liveBadgeOnline : ''}`}>
-            {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            {connected ? 'Live' : 'Reconnecting'}
-          </span>
         </div>
       </header>
 
@@ -311,43 +300,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         </section>
       )}
 
-      <section className={styles.timelinePanel} aria-live="polite">
-        <h2><Clock3 size={18} /> Live order timeline</h2>
-        <div className={styles.timeline}>
-          {timeline.map((step, index) => (
-            <div
-              key={step.label}
-              className={[
-                styles.timelineStep,
-                index <= currentStepIndex ? styles.timelineStepComplete : '',
-                index === currentStepIndex ? styles.timelineStepActive : '',
-              ].filter(Boolean).join(' ')}
-            >
-              <span className={styles.timelineMarker} aria-hidden />
-              <div>
-                <strong>{step.label}</strong>
-                <span>
-                  {step.value
-                    ? formatTimestamp(step.value)
-                    : index === currentStepIndex
-                      ? 'In progress'
-                      : 'Waiting'}
-                </span>
-              </div>
-            </div>
-          ))}
-          {order.status === 'NO_SHOW' && (
-            <div className={`${styles.timelineStep} ${styles.timelineStepNoShow}`}>
-              <span className={styles.timelineMarker} aria-hidden />
-              <div>
-                <strong>Marked as no-show</strong>
-                <span>{formatTimestamp(order.noShowAt)}</span>
-              </div>
-            </div>
-          )}
-          </div>
-      </section>
-
       <section className={styles.summary}>
         <h2>Order Summary</h2>
         <ul className={styles.itemList}>
@@ -366,6 +318,53 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
           <div><span>Tax</span><strong>{formatMoney(order.tax)}</strong></div>
           <div className={styles.grandTotal}><span>Total</span><strong>{formatMoney(order.total)}</strong></div>
         </div>
+      </section>
+
+      <section className={styles.timelinePanel} aria-live="polite">
+        <button
+          type="button"
+          className={styles.timelineToggle}
+          onClick={() => setTimelineOpen(open => !open)}
+          aria-expanded={timelineOpen}
+        >
+          <span><Clock3 size={18} /> Live order timeline</span>
+          <ChevronDown className={timelineOpen ? styles.chevronOpen : ''} size={18} />
+        </button>
+        {timelineOpen && (
+          <div className={styles.timeline}>
+            {timeline.map((step, index) => (
+              <div
+                key={step.label}
+                className={[
+                  styles.timelineStep,
+                  index <= currentStepIndex ? styles.timelineStepComplete : '',
+                  index === currentStepIndex ? styles.timelineStepActive : '',
+                ].filter(Boolean).join(' ')}
+              >
+                <span className={styles.timelineMarker} aria-hidden />
+                <div>
+                  <strong>{step.label}</strong>
+                  <span>
+                    {step.value
+                      ? formatTimestamp(step.value)
+                      : index === currentStepIndex
+                        ? 'In progress'
+                        : 'Waiting'}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {order.status === 'NO_SHOW' && (
+              <div className={`${styles.timelineStep} ${styles.timelineStepNoShow}`}>
+                <span className={styles.timelineMarker} aria-hidden />
+                <div>
+                  <strong>Marked as no-show</strong>
+                  <span>{formatTimestamp(order.noShowAt)}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {reviewOpen && (
