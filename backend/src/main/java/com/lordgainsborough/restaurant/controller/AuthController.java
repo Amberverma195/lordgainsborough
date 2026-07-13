@@ -353,55 +353,11 @@ public class AuthController {
 
         User user = userOpt.get();
 
-        if (!canUpdateProfile(user)) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body("You can update your profile again on " + formatNextUpdateDate(user) + ".");
-        }
-
         if (request.getName() == null || request.getName().isBlank()) {
             return ResponseEntity.badRequest().body("Name is required.");
         }
 
-        if (request.getEmail() == null || request.getEmail().isBlank()) {
-            return ResponseEntity.badRequest().body("Email is required.");
-        }
-
-        String normalizedPhone = normalizePhone(request.getPhone());
-        if (normalizedPhone.length() != 10) {
-            return ResponseEntity.badRequest().body("Please enter a valid 10-digit phone number.");
-        }
-
-        boolean emailChanged = !request.getEmail().trim().equalsIgnoreCase(user.getEmail());
-        boolean phoneChanged = !normalizedPhone.equals(normalizePhone(user.getPhone()));
-
-        if (emailChanged) {
-            if (request.getEmailOtp() == null || request.getEmailOtp().isBlank()) {
-                return ResponseEntity.badRequest().body("Email verification code is required.");
-            }
-            if (!otpService.verifyOtpForKey(profileEmailOtpKey(request.getEmail().trim()), request.getEmailOtp().trim())) {
-                return ResponseEntity.badRequest().body("Invalid or expired email verification code.");
-            }
-            if (userRepository.existsByEmailIgnoreCase(request.getEmail().trim())) {
-                return ResponseEntity.status(HttpStatus.CONFLICT).body("An account with this email already exists.");
-            }
-        }
-
-        if (phoneChanged) {
-            if (phoneAlreadyRegisteredByAnotherUser(normalizedPhone, user.getId())) {
-                return ResponseEntity.status(HttpStatus.CONFLICT).body("An account already exists with this phone number.");
-            }
-            if (request.getPhoneOtp() == null || request.getPhoneOtp().isBlank()) {
-                return ResponseEntity.badRequest().body("Phone verification code is required.");
-            }
-            if (!otpService.verifyOtpForKey(profilePhoneOtpKey(user.getId()), request.getPhoneOtp().trim())) {
-                return ResponseEntity.badRequest().body("Invalid or expired phone verification code.");
-            }
-        }
-
         user.setName(request.getName().trim());
-        user.setEmail(request.getEmail().trim());
-        applyPhoneToUser(user, normalizedPhone);
-        user.setLastProfileUpdateAt(LocalDateTime.now());
         userRepository.save(user);
 
         String token = jwtUtil.generateToken(user.getId(), user.getEmail());
@@ -474,8 +430,8 @@ public class AuthController {
         response.setPhone(user.getPhone());
         response.setMemberSince(user.getMemberSince());
         response.setRole(user.getRole());
-        response.setCanUpdateProfile(canUpdateProfile(user));
-        response.setNextProfileUpdateAt(canUpdateProfile(user) ? null : formatNextUpdateDate(user));
+        response.setCanUpdateProfile(true);
+        response.setNextProfileUpdateAt(null);
         return response;
     }
 

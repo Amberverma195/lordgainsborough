@@ -8,7 +8,6 @@ import { Mail, Phone, Package, Clock, LogOut, User, Pencil, ShieldCheck, Monitor
 import { useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
-import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
 import { persistAuth, clearAuth, getAuthHeaders } from '@/lib/auth';
 import { canAccessKds, isAdminRole } from '@/lib/roles';
 import {
@@ -48,15 +47,7 @@ export default function ProfilePage() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editStep, setEditStep] = useState<'form' | 'verify'>('form');
-  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '' });
-  const [originalForm, setOriginalForm] = useState({ name: '', email: '', phone: '' });
-  const [emailOtp, setEmailOtp] = useState('');
-  const [phoneOtp, setPhoneOtp] = useState('');
-  const [requiresEmailOtp, setRequiresEmailOtp] = useState(false);
-  const [requiresPhoneOtp, setRequiresPhoneOtp] = useState(false);
-  const [emailOtpSentTo, setEmailOtpSentTo] = useState('');
-  const [phoneOtpSentTo, setPhoneOtpSentTo] = useState('');
+  const [editName, setEditName] = useState('');
   const [editError, setEditError] = useState('');
   const [editLoading, setEditLoading] = useState(false);
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
@@ -200,87 +191,25 @@ export default function ProfilePage() {
   }, [activeOrders, fetchOrders, isLoggedIn]);
 
   const openEditModal = () => {
-    const form = { name: user.name, email: user.email, phone: user.phone };
-    setEditForm(form);
-    setOriginalForm(form);
-    setEditStep('form');
-    setEmailOtp('');
-    setPhoneOtp('');
-    setRequiresEmailOtp(false);
-    setRequiresPhoneOtp(false);
+    setEditName(user.name);
     setEditError('');
     setShowEditModal(true);
   };
 
   const closeEditModal = () => {
     setShowEditModal(false);
-    setEditStep('form');
     setEditError('');
   };
-
-  const emailChanged = editForm.email.trim().toLowerCase() !== originalForm.email.trim().toLowerCase();
-  const phoneChanged = editForm.phone !== originalForm.phone;
 
   const handleSaveProfile = async () => {
     setEditError('');
 
-    if (!user.canUpdateProfile) {
-      setEditError(`You can update your profile again on ${user.nextProfileUpdateAt}.`);
-      return;
-    }
-
-    if (!editForm.name.trim()) {
+    if (!editName.trim()) {
       setEditError('Name is required.');
       return;
     }
 
-    if (getPhoneDigitCount(editForm.phone) !== 10) {
-      setEditError('Please enter a valid 10-digit phone number.');
-      return;
-    }
-
     setEditLoading(true);
-    const token = localStorage.getItem('authToken');
-
-    try {
-      if (emailChanged || phoneChanged) {
-        const verifyRes = await fetch(`${AUTH_API}/profile/send-verification`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ email: editForm.email.trim(), phone: editForm.phone }),
-        });
-
-        if (!verifyRes.ok) {
-          const message = await verifyRes.text();
-          setEditError(message || 'Failed to send verification codes.');
-          return;
-        }
-
-        const verifyData = await verifyRes.json();
-        if (verifyData.requiresEmailOtp || verifyData.requiresPhoneOtp) {
-          setRequiresEmailOtp(verifyData.requiresEmailOtp);
-          setRequiresPhoneOtp(verifyData.requiresPhoneOtp);
-          setEmailOtpSentTo(verifyData.emailOtpSentTo || '');
-          setPhoneOtpSentTo(verifyData.phoneOtpSentTo || '');
-          setEditStep('verify');
-          return;
-        }
-      }
-
-      await submitProfileUpdate();
-    } catch {
-      setEditError('Unable to connect to the server. Please try again.');
-    } finally {
-      setEditLoading(false);
-    }
-  };
-
-  const submitProfileUpdate = async () => {
-    setEditLoading(true);
-    setEditError('');
     const token = localStorage.getItem('authToken');
 
     try {
@@ -290,13 +219,7 @@ export default function ProfilePage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          name: editForm.name.trim(),
-          email: editForm.email.trim(),
-          phone: editForm.phone,
-          emailOtp: requiresEmailOtp ? emailOtp.trim() : undefined,
-          phoneOtp: requiresPhoneOtp ? phoneOtp.trim() : undefined,
-        }),
+        body: JSON.stringify({ name: editName.trim() }),
       });
 
       if (res.ok) {
@@ -530,103 +453,33 @@ export default function ProfilePage() {
               onClick={(e) => e.stopPropagation()}
             >
               <h3>Edit Profile</h3>
-              <p className={styles.weeklyNotice}>
-                You can update your profile information once a week.
-                {!user.canUpdateProfile && user.nextProfileUpdateAt && (
-                  <> Next update available on <strong>{user.nextProfileUpdateAt}</strong>.</>
-                )}
-              </p>
 
               {editError && <div className={styles.editError}>{editError}</div>}
 
-              {editStep === 'form' ? (
-                <div className={styles.editForm}>
-                  <div className={styles.editField}>
-                    <label><User size={16} /> Full Name</label>
-                    <input
-                      type="text"
-                      value={editForm.name}
-                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      disabled={!user.canUpdateProfile || editLoading}
-                    />
-                  </div>
-                  <div className={styles.editField}>
-                    <label><Mail size={16} /> Email</label>
-                    <input
-                      type="email"
-                      value={editForm.email}
-                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                      disabled={!user.canUpdateProfile || editLoading}
-                    />
-                  </div>
-                  <div className={styles.editField}>
-                    <label><Phone size={16} /> Phone</label>
-                    <input
-                      type="tel"
-                      inputMode="numeric"
-                      value={editForm.phone}
-                      onChange={(e) => setEditForm({ ...editForm, phone: formatPhoneInput(e.target.value) })}
-                      disabled={!user.canUpdateProfile || editLoading}
-                    />
-                  </div>
+              <div className={styles.editForm}>
+                <div className={styles.editField}>
+                  <label><User size={16} /> Full Name</label>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    disabled={editLoading}
+                    autoFocus
+                  />
                 </div>
-              ) : (
-                <div className={styles.verifySection}>
-                  <p className={styles.verifyIntro}>
-                    Enter the verification code{requiresEmailOtp && requiresPhoneOtp ? 's' : ''} sent to confirm your changes.
-                  </p>
-                  {requiresEmailOtp && (
-                    <div className={styles.editField}>
-                      <label>Email code sent to {emailOtpSentTo}</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={6}
-                        placeholder="6-digit code"
-                        value={emailOtp}
-                        onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                        disabled={editLoading}
-                      />
-                    </div>
-                  )}
-                  {requiresPhoneOtp && (
-                    <div className={styles.editField}>
-                      <label>Phone change code sent to {phoneOtpSentTo}</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={6}
-                        placeholder="6-digit code"
-                        value={phoneOtp}
-                        onChange={(e) => setPhoneOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                        disabled={editLoading}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
+              </div>
 
               <div className={styles.modalActions}>
                 <button className={styles.cancelBtn} onClick={closeEditModal} disabled={editLoading}>
                   Cancel
                 </button>
-                {editStep === 'form' ? (
-                  <button
-                    className={styles.saveBtn}
-                    onClick={handleSaveProfile}
-                    disabled={!user.canUpdateProfile || editLoading}
-                  >
-                    {editLoading ? 'Saving...' : 'Save'}
-                  </button>
-                ) : (
-                  <button
-                    className={styles.saveBtn}
-                    onClick={submitProfileUpdate}
-                    disabled={editLoading}
-                  >
-                    {editLoading ? 'Confirming...' : 'Confirm Save'}
-                  </button>
-                )}
+                <button
+                  className={styles.saveBtn}
+                  onClick={handleSaveProfile}
+                  disabled={editLoading}
+                >
+                  {editLoading ? 'Saving...' : 'Save'}
+                </button>
               </div>
             </motion.div>
           </motion.div>

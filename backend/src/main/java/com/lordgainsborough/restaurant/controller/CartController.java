@@ -9,7 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -44,7 +44,13 @@ public class CartController {
             return ResponseEntity.ok(Collections.singletonMap("items", Collections.emptyList()));
         }
 
-        return ResponseEntity.ok(Collections.singletonMap("items", cartOpt.get().getItems()));
+        Cart cart = cartOpt.get();
+        if (cart.isExpired()) {
+            cartRepository.delete(cart);
+            return ResponseEntity.ok(Collections.singletonMap("items", Collections.emptyList()));
+        }
+
+        return ResponseEntity.ok(Collections.singletonMap("items", cart.getItems()));
     }
 
     /**
@@ -67,7 +73,7 @@ public class CartController {
         });
 
         cart.setItems(items != null ? items : Collections.emptyList());
-        cart.setUpdatedAt(LocalDateTime.now());
+        cart.setUpdatedAt(Instant.now());
         cartRepository.save(cart);
 
         return ResponseEntity.ok(Collections.singletonMap("items", cart.getItems()));

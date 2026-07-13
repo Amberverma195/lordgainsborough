@@ -4,12 +4,15 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 @Document(collection = "carts")
 public class Cart {
+    /** Carts expire 7 days after the last update (MongoDB TTL index). */
+    public static final int TTL_SECONDS = 7 * 24 * 60 * 60;
+
     @Id
     private String id;
 
@@ -17,9 +20,10 @@ public class Cart {
     private String userId;
 
     private List<CartItem> items = new ArrayList<>();
-    private LocalDateTime updatedAt = LocalDateTime.now();
 
-    // Getters and Setters
+    @Indexed(name = "cart_updated_at_ttl", expireAfterSeconds = TTL_SECONDS)
+    private Instant updatedAt = Instant.now();
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -29,8 +33,15 @@ public class Cart {
     public List<CartItem> getItems() { return items; }
     public void setItems(List<CartItem> items) { this.items = items; }
 
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public Instant getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public boolean isExpired() {
+        if (updatedAt == null) {
+            return true;
+        }
+        return updatedAt.isBefore(Instant.now().minusSeconds(TTL_SECONDS));
+    }
 
     public static class CartItem {
         private String menuItemId;
