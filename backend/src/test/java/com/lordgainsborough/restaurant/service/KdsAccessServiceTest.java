@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -43,6 +44,24 @@ class KdsAccessServiceTest {
         assertTrue(service.isIpAllowed("203.0.113.10"));
         assertTrue(service.isIpAllowed("127.0.0.1"));
         assertFalse(service.isIpAllowed("198.51.100.1"));
+    }
+
+    @Test
+    void treatsLoopbackAliasesAsEquivalent() {
+        StoreSettings settings = new StoreSettings();
+        settings.setKdsAllowedIp("127.0.0.1");
+        when(storeSettingsService.getSettings()).thenReturn(settings);
+
+        assertTrue(service.isIpAllowed("::1"));
+        assertTrue(service.isIpAllowed("127.0.0.1"));
+    }
+
+    @Test
+    void capsAllowlistAtThreeIps() {
+        String normalized = KdsAccessService.normalizeAllowedIpInput(
+                "10.0.0.1\n10.0.0.2\n10.0.0.3\n10.0.0.4");
+        assertEquals("10.0.0.1\n10.0.0.2\n10.0.0.3", normalized);
+        assertEquals(3, KdsAccessService.parseAllowedIps(normalized).size());
     }
 
     @Test

@@ -20,7 +20,62 @@ import {
   orderStatusLabel,
   sortOrders,
 } from '@/lib/orders';
-import { BarChart3, CalendarDays, MessageSquareText, MonitorCog, Search, Store, UserRoundSearch } from 'lucide-react';
+import { BarChart3, CalendarDays, Eye, EyeOff, MessageSquareText, MonitorCog, Search, Store, Trash2, UserRoundSearch } from 'lucide-react';
+
+const MAX_KDS_ALLOWED_IPS = 3;
+
+function parseKdsAllowedIps(raw: string): string[] {
+  if (!raw) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const ips: string[] = [];
+  for (const part of raw.split(/[,\n;]+/)) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    ips.push(trimmed);
+    if (ips.length >= MAX_KDS_ALLOWED_IPS) {
+      break;
+    }
+  }
+  return ips;
+}
+
+function joinKdsAllowedIps(ips: string[]): string {
+  return ips.slice(0, MAX_KDS_ALLOWED_IPS).join('\n');
+}
+
+function maskIpAddress(ip: string): string {
+  if (!ip) {
+    return '••••••••';
+  }
+  if (ip.includes('/')) {
+    const [network, prefix] = ip.split('/');
+    return `${maskIpAddress(network)}/${prefix || '?'}`;
+  }
+  if (ip.includes(':')) {
+    const parts = ip.split(':').filter(Boolean);
+    if (parts.length <= 2) {
+      return '••••:••••';
+    }
+    return `${parts[0]}:••••:••••:${parts[parts.length - 1]}`;
+  }
+  const parts = ip.split('.');
+  if (parts.length === 4) {
+    return `${parts[0]}.${parts[1]}.•.•`;
+  }
+  if (ip.length <= 4) {
+    return '••••';
+  }
+  return `${ip.slice(0, 2)}${'•'.repeat(Math.min(ip.length - 2, 8))}`;
+}
 
 interface Category {
   id: string;
@@ -61,6 +116,22 @@ interface StoreSettings {
   defaultReadyMinutes: number;
   pickupOrdersEnabled: boolean;
   kdsAllowedIp: string;
+}
+
+function normalizeStoreSettings(data: Partial<StoreSettings> | null | undefined): StoreSettings {
+  return {
+    storeName: data?.storeName || 'Lord Gainsborough',
+    contactPhone: data?.contactPhone || '',
+    contactEmail: data?.contactEmail || '',
+    taxRate: typeof data?.taxRate === 'number' ? data.taxRate : 0.13,
+    defaultReadyMinutes: typeof data?.defaultReadyMinutes === 'number' ? data.defaultReadyMinutes : 25,
+    pickupOrdersEnabled: data?.pickupOrdersEnabled !== false,
+    kdsAllowedIp: joinKdsAllowedIps(parseKdsAllowedIps(typeof data?.kdsAllowedIp === 'string' ? data.kdsAllowedIp : '')),
+  };
+}
+
+function storeSettingsEqual(a: StoreSettings, b: StoreSettings): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 interface AdminCustomerSearchResult {
@@ -132,16 +203,13 @@ export default function AdminPage() {
     displayOrder: '',
   });
 
-  const [storeSettings, setStoreSettings] = useState<StoreSettings>({
-    storeName: 'Lord Gainsborough',
-    contactPhone: '',
-    contactEmail: '',
-    taxRate: 0.13,
-    defaultReadyMinutes: 25,
-    pickupOrdersEnabled: true,
-    kdsAllowedIp: '',
-  });
+  const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => normalizeStoreSettings(null));
+  const [savedStoreSettings, setSavedStoreSettings] = useState<StoreSettings>(() => normalizeStoreSettings(null));
   const [settingsLoading, setSettingsLoading] = useState(false);
+  const [kdsIpDraft, setKdsIpDraft] = useState('');
+  const [kdsIpError, setKdsIpError] = useState('');
+  const [detectedClientIp, setDetectedClientIp] = useState('');
+  const [revealedKdsIps, setRevealedKdsIps] = useState<Record<string, boolean>>({});
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [userSearchResults, setUserSearchResults] = useState<AdminCustomerSearchResult[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState(false);
@@ -226,15 +294,9 @@ export default function AdminPage() {
         throw new Error('Failed to load store settings');
       }
       const data = await res.json();
-      setStoreSettings({
-        storeName: data.storeName || 'Lord Gainsborough',
-        contactPhone: data.contactPhone || '',
-        contactEmail: data.contactEmail || '',
-        taxRate: typeof data.taxRate === 'number' ? data.taxRate : 0.13,
-        defaultReadyMinutes: typeof data.defaultReadyMinutes === 'number' ? data.defaultReadyMinutes : 25,
-        pickupOrdersEnabled: data.pickupOrdersEnabled !== false,
-        kdsAllowedIp: typeof data.kdsAllowedIp === 'string' ? data.kdsAllowedIp : '',
-      });
+      const normalized = normalizeStoreSettings(data);
+      setStoreSettings(normalized);
+      setSavedStoreSettings(normalized);
     } catch {
       if (options?.notifyOnError) {
         showNotification('Failed to load store settings', 'error');
@@ -260,6 +322,19 @@ export default function AdminPage() {
     }
     const timeout = window.setTimeout(() => {
       fetchStoreSettings({ notifyOnError: true });
+      fetch(`${API_BASE}/admin/client-ip`, { headers: getAuthHeaders(false) })
+        .then(async res => {
+          if (!res.ok) {
+            return;
+          }
+          const data = await res.json();
+          if (typeof data?.ip === 'string' && data.ip) {
+            setDetectedClientIp(data.ip);
+          }
+        })
+        .catch(() => {
+          // Ignore — KDS IP helper is optional.
+        });
     }, 0);
 
     return () => window.clearTimeout(timeout);
@@ -345,6 +420,9 @@ export default function AdminPage() {
 
   const handleSettingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!settingsDirty || settingsLoading) {
+      return;
+    }
     setSettingsLoading(true);
     try {
       const res = await fetch(`${API_BASE}/store-settings`, {
@@ -356,15 +434,9 @@ export default function AdminPage() {
         throw new Error('Failed to save store settings');
       }
       const data = await res.json();
-      setStoreSettings({
-        storeName: data.storeName || 'Lord Gainsborough',
-        contactPhone: data.contactPhone || '',
-        contactEmail: data.contactEmail || '',
-        taxRate: typeof data.taxRate === 'number' ? data.taxRate : 0.13,
-        defaultReadyMinutes: typeof data.defaultReadyMinutes === 'number' ? data.defaultReadyMinutes : 25,
-        pickupOrdersEnabled: data.pickupOrdersEnabled !== false,
-        kdsAllowedIp: typeof data.kdsAllowedIp === 'string' ? data.kdsAllowedIp : '',
-      });
+      const normalized = normalizeStoreSettings(data);
+      setStoreSettings(normalized);
+      setSavedStoreSettings(normalized);
       showNotification('Store settings saved', 'success');
     } catch {
       showNotification('Failed to save store settings', 'error');
@@ -533,6 +605,51 @@ export default function AdminPage() {
   const filteredItems = filterCategory === 'All'
     ? menuItems
     : menuItems.filter(item => item.category === filterCategory);
+
+  const kdsAllowedIps = useMemo(
+    () => parseKdsAllowedIps(storeSettings.kdsAllowedIp),
+    [storeSettings.kdsAllowedIp],
+  );
+
+  const settingsDirty = useMemo(
+    () => !storeSettingsEqual(normalizeStoreSettings(storeSettings), savedStoreSettings),
+    [storeSettings, savedStoreSettings],
+  );
+
+  const updateKdsAllowedIps = (ips: string[]) => {
+    setStoreSettings(prev => ({
+      ...prev,
+      kdsAllowedIp: joinKdsAllowedIps(ips),
+    }));
+  };
+
+  const addKdsAllowedIp = () => {
+    const nextIp = kdsIpDraft.trim();
+    setKdsIpError('');
+    if (!nextIp) {
+      setKdsIpError('Enter an IP address to add.');
+      return;
+    }
+    if (kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS) {
+      setKdsIpError(`You can add up to ${MAX_KDS_ALLOWED_IPS} IP addresses.`);
+      return;
+    }
+    if (kdsAllowedIps.some(ip => ip.toLowerCase() === nextIp.toLowerCase())) {
+      setKdsIpError('That IP address is already on the list.');
+      return;
+    }
+    updateKdsAllowedIps([...kdsAllowedIps, nextIp]);
+    setKdsIpDraft('');
+  };
+
+  const removeKdsAllowedIp = (ipToRemove: string) => {
+    updateKdsAllowedIps(kdsAllowedIps.filter(ip => ip !== ipToRemove));
+    setRevealedKdsIps(prev => {
+      const next = { ...prev };
+      delete next[ipToRemove];
+      return next;
+    });
+  };
 
   const salesSummary = useMemo(() => {
     const { today, weekStart } = salesWindow;
@@ -1532,33 +1649,124 @@ export default function AdminPage() {
             </div>
 
             <h3 style={{ marginTop: '1.75rem' }}>KDS access</h3>
-            <p style={{ color: 'var(--text-light)', margin: '0 0 1rem', fontSize: '0.92rem' }}>
-              Kitchen Display is separate from login. Only devices whose public IP matches the allowlist can open
-              <code style={{ margin: '0 0.25rem' }}>/kds</code>
-              (page, API, and live updates). Leave blank to lock KDS for everyone. For local testing use
-              <code style={{ margin: '0 0.25rem' }}>127.0.0.1</code>.
-            </p>
-            <div className={styles.formGrid}>
-              <div className={`${styles.field} ${styles.fullWidth}`}>
-                <label htmlFor="kdsAllowedIp">Allowed IP address</label>
-                <textarea
-                  id="kdsAllowedIp"
-                  rows={3}
-                  value={storeSettings.kdsAllowedIp}
-                  onChange={event => setStoreSettings(prev => ({
-                    ...prev,
-                    kdsAllowedIp: event.target.value,
-                  }))}
-                  placeholder={'203.0.113.10\n127.0.0.1'}
-                />
-                <small style={{ color: 'var(--text-light)' }}>
-                  One IP per line (or comma-separated). Optional CIDR like 192.168.1.0/24 is supported.
-                </small>
-              </div>
+
+            <div className={`${styles.field} ${styles.fullWidth}`}>
+              <label>Allowed IP addresses ({kdsAllowedIps.length}/{MAX_KDS_ALLOWED_IPS})</label>
+              {kdsAllowedIps.length === 0 ? (
+                <p className={styles.kdsIpEmpty}>No IP addresses saved yet. Add one below, then click Save settings.</p>
+              ) : (
+                <ul className={styles.kdsIpList}>
+                  {kdsAllowedIps.map(ip => {
+                    const revealed = !!revealedKdsIps[ip];
+                    return (
+                      <li key={ip} className={styles.kdsIpRow}>
+                        <code className={styles.kdsIpValue}>
+                          {revealed ? ip : maskIpAddress(ip)}
+                        </code>
+                        <div className={styles.kdsIpActions}>
+                          <button
+                            type="button"
+                            className={styles.kdsIpActionBtn}
+                            onClick={() => setRevealedKdsIps(prev => ({
+                              ...prev,
+                              [ip]: !prev[ip],
+                            }))}
+                            aria-label={revealed ? `Hide ${ip}` : `Show ${ip}`}
+                            title={revealed ? 'Hide IP' : 'Show IP'}
+                          >
+                            {revealed ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                          <button
+                            type="button"
+                            className={`${styles.kdsIpActionBtn} ${styles.kdsIpDeleteBtn}`}
+                            onClick={() => removeKdsAllowedIp(ip)}
+                            aria-label={`Delete ${ip}`}
+                            title="Delete IP"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
 
+            {detectedClientIp && (
+              <div className={styles.kdsDetectedIp}>
+                <span>
+                  This browser&apos;s IP (use this for local KDS):
+                  <code>{detectedClientIp}</code>
+                </span>
+                <button
+                  type="button"
+                  className={styles.linkBtn}
+                  disabled={
+                    kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS
+                    || kdsAllowedIps.some(ip => ip.toLowerCase() === detectedClientIp.toLowerCase())
+                  }
+                  onClick={() => {
+                    setKdsIpDraft(detectedClientIp);
+                    setKdsIpError('');
+                    if (kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS) {
+                      setKdsIpError(`You can add up to ${MAX_KDS_ALLOWED_IPS} IP addresses.`);
+                      return;
+                    }
+                    if (kdsAllowedIps.some(ip => ip.toLowerCase() === detectedClientIp.toLowerCase())) {
+                      setKdsIpError('That IP address is already on the list.');
+                      return;
+                    }
+                    updateKdsAllowedIps([...kdsAllowedIps, detectedClientIp]);
+                    setKdsIpDraft('');
+                  }}
+                >
+                  Add this IP
+                </button>
+              </div>
+            )}
+
+            <div className={styles.kdsIpAddRow}>
+              <div className={`${styles.field} ${styles.kdsIpAddField}`}>
+                <label htmlFor="kdsAllowedIpDraft">Add IP address</label>
+                <input
+                  id="kdsAllowedIpDraft"
+                  type="text"
+                  value={kdsIpDraft}
+                  onChange={event => {
+                    setKdsIpDraft(event.target.value);
+                    if (kdsIpError) {
+                      setKdsIpError('');
+                    }
+                  }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      addKdsAllowedIp();
+                    }
+                  }}
+                  placeholder="203.0.113.10 or 127.0.0.1"
+                  disabled={kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS}
+                />
+              </div>
+              <button
+                type="button"
+                className={styles.addBtn}
+                onClick={addKdsAllowedIp}
+                disabled={kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS}
+              >
+                Add IP
+              </button>
+            </div>
+            {kdsIpError && <p className={styles.kdsIpError}>{kdsIpError}</p>}
+            {kdsAllowedIps.length >= MAX_KDS_ALLOWED_IPS && (
+              <small style={{ color: 'var(--text-light)' }}>
+                Maximum of {MAX_KDS_ALLOWED_IPS} IP addresses reached. Delete one to add another.
+              </small>
+            )}
+
             <div className={styles.formActions}>
-              <button type="submit" className={styles.saveBtn} disabled={settingsLoading}>
+              <button type="submit" className={styles.saveBtn} disabled={settingsLoading || !settingsDirty}>
                 {settingsLoading ? 'Saving...' : 'Save settings'}
               </button>
             </div>

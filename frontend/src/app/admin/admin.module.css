@@ -276,6 +276,110 @@
   color: var(--text-light);
 }
 
+.kdsIpEmpty {
+  margin: 0.35rem 0 0;
+  color: var(--text-light);
+  font-size: 0.92rem;
+}
+
+.kdsDetectedIp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.85rem 0 0.25rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px dashed var(--glass-border);
+  border-radius: 10px;
+  color: var(--text-light);
+  font-size: 0.92rem;
+}
+
+.kdsDetectedIp code {
+  margin-left: 0.4rem;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.kdsIpList {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.kdsIpRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.kdsIpValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.kdsIpActions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.kdsIpActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-light);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.kdsIpActionBtn:hover {
+  color: var(--secondary);
+  border-color: var(--secondary);
+}
+
+.kdsIpDeleteBtn:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.kdsIpAddRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.kdsIpAddField {
+  flex: 1;
+  min-width: 220px;
+  margin: 0;
+}
+
+.kdsIpError {
+  margin: 0.55rem 0 0;
+  color: #ef4444;
+  font-size: 0.9rem;
+}
+
 /* --- Filter Pills --- */
 .filterPills {
   display: flex;
@@ -364,9 +468,15 @@
   cursor: pointer;
   transition: var(--transition-smooth);
 }
-.saveBtn:hover {
+.saveBtn:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 4px 16px rgba(201, 162, 39, 0.35);
+}
+.saveBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* --- Form Card --- */

@@ -43,16 +43,39 @@ public class KdsAccessService {
         }
 
         for (String entry : allowed) {
+            String normalizedEntry = ClientIpResolver.normalizeIp(entry);
             if (entry.contains("/")) {
                 if (matchesCidr(normalizedClient, entry)) {
                     return true;
                 }
-            } else if (normalizedClient.equalsIgnoreCase(ClientIpResolver.normalizeIp(entry))) {
+            } else if (normalizedClient.equalsIgnoreCase(normalizedEntry)) {
+                return true;
+            } else if (isLoopback(normalizedClient) && isLoopback(normalizedEntry)) {
+                // Local browser may report 127.0.0.1 while allowlist has ::1 (or the reverse).
                 return true;
             }
         }
         return false;
     }
+
+    public String resolveClientIp(HttpServletRequest request) {
+        return clientIpResolver.resolve(
+                request.getRemoteAddr(),
+                request.getHeader("X-Forwarded-For"),
+                request.getHeader("X-Real-IP"));
+    }
+
+    private static boolean isLoopback(String ip) {
+        String normalized = ClientIpResolver.normalizeIp(ip);
+        if (normalized == null) {
+            return false;
+        }
+        return "127.0.0.1".equals(normalized)
+                || "0:0:0:0:0:0:0:1".equals(normalized)
+                || "::1".equals(normalized);
+    }
+
+    public static final int MAX_ALLOWED_IPS = 3;
 
     public static List<String> parseAllowedIps(String raw) {
         List<String> result = new ArrayList<>();
@@ -61,8 +84,15 @@ public class KdsAccessService {
         }
         for (String part : raw.split("[,\\n;]+")) {
             String trimmed = part.trim();
-            if (!trimmed.isEmpty()) {
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            boolean duplicate = result.stream().anyMatch(existing -> existing.equalsIgnoreCase(trimmed));
+            if (!duplicate) {
                 result.add(trimmed);
+            }
+            if (result.size() >= MAX_ALLOWED_IPS) {
+                break;
             }
         }
         return result;

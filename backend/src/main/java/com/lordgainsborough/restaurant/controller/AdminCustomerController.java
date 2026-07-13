@@ -2,6 +2,8 @@ package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.dto.AdminCustomerSearchResult;
 import com.lordgainsborough.restaurant.service.AdminCustomerSearchService;
+import com.lordgainsborough.restaurant.service.KdsAccessService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,9 +20,13 @@ import java.util.Map;
 public class AdminCustomerController {
 
     private final AdminCustomerSearchService customerSearchService;
+    private final KdsAccessService kdsAccessService;
 
-    public AdminCustomerController(AdminCustomerSearchService customerSearchService) {
+    public AdminCustomerController(
+            AdminCustomerSearchService customerSearchService,
+            KdsAccessService kdsAccessService) {
         this.customerSearchService = customerSearchService;
+        this.kdsAccessService = kdsAccessService;
     }
 
     @GetMapping("/customers/search")
@@ -32,5 +38,10 @@ public class AdminCustomerController {
         }
         List<AdminCustomerSearchResult> results = customerSearchService.search(trimmed);
         return ResponseEntity.ok(results);
+    }
+
+    @GetMapping("/client-ip")
+    public ResponseEntity<Map<String, String>> currentClientIp(HttpServletRequest request) {
+        return ResponseEntity.ok(Map.of("ip", kdsAccessService.resolveClientIp(request)));
     }
 }
