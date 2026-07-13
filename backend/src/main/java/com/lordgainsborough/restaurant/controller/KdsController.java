@@ -2,6 +2,7 @@ package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
+import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.CustomerOrderPresentationService;
 import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import org.springframework.data.domain.Sort;
@@ -22,14 +23,17 @@ public class KdsController {
     private final CustomerOrderRepository orderRepository;
     private final OrderRealtimeService realtimeService;
     private final CustomerOrderPresentationService presentationService;
+    private final CustomerNoShowService customerNoShowService;
 
     public KdsController(
             CustomerOrderRepository orderRepository,
             OrderRealtimeService realtimeService,
-            CustomerOrderPresentationService presentationService) {
+            CustomerOrderPresentationService presentationService,
+            CustomerNoShowService customerNoShowService) {
         this.orderRepository = orderRepository;
         this.realtimeService = realtimeService;
         this.presentationService = presentationService;
+        this.customerNoShowService = customerNoShowService;
     }
 
     @GetMapping("/orders")
@@ -53,6 +57,11 @@ public class KdsController {
 
         return orderRepository.findById(id)
                 .map(order -> {
+                    String previousStatus = order.getStatus();
+                    boolean firstNoShow = "NO_SHOW".equals(status)
+                            && !"NO_SHOW".equalsIgnoreCase(previousStatus == null ? "" : previousStatus)
+                            && order.getNoShowAt() == null;
+
                     order.setStatus(status);
                     if (body.containsKey("averageReadyMinutes")) {
                         order.setAverageReadyMinutes(OrderController.normalizeReadyMinutes(toInt(body.get("averageReadyMinutes"), order.getAverageReadyMinutes())));
@@ -68,11 +77,14 @@ public class KdsController {
                     if ("PICKED_UP".equals(status) && order.getPickedUpAt() == null) {
                         order.setPickedUpAt(now);
                     }
-                    if ("NO_SHOW".equals(status) && order.getNoShowAt() == null) {
+                    if (firstNoShow) {
                         order.setNoShowAt(now);
                     }
 
                     CustomerOrder saved = orderRepository.save(order);
+                    if (firstNoShow) {
+                        customerNoShowService.recordNoShow(saved);
+                    }
                     realtimeService.orderUpdated(saved);
                     return ResponseEntity.ok(presentationService.attachCustomerOrderCount(saved));
                 })

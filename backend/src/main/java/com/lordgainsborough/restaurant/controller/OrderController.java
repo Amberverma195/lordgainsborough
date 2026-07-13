@@ -7,9 +7,11 @@ import com.lordgainsborough.restaurant.model.MenuItem;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.repository.MenuItemRepository;
 import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
+import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.OrderAccessService;
 import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -31,6 +33,7 @@ public class OrderController {
     private final OrderRealtimeService realtimeService;
     private final OrderAccessService orderAccessService;
     private final StoreSettingsService storeSettingsService;
+    private final CustomerNoShowService customerNoShowService;
 
     public OrderController(
             CustomerOrderRepository orderRepository,
@@ -38,23 +41,31 @@ public class OrderController {
             MenuItemRepository menuItemRepository,
             OrderRealtimeService realtimeService,
             OrderAccessService orderAccessService,
-            StoreSettingsService storeSettingsService) {
+            StoreSettingsService storeSettingsService,
+            CustomerNoShowService customerNoShowService) {
         this.orderRepository = orderRepository;
         this.reviewRepository = reviewRepository;
         this.menuItemRepository = menuItemRepository;
         this.realtimeService = realtimeService;
         this.orderAccessService = orderAccessService;
         this.storeSettingsService = storeSettingsService;
+        this.customerNoShowService = customerNoShowService;
     }
 
     @PostMapping
-    public ResponseEntity<OrderCreationResponse> createOrder(@RequestBody CustomerOrder order) {
+    public ResponseEntity<?> createOrder(@RequestBody CustomerOrder order) {
         if (order.getItems() == null || order.getItems().isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
 
         if (!storeSettingsService.getSettings().getPickupOrdersEnabled()) {
             return ResponseEntity.status(503).build();
+        }
+
+        if (customerNoShowService.isPickupDisabledForCustomer(order.getCustomerEmail(), order.getCustomerPhone())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", "PICKUP_DISABLED_NO_SHOW",
+                    "message", CustomerNoShowService.PICKUP_DISABLED_MESSAGE));
         }
 
         if (order.getPickupDate() == null || order.getPickupDate().isBlank()) {

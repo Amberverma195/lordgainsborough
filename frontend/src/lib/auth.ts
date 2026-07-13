@@ -5,7 +5,12 @@ export interface AuthData {
   phone?: string;
   memberSince?: string;
   role?: string;
+  noShowCount?: number;
+  pickupDisabled?: boolean;
 }
+
+export const PICKUP_DISABLED_NO_SHOW_MESSAGE =
+  'Pickup disabled due to recent no-show history';
 
 export function persistAuth(data: AuthData) {
   if (data.token) {
@@ -27,6 +32,12 @@ export function persistAuth(data: AuthData) {
     localStorage.setItem('userRole', data.role);
     document.cookie = `userRole=${encodeURIComponent(data.role)}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
   }
+  if (data.noShowCount !== undefined) {
+    localStorage.setItem('userNoShowCount', String(data.noShowCount));
+  }
+  if (data.pickupDisabled !== undefined) {
+    localStorage.setItem('userPickupDisabled', data.pickupDisabled ? 'true' : 'false');
+  }
 }
 
 export function clearAuth() {
@@ -36,7 +47,14 @@ export function clearAuth() {
   localStorage.removeItem('userPhone');
   localStorage.removeItem('userMemberSince');
   localStorage.removeItem('userRole');
+  localStorage.removeItem('userNoShowCount');
+  localStorage.removeItem('userPickupDisabled');
   document.cookie = 'userRole=; path=/; max-age=0; SameSite=Lax';
+}
+
+export function isPickupDisabledForUser(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem('userPickupDisabled') === 'true';
 }
 
 export function getAuthHeaders(includeJson = true): HeadersInit {

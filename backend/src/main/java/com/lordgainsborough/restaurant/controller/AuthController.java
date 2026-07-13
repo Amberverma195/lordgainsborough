@@ -18,6 +18,7 @@ import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
+import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.OtpService;
 import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
@@ -688,6 +689,8 @@ public class AuthController {
         response.setRole(user.getRole());
         response.setCanUpdateProfile(true);
         response.setNextProfileUpdateAt(null);
+        response.setNoShowCount(user.getNoShowCount());
+        response.setPickupDisabled(user.getNoShowCount() >= CustomerNoShowService.NO_SHOW_THRESHOLD);
         return response;
     }
 

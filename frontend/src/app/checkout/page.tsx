@@ -16,7 +16,12 @@ import {
   storeTrackingToken,
 } from '@/lib/orders';
 import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
-import { isAuthenticated, type AuthData } from '@/lib/auth';
+import {
+  isAuthenticated,
+  isPickupDisabledForUser,
+  PICKUP_DISABLED_NO_SHOW_MESSAGE,
+  type AuthData,
+} from '@/lib/auth';
 import LoginModal from '@/components/LoginModal';
 
 function generateTimeSlots(): string[] {
@@ -60,6 +65,7 @@ export default function CheckoutPage() {
   const [error, setError] = useState('');
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [storeSettings, setStoreSettings] = useState<StoreSettings | null>(null);
+  const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
   const pendingOrderSubmit = useRef(false);
   const [form, setForm] = useState({
     firstName: '',
@@ -88,6 +94,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     fetchStoreSettings().then(setStoreSettings);
+    setPickupDisabledForUser(isPickupDisabledForUser());
   }, []);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -102,6 +109,12 @@ export default function CheckoutPage() {
     const settings = storeSettings ?? await fetchStoreSettings();
     if (!settings.pickupOrdersEnabled) {
       setError('Pickup orders are currently paused. Please check back later.');
+      return;
+    }
+
+    if (isPickupDisabledForUser()) {
+      setPickupDisabledForUser(true);
+      setError(PICKUP_DISABLED_NO_SHOW_MESSAGE);
       return;
     }
 
@@ -145,6 +158,13 @@ export default function CheckoutPage() {
         return;
       }
 
+      if (res.status === 403) {
+        const data = await res.json().catch(() => null);
+        setPickupDisabledForUser(true);
+        setError(typeof data?.message === 'string' ? data.message : PICKUP_DISABLED_NO_SHOW_MESSAGE);
+        return;
+      }
+
       if (!res.ok) {
         throw new Error('Order could not be placed.');
       }
@@ -178,10 +198,15 @@ export default function CheckoutPage() {
   };
 
   const handleLoginSuccess = (data: AuthData) => {
+    if (data.pickupDisabled) {
+      setPickupDisabledForUser(true);
+      pendingOrderSubmit.current = false;
+      setError(PICKUP_DISABLED_NO_SHOW_MESSAGE);
+    }
     const profile = applyAuthToForm(data);
     setForm(prev => {
       const next = { ...prev, ...profile };
-      if (pendingOrderSubmit.current) {
+      if (pendingOrderSubmit.current && !data.pickupDisabled) {
         pendingOrderSubmit.current = false;
         void placeOrder(next);
       }
@@ -233,6 +258,7 @@ export default function CheckoutPage() {
   const finalTotal = cartTotal + tax;
   const timeSlots = generateTimeSlots();
   const pickupPaused = storeSettings?.pickupOrdersEnabled === false;
+  const pickupBlocked = pickupPaused || pickupDisabledForUser;
 
   return (
     <div className={styles.container}>
@@ -376,7 +402,11 @@ export default function CheckoutPage() {
               <p>You will pay for your order <strong>at the restaurant</strong> when you arrive for pick-up. We accept cash, credit, and debit cards on-site.</p>
             </div>
 
-            {pickupPaused && (
+            {pickupDisabledForUser && (
+              <p className={styles.errorText}>{PICKUP_DISABLED_NO_SHOW_MESSAGE}</p>
+            )}
+
+            {pickupPaused && !pickupDisabledForUser && (
               <p className={styles.errorText}>Pickup orders are currently paused. Please check back later.</p>
             )}
 
@@ -385,13 +415,15 @@ export default function CheckoutPage() {
             <button
               type="submit"
               className={styles.submitBtn}
-              disabled={isSubmitting || pickupPaused}
+              disabled={isSubmitting || pickupBlocked}
             >
-              {pickupPaused
-                ? 'Pickup orders paused'
-                : isSubmitting
-                  ? 'Processing...'
-                  : `Confirm Pick-up Order ($${finalTotal.toFixed(2)})`}
+              {pickupDisabledForUser
+                ? PICKUP_DISABLED_NO_SHOW_MESSAGE
+                : pickupPaused
+                  ? 'Pickup orders paused'
+                  : isSubmitting
+                    ? 'Processing...'
+                    : `Confirm Pick-up Order ($${finalTotal.toFixed(2)})`}
             </button>
           </form>
         </motion.div>

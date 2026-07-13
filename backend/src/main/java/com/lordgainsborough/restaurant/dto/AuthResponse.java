@@ -9,6 +9,8 @@ public class AuthResponse {
     private String role;
     private boolean canUpdateProfile;
     private String nextProfileUpdateAt;
+    private int noShowCount;
+    private boolean pickupDisabled;
 
     // Default constructor
     public AuthResponse() {}
@@ -37,4 +39,10 @@ public class AuthResponse {
 
     public String getNextProfileUpdateAt() { return nextProfileUpdateAt; }
     public void setNextProfileUpdateAt(String nextProfileUpdateAt) { this.nextProfileUpdateAt = nextProfileUpdateAt; }
+
+    public int getNoShowCount() { return noShowCount; }
+    public void setNoShowCount(int noShowCount) { this.noShowCount = noShowCount; }
+
+    public boolean isPickupDisabled() { return pickupDisabled; }
+    public void setPickupDisabled(boolean pickupDisabled) { this.pickupDisabled = pickupDisabled; }
 }

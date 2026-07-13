@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, Clock } from 'lucide-react';
 import { MenuItem } from '@/lib/mockData';
 import { API_BASE, backendAssetUrl, fetchStoreSettings } from '@/lib/orders';
+import { isPickupDisabledForUser, PICKUP_DISABLED_NO_SHOW_MESSAGE } from '@/lib/auth';
 import { useCart } from '@/context/CartContext';
 import MenuSkeleton from '@/components/MenuSkeleton';
 
@@ -40,10 +41,12 @@ export default function MenuPage() {
   const [pickupDate, setPickupDate] = useState('');
   const [pickupTime, setPickupTime] = useState('');
   const [pickupOrdersEnabled, setPickupOrdersEnabled] = useState(true);
+  const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
   const { addToCart } = useCart();
 
   const timeSlots = useMemo(() => generateTimeSlots(), []);
-  const pickupReady = pickupOrdersEnabled && pickupDate !== '' && pickupTime !== '';
+  const pickupAvailable = pickupOrdersEnabled && !pickupDisabledForUser;
+  const pickupReady = pickupAvailable && pickupDate !== '' && pickupTime !== '';
 
   useEffect(() => {
     sessionStorage.removeItem('pickupDate');
@@ -73,6 +76,7 @@ export default function MenuPage() {
     fetchStoreSettings().then(settings => {
       setPickupOrdersEnabled(settings.pickupOrdersEnabled);
     });
+    setPickupDisabledForUser(isPickupDisabledForUser());
   }, []);
 
   const handlePickupDateChange = (value: string) => {
@@ -135,7 +139,9 @@ export default function MenuPage() {
         transition={{ delay: 0.15 }}
       >
         <h2 className={styles.pickupTitle}>Pickup Details</h2>
-        {!pickupOrdersEnabled ? (
+        {pickupDisabledForUser ? (
+          <p className={styles.pickupHint}>{PICKUP_DISABLED_NO_SHOW_MESSAGE}</p>
+        ) : !pickupOrdersEnabled ? (
           <p className={styles.pickupHint}>Pickup orders are currently paused. Please check back later.</p>
         ) : (
           <>
@@ -230,9 +236,11 @@ export default function MenuPage() {
                     >
                       {!pickupOrdersEnabled
                         ? 'Orders Paused'
-                        : pickupReady
-                          ? 'Add to Cart'
-                          : 'Select Pickup Time'}
+                        : pickupDisabledForUser
+                          ? 'Pickup Disabled'
+                          : pickupReady
+                            ? 'Add to Cart'
+                            : 'Select Pickup Time'}
                     </button>
                   </div>
                 </motion.div>

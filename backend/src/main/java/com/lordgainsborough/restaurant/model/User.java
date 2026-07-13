@@ -26,6 +26,9 @@ public class User {
     private LocalDateTime createdAt = LocalDateTime.now();
     private LocalDateTime lastProfileUpdateAt;
 
+    /** Cumulative pickup no-shows recorded by KDS. Pickup is blocked at 3+. */
+    private int noShowCount = 0;
+
     // Getters and Setters
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -56,4 +59,7 @@ public class User {
 
     public LocalDateTime getLastProfileUpdateAt() { return lastProfileUpdateAt; }
     public void setLastProfileUpdateAt(LocalDateTime lastProfileUpdateAt) { this.lastProfileUpdateAt = lastProfileUpdateAt; }
+
+    public int getNoShowCount() { return noShowCount; }
+    public void setNoShowCount(int noShowCount) { this.noShowCount = noShowCount; }
 }

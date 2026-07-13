@@ -217,7 +217,20 @@
   transition: var(--transition-smooth);
 }
 
-.checkoutBtn:hover {
+.checkoutBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.checkoutBtn:hover:not(:disabled) {
   background: var(--secondary);
   color: white;
+}
+
+.pickupDisabledHint {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--text-light);
+  text-align: center;
 }

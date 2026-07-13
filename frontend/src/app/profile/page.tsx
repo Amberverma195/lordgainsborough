@@ -82,6 +82,8 @@ export default function ProfilePage() {
       phone: (data.phone as string) || '',
       memberSince: (data.memberSince as string) || '',
       role: data.role as string | undefined,
+      noShowCount: typeof data.noShowCount === 'number' ? data.noShowCount : undefined,
+      pickupDisabled: Boolean(data.pickupDisabled),
     });
   };
 

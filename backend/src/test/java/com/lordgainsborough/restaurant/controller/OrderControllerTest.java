@@ -8,6 +8,7 @@ import com.lordgainsborough.restaurant.model.StoreSettings;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.repository.MenuItemRepository;
 import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
+import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.OrderAccessService;
 import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
@@ -17,11 +18,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -35,18 +38,32 @@ class OrderControllerTest {
     private final OrderRealtimeService realtimeService = mock(OrderRealtimeService.class);
     private final OrderAccessService orderAccessService = mock(OrderAccessService.class);
     private final StoreSettingsService storeSettingsService = mock(StoreSettingsService.class);
+    private final CustomerNoShowService customerNoShowService = mock(CustomerNoShowService.class);
     private final OrderController controller = new OrderController(
-            orderRepository, reviewRepository, menuItemRepository, realtimeService, orderAccessService, storeSettingsService);
+            orderRepository,
+            reviewRepository,
+            menuItemRepository,
+            realtimeService,
+            orderAccessService,
+            storeSettingsService,
+            customerNoShowService);
 
     @BeforeEach
     void resetMocks() {
         org.mockito.Mockito.reset(
-                orderRepository, reviewRepository, menuItemRepository, realtimeService, orderAccessService, storeSettingsService);
+                orderRepository,
+                reviewRepository,
+                menuItemRepository,
+                realtimeService,
+                orderAccessService,
+                storeSettingsService,
+                customerNoShowService);
         StoreSettings settings = new StoreSettings();
         settings.setPickupOrdersEnabled(true);
         settings.setTaxRate(0.13);
         settings.setDefaultReadyMinutes(25);
         when(storeSettingsService.getSettings()).thenReturn(settings);
+        when(customerNoShowService.isPickupDisabledForCustomer(any(), any())).thenReturn(false);
     }
 
     @Test
@@ -89,9 +106,28 @@ class OrderControllerTest {
         MenuItem menuItem = new MenuItem("pizza-1", "Pepperoni Pizza", "", 17.99, "Pizzas", "", true);
         when(menuItemRepository.findById("pizza-1")).thenReturn(Optional.of(menuItem));
 
-        ResponseEntity<OrderCreationResponse> response = controller.createOrder(order);
+        ResponseEntity<?> response = controller.createOrder(order);
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void createOrderRejectsWhenCustomerHasTooManyNoShows() {
+        when(customerNoShowService.isPickupDisabledForCustomer(anyString(), anyString())).thenReturn(true);
+
+        CustomerOrder order = orderWith("pizza-1", 17.99);
+        order.setCustomerEmail("banned@example.com");
+        order.setCustomerPhone("+1 (416)-555-9999");
+
+        ResponseEntity<?> response = controller.createOrder(order);
+
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        @SuppressWarnings("unchecked")
+        Map<String, String> body = (Map<String, String>) response.getBody();
+        assertNotNull(body);
+        assertEquals("PICKUP_DISABLED_NO_SHOW", body.get("code"));
+        assertEquals(CustomerNoShowService.PICKUP_DISABLED_MESSAGE, body.get("message"));
         verify(orderRepository, never()).save(any());
     }
 
@@ -100,7 +136,7 @@ class OrderControllerTest {
         CustomerOrder order = orderWith("ghost-item", 5.0);
         when(menuItemRepository.findById("ghost-item")).thenReturn(Optional.empty());
 
-        ResponseEntity<OrderCreationResponse> response = controller.createOrder(order);
+        ResponseEntity<?> response = controller.createOrder(order);
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         verify(orderRepository, never()).save(any());
@@ -119,13 +155,14 @@ class OrderControllerTest {
             return saved;
         });
 
-        ResponseEntity<OrderCreationResponse> response = controller.createOrder(order);
+        ResponseEntity<?> response = controller.createOrder(order);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("plain-token", response.getBody().getTrackingToken());
+        OrderCreationResponse body = (OrderCreationResponse) response.getBody();
+        assertNotNull(body);
+        assertEquals("plain-token", body.getTrackingToken());
         // Authoritative menu price (17.99), not client-supplied 1.00.
-        assertEquals(17.99, response.getBody().getOrder().getSubtotal());
+        assertEquals(17.99, body.getOrder().getSubtotal());
     }
 
     private CustomerOrder orderWith(String menuItemId, double clientUnitPrice) {

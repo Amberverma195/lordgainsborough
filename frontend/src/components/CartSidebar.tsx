@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useCart } from '@/context/CartContext';
 import { useRouter } from 'next/navigation';
 import { backendAssetUrl, fetchStoreSettings } from '@/lib/orders';
+import { isPickupDisabledForUser, PICKUP_DISABLED_NO_SHOW_MESSAGE } from '@/lib/auth';
 import styles from './CartSidebar.module.css';
 import { X, Plus, Minus, Trash2, ShoppingBag } from 'lucide-react';
 
@@ -12,6 +13,7 @@ const CartSidebar = () => {
   const { cart, isCartOpen, toggleCart, removeFromCart, updateQuantity, cartTotal } = useCart();
   const router = useRouter();
   const [pickupOrdersEnabled, setPickupOrdersEnabled] = useState(true);
+  const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
 
   useEffect(() => {
     if (!isCartOpen) {
@@ -20,7 +22,15 @@ const CartSidebar = () => {
     fetchStoreSettings().then(settings => {
       setPickupOrdersEnabled(settings.pickupOrdersEnabled);
     });
+    setPickupDisabledForUser(isPickupDisabledForUser());
   }, [isCartOpen]);
+
+  const checkoutBlocked = !pickupOrdersEnabled || pickupDisabledForUser;
+  const checkoutLabel = pickupDisabledForUser
+    ? 'Pickup disabled'
+    : pickupOrdersEnabled
+      ? 'Proceed to Checkout'
+      : 'Pickup orders paused';
 
   return (
     <AnimatePresence>
@@ -108,17 +118,21 @@ const CartSidebar = () => {
                 </div>
                 <button
                   className={styles.checkoutBtn}
-                  disabled={!pickupOrdersEnabled}
+                  disabled={checkoutBlocked}
+                  title={pickupDisabledForUser ? PICKUP_DISABLED_NO_SHOW_MESSAGE : undefined}
                   onClick={() => {
-                    if (!pickupOrdersEnabled) {
+                    if (checkoutBlocked) {
                       return;
                     }
                     toggleCart();
                     router.push('/checkout');
                   }}
                 >
-                  {pickupOrdersEnabled ? 'Proceed to Checkout' : 'Pickup orders paused'}
+                  {checkoutLabel}
                 </button>
+                {pickupDisabledForUser && (
+                  <p className={styles.pickupDisabledHint}>{PICKUP_DISABLED_NO_SHOW_MESSAGE}</p>
+                )}
               </div>
             )}
           </motion.div>
