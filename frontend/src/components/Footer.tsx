@@ -6,6 +6,7 @@ import Image from 'next/image';
 import styles from './Footer.module.css';
 import { motion } from 'framer-motion';
 import { Camera, Globe, Mail, Phone, MapPin } from 'lucide-react';
+import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
 
 const Footer = () => {
   return (
@@ -50,7 +51,10 @@ const Footer = () => {
           <div className={styles.contact}>
             <h3>Visit Us</h3>
             <p><MapPin size={18} /> 1800 Hyde Park Rd, London, ON N6H 0K1</p>
-            <p><Phone size={18} /> +44 20 7946 0000</p>
+            <p>
+              <Phone size={18} />{' '}
+              <a href={`tel:${RESTAURANT_PHONE_TEL}`}>{RESTAURANT_PHONE_DISPLAY}</a>
+            </p>
             <p><Mail size={18} /> dine@lordgainsborough.com</p>
           </div>
         </div>

@@ -21,8 +21,8 @@ public class AbuseIpHasher {
     public AbuseIpHasher(SignupAbuseProperties properties) {
         String configured = properties.getIpHashSecret();
         if (!StringUtils.hasText(configured)) {
-            // Deterministic fallback for local/dev when secret unset; production must set ABUSE_IP_HASH_SECRET.
-            configured = "dev-only-abuse-ip-hash-secret-change-me";
+            throw new IllegalStateException(
+                    "ABUSE_IP_HASH_SECRET must be configured; a predictable fallback is not permitted");
         }
         this.secret = configured.getBytes(StandardCharsets.UTF_8);
     }

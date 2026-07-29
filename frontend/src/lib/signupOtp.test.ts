@@ -5,7 +5,10 @@ import {
   fetchWithIdempotentRetry,
   isChallengeExpiredState,
   isResendExhausted,
+  loadPendingSignupCredentials,
   loadSignupOtpChallengeState,
+  PENDING_SIGNUP_KEY,
+  savePendingSignupCredentials,
   saveSignupOtpChallengeState,
   SIGNUP_OTP_CHALLENGE_KEY,
   SignupOtpChallengeState,
@@ -158,6 +161,34 @@ describe('signupOtp challenge state', () => {
     const loaded = loadSignupOtpChallengeState();
     expect(loaded).not.toBeNull();
     expect(loaded).not.toHaveProperty('otp');
+  });
+
+  it('never persists a pending signup password and migrates legacy values', () => {
+    savePendingSignupCredentials({
+      name: 'Member Name',
+      email: 'member@example.com',
+      phone: '+1 (416)-555-0100',
+      password: 'Plaintext1!',
+    } as Parameters<typeof savePendingSignupCredentials>[0] & { password: string });
+
+    let raw = sessionStorage.getItem(PENDING_SIGNUP_KEY) ?? '';
+    expect(raw).not.toContain('Plaintext1!');
+    expect(raw).not.toContain('"password"');
+
+    sessionStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify({
+      name: 'Legacy Member',
+      email: 'legacy@example.com',
+      phone: '+1 (416)-555-0101',
+      password: 'LegacyPlaintext1!',
+    }));
+    expect(loadPendingSignupCredentials()).toEqual({
+      name: 'Legacy Member',
+      email: 'legacy@example.com',
+      phone: '+1 (416)-555-0101',
+    });
+    raw = sessionStorage.getItem(PENDING_SIGNUP_KEY) ?? '';
+    expect(raw).not.toContain('LegacyPlaintext1!');
+    expect(raw).not.toContain('"password"');
   });
 
   it('missing timing metadata does not invent a cooldown', () => {

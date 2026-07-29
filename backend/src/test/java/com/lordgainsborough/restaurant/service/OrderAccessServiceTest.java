@@ -53,6 +53,7 @@ class OrderAccessServiceTest {
         when(jwtUtil.validateToken("jwt")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("jwt")).thenReturn("amber@example.com");
         when(userRepository.findByEmailIgnoreCase("amber@example.com")).thenReturn(Optional.of(owner));
+        when(jwtUtil.validateTokenForUser("jwt", owner)).thenReturn(true);
 
         assertTrue(service.canAccess(order, "Bearer jwt", null));
     }
@@ -65,6 +66,7 @@ class OrderAccessServiceTest {
         when(jwtUtil.validateToken("jwt")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("jwt")).thenReturn("someone@example.com");
         when(userRepository.findByEmailIgnoreCase("someone@example.com")).thenReturn(Optional.of(other));
+        when(jwtUtil.validateTokenForUser("jwt", other)).thenReturn(true);
 
         assertFalse(service.canAccess(order, "Bearer jwt", null));
     }

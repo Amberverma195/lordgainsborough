@@ -3,10 +3,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ShieldCheck, ArrowRight, Mail } from 'lucide-react';
+import { ShieldCheck, ArrowRight, Lock, Mail } from 'lucide-react';
+import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import styles from './verify.module.css';
 import { persistAuth } from '@/lib/auth';
 import { API_BASE } from '@/lib/orders';
+import {
+  getPasswordValidationMessage,
+  passwordsMatch,
+  sanitizePasswordInput,
+  validatePassword,
+} from '@/lib/password';
 import {
   applyBackendChallengeState,
   clearAllSignupSession,
@@ -40,6 +47,8 @@ export default function SignupVerifyPage() {
   const [pendingSignup, setPendingSignup] = useState<PendingSignupCredentials | null>(null);
   const [challenge, setChallenge] = useState<SignupOtpChallengeState | null>(null);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [syncing, setSyncing] = useState(true);
@@ -178,6 +187,8 @@ export default function SignupVerifyPage() {
 
   useEffect(() => {
     if (!challenge) return;
+    // Preserve the existing signup timer behavior; this effect mirrors server challenge state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCooldownSeconds(cooldownSecondsFromServerClocks(
       challenge.serverTime,
       challenge.nextResendAt,
@@ -286,6 +297,16 @@ export default function SignupVerifyPage() {
       return;
     }
 
+    const passwordError = getPasswordValidationMessage(password, confirmPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (!confirmPassword || !passwordsMatch(password, confirmPassword)) {
+      setError('Please re-enter your password and make sure both passwords match.');
+      return;
+    }
+
     if (isChallengeExpiredState(challenge)) {
       setError('This verification session has expired. Please start signup again.');
       return;
@@ -303,7 +324,7 @@ export default function SignupVerifyPage() {
           name: pendingSignup.name,
           email: pendingSignup.email,
           phone: pendingSignup.phone,
-          password: pendingSignup.password,
+          password: sanitizePasswordInput(password),
           otp: code,
         }),
       });
@@ -316,6 +337,8 @@ export default function SignupVerifyPage() {
           code: 'OTP_VERIFIED',
         }, 'verified');
         clearAllSignupSession();
+        setPassword('');
+        setConfirmPassword('');
         persistAuth(data);
         window.dispatchEvent(new Event('storage'));
         router.push('/profile');
@@ -347,6 +370,14 @@ export default function SignupVerifyPage() {
   const challengeExpired = isChallengeExpiredState(challenge, nowTick);
   const resendsRemaining = challenge?.resendsRemaining ?? 0;
   const deliveryUnknown = challenge?.code === 'OTP_DELIVERY_UNKNOWN';
+  const passwordValidation = validatePassword(password);
+  const confirmMismatch =
+    confirmPassword.length > 0 && !passwordsMatch(password, confirmPassword);
+  const canCreateAccount =
+    otp.every(Boolean)
+    && passwordValidation.valid
+    && confirmPassword.length > 0
+    && passwordsMatch(password, confirmPassword);
 
   const resendDisabled =
     resending || loading || syncing || cooldownSeconds > 0 || exhausted || challengeExpired;
@@ -416,13 +447,61 @@ export default function SignupVerifyPage() {
                   onPaste={index === 0 ? handleOtpPaste : undefined}
                   className={styles.otpInput}
                   aria-label={`Digit ${index + 1}`}
-                  disabled={challengeExpired}
+                  disabled={loading || resending || challengeExpired}
                 />
               ))}
             </div>
           </div>
 
-          <button type="submit" className={styles.verifyBtn} disabled={loading || resending || challengeExpired}>
+          <div className={styles.passwordSection}>
+            <p className={styles.passwordPrompt}>
+              For your security, re-enter the password you want to use. It is not stored during verification.
+            </p>
+            <div className={styles.inputGroup}>
+              <label><Lock size={16} /> Password</label>
+              <input
+                type="password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(sanitizePasswordInput(e.target.value))}
+                maxLength={128}
+                autoComplete="new-password"
+                aria-invalid={password.length > 0 && !passwordValidation.valid}
+                className={
+                  password.length > 0 && !passwordValidation.valid
+                    ? styles.inputInvalid
+                    : undefined
+                }
+                disabled={loading || resending || challengeExpired}
+                required
+              />
+            </div>
+            <div className={styles.inputGroup}>
+              <label><Lock size={16} /> Confirm Password</label>
+              <input
+                type="password"
+                placeholder="Re-enter your password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(sanitizePasswordInput(e.target.value))}
+                maxLength={128}
+                autoComplete="new-password"
+                aria-invalid={confirmMismatch}
+                className={confirmMismatch ? styles.inputInvalid : undefined}
+                disabled={loading || resending || challengeExpired}
+                required
+              />
+            </div>
+            <PasswordStrengthIndicator
+              password={password}
+              confirmPassword={confirmPassword}
+            />
+          </div>
+
+          <button
+            type="submit"
+            className={styles.verifyBtn}
+            disabled={loading || resending || challengeExpired || !canCreateAccount}
+          >
             {loading ? 'Creating Account...' : 'Create Account'} <ArrowRight size={18} />
           </button>
         </form>

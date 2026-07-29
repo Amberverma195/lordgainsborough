@@ -70,7 +70,7 @@ export default function ReservationsPage() {
             </div>
             <div className={styles.inputGroup}>
               <label className={styles.label}>Phone Number</label>
-              <input type="tel" className={styles.input} required placeholder="+44 20 7946 0000" />
+              <input type="tel" className={styles.input} required placeholder="519-472-4168" />
             </div>
           </div>
 

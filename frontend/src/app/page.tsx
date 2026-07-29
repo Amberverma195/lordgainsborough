@@ -7,6 +7,7 @@ import styles from "./page.module.css";
 import { motion, AnimatePresence, useScroll, useTransform } from "framer-motion";
 import { Utensils, Clock, MapPin, ChevronRight, Star, Wine, Coffee } from "lucide-react";
 import { API_BASE, backendAssetUrl } from "@/lib/orders";
+import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from "@/lib/phone";
 
 interface MenuItem {
   id: string;
@@ -322,7 +323,7 @@ export default function Home() {
             <h4 style={{ color: '#fff', marginBottom: '1.5rem' }}>Contact</h4>
             <p style={{ color: 'var(--text-light)', fontSize: '0.9rem', lineHeight: '2' }}>
               info@lordgainsborough.com<br />
-              +1 (519) 555-0123
+              <a href={`tel:${RESTAURANT_PHONE_TEL}`}>{RESTAURANT_PHONE_DISPLAY}</a>
             </p>
           </div>
           <div>

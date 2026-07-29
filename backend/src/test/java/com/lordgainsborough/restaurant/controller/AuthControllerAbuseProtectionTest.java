@@ -11,7 +11,10 @@ import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
+import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
+import com.lordgainsborough.restaurant.service.LoginRateLimiter;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.PasswordResetService;
 import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
@@ -52,6 +55,10 @@ class AuthControllerAbuseProtectionTest {
     private final ClientIpResolver clientIpResolver = mock(ClientIpResolver.class);
     private final SignupOtpObservability signupOtpObservability =
             mock(SignupOtpObservability.class);
+    private final LoginRateLimiter loginRateLimiter = mock(LoginRateLimiter.class);
+    private final PasswordResetService passwordResetService = mock(PasswordResetService.class);
+    private final AuthSecurityObservability authSecurityObservability =
+            mock(AuthSecurityObservability.class);
 
     private final AuthController controller = new AuthController(
             emailSenderService,
@@ -63,7 +70,10 @@ class AuthControllerAbuseProtectionTest {
             signupOtpChallengeService,
             signupAbuseLimiter,
             clientIpResolver,
-            signupOtpObservability);
+            signupOtpObservability,
+            loginRateLimiter,
+            passwordResetService,
+            authSecurityObservability);
 
     @BeforeEach
     void resetMocks() {
@@ -77,7 +87,10 @@ class AuthControllerAbuseProtectionTest {
                 signupOtpChallengeService,
                 signupAbuseLimiter,
                 clientIpResolver,
-                signupOtpObservability);
+                signupOtpObservability,
+                loginRateLimiter,
+                passwordResetService,
+                authSecurityObservability);
         when(userRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
         when(userRepository.findByPhoneNormalized(anyString())).thenReturn(List.of());
         when(userRepository.findByPhoneIsNotNull()).thenReturn(List.of());

@@ -78,7 +78,9 @@ public class StoreSettingsController {
         }
         String email = jwtUtil.getEmailFromToken(token);
         Optional<User> user = userRepository.findByEmailIgnoreCase(email);
-        return user.filter(value -> RoleAccess.isAdmin(value.getRole())).isPresent();
+        return user.filter(value -> jwtUtil.validateTokenForUser(token, value))
+                .filter(value -> RoleAccess.isAdmin(value.getRole()))
+                .isPresent();
     }
 
     private double toDouble(Object value, double fallback) {

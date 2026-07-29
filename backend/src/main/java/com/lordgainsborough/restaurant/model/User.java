@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Document(collection = "users")
@@ -25,6 +26,9 @@ public class User {
     private String memberSince;
     private LocalDateTime createdAt = LocalDateTime.now();
     private LocalDateTime lastProfileUpdateAt;
+    private long tokenVersion = 0L;
+    private Instant passwordChangedAt;
+    private String lastPasswordResetOperationId;
 
     /** Cumulative pickup no-shows recorded by KDS. Pickup is blocked at 3+. */
     private int noShowCount = 0;
@@ -59,6 +63,15 @@ public class User {
 
     public LocalDateTime getLastProfileUpdateAt() { return lastProfileUpdateAt; }
     public void setLastProfileUpdateAt(LocalDateTime lastProfileUpdateAt) { this.lastProfileUpdateAt = lastProfileUpdateAt; }
+
+    public long getTokenVersion() { return tokenVersion; }
+    public void setTokenVersion(long tokenVersion) { this.tokenVersion = tokenVersion; }
+
+    public Instant getPasswordChangedAt() { return passwordChangedAt; }
+    public void setPasswordChangedAt(Instant passwordChangedAt) { this.passwordChangedAt = passwordChangedAt; }
+
+    public String getLastPasswordResetOperationId() { return lastPasswordResetOperationId; }
+    public void setLastPasswordResetOperationId(String value) { this.lastPasswordResetOperationId = value; }
 
     public int getNoShowCount() { return noShowCount; }
     public void setNoShowCount(int noShowCount) { this.noShowCount = noShowCount; }

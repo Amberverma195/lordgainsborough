@@ -179,9 +179,10 @@
   border: 1px solid var(--glass-border);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
+  color: #fff;
   font-size: 0.9rem;
   font-weight: 600;
+  cursor: pointer;
 }
 
 .orderDateField input[type="date"] {
@@ -191,6 +192,14 @@
   font: inherit;
   padding: 0.15rem 0;
   min-width: 9.5rem;
+  color-scheme: dark;
+  cursor: pointer;
+}
+
+.orderDateField input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 1;
+  filter: none;
 }
 
 .orderDateField input[type="date"]:focus {

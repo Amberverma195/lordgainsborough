@@ -1,11 +1,20 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogIn, Mail, Lock, ArrowRight, X, Eye, EyeOff } from 'lucide-react';
 import styles from './LoginModal.module.css';
 import { persistAuth, type AuthData } from '@/lib/auth';
+import {
+  createServerCooldown,
+  LoginApiResponse,
+  loginErrorMessage,
+  readJsonObject,
+  remainingServerCooldownSeconds,
+  resolveRetryAfterSeconds,
+  ServerCooldownState,
+} from '@/lib/authSecurity';
 import { formatLoginIdentifier } from '@/lib/phone';
 import { API_BASE } from '@/lib/orders';
 
@@ -29,9 +38,27 @@ export default function LoginModal({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [cooldown, setCooldown] = useState<ServerCooldownState | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const requestInFlight = useRef(false);
+  const cooldownSeconds = remainingServerCooldownSeconds(cooldown, nowTick);
+
+  useEffect(() => {
+    if (!cooldown) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setNowTick(now);
+      if (remainingServerCooldownSeconds(cooldown, now) === 0) {
+        setCooldown(null);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (requestInFlight.current || cooldownSeconds > 0) return;
+    requestInFlight.current = true;
     setError('');
     setLoading(true);
 
@@ -46,8 +73,9 @@ export default function LoginModal({
         }),
       });
 
+      const body = await readJsonObject<LoginApiResponse>(res) as LoginApiResponse;
       if (res.ok) {
-        const data: AuthData = await res.json();
+        const data: AuthData = body;
         persistAuth(data);
         window.dispatchEvent(new Event('storage'));
         setEmailOrPhone('');
@@ -57,11 +85,22 @@ export default function LoginModal({
         return;
       }
 
-      const message = await res.text();
-      setError(message || 'Something went wrong. Please try again.');
+      if (res.status === 429 || body.code === 'LOGIN_RATE_LIMITED') {
+        const retrySeconds = resolveRetryAfterSeconds(
+          res.headers.get('Retry-After'),
+          body.retryAfterSeconds,
+          body.serverTime
+        );
+        setCooldown(createServerCooldown(retrySeconds, body.serverTime));
+        setNowTick(Date.now());
+        setError(loginErrorMessage(res.status, body.code));
+        return;
+      }
+      setError(loginErrorMessage(res.status, body.code));
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   };
@@ -74,7 +113,7 @@ export default function LoginModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          onClick={onClose}
+          onClick={loading ? undefined : onClose}
         >
           <motion.div
             className={`${styles.modal} premium-card`}
@@ -87,7 +126,13 @@ export default function LoginModal({
             aria-modal="true"
             aria-labelledby="login-modal-title"
           >
-            <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close">
+            <button
+              type="button"
+              className={styles.closeBtn}
+              onClick={onClose}
+              aria-label="Close"
+              disabled={loading}
+            >
               <X size={18} />
             </button>
 
@@ -111,6 +156,7 @@ export default function LoginModal({
                   placeholder="Email or phone number"
                   value={emailOrPhone}
                   onChange={e => setEmailOrPhone(formatLoginIdentifier(e.target.value))}
+                  disabled={loading}
                   required
                   autoFocus
                 />
@@ -124,6 +170,7 @@ export default function LoginModal({
                     placeholder="••••••••"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
+                    disabled={loading}
                     required
                   />
                   <button
@@ -131,14 +178,23 @@ export default function LoginModal({
                     className={styles.passwordToggle}
                     onClick={() => setShowPassword(prev => !prev)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    disabled={loading}
                   >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
 
-              <button type="submit" className={styles.loginBtn} disabled={loading}>
-                {loading ? 'Authenticating...' : 'Sign In'} <ArrowRight size={18} />
+              <button
+                type="submit"
+                className={styles.loginBtn}
+                disabled={loading || cooldownSeconds > 0}
+              >
+                {loading
+                  ? 'Authenticating...'
+                  : cooldownSeconds > 0
+                    ? `Try Again (${cooldownSeconds}s)`
+                    : 'Sign In'} <ArrowRight size={18} />
               </button>
             </form>
 

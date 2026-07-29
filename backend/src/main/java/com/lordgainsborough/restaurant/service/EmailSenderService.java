@@ -45,7 +45,35 @@ public class EmailSenderService {
         String subject = "Lord Gainsborough - Your Verification Code";
         String plainText = buildPlainText(otpCode);
         String htmlContent = buildHtmlContent(otpCode);
+        send(recipientEmail, subject, plainText, htmlContent, sendOperationId);
+    }
 
+    public void sendPasswordResetCodeEmail(
+            String recipientEmail,
+            String otpCode,
+            String sendOperationId) {
+        String subject = "Lord Gainsborough - Password Reset Code";
+        String plainText = "Lord Gainsborough - Password Reset\n\n"
+                + "Your password reset code is: " + otpCode + "\n\n"
+                + "This code expires in 10 minutes.\n"
+                + "If you did not request this reset, you can safely ignore this email.";
+        String htmlContent = "<div style='font-family: Arial, sans-serif; max-width: 450px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;'>"
+                + "<h2 style='color: #1a1a1a;'>Reset Your Password</h2>"
+                + "<p>Use this code to reset your Lord Gainsborough account password:</p>"
+                + "<div style='text-align: center; margin: 20px 0;'>"
+                + "<h1 style='color: #0284c7; background: #f0f9ff; display: inline-block; padding: 10px 25px; border-radius: 5px; letter-spacing: 5px; font-size: 32px; margin: 0;'>"
+                + otpCode + "</h1></div>"
+                + "<p style='color: #666; font-size: 13px;'>This code is valid for 10 minutes. If you did not request a password reset, ignore this message.</p>"
+                + "</div>";
+        send(recipientEmail, subject, plainText, htmlContent, sendOperationId);
+    }
+
+    private void send(
+            String recipientEmail,
+            String subject,
+            String plainText,
+            String htmlContent,
+            String sendOperationId) {
         if (brevoApiEmailService.isConfigured()) {
             try {
                 brevoApiEmailService.sendEmail(

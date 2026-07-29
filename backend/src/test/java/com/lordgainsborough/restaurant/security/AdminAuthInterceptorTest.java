@@ -68,6 +68,7 @@ class AdminAuthInterceptorTest {
         when(jwtUtil.validateToken("staff-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("staff-token")).thenReturn("staff@example.com");
         when(userRepository.findByEmailIgnoreCase("staff@example.com")).thenReturn(Optional.of(staff));
+        when(jwtUtil.validateTokenForUser("staff-token", staff)).thenReturn(true);
 
         assertFalse(interceptor.preHandle(request, response, new Object()));
         assertEquals(404, response.getStatus());
@@ -85,6 +86,7 @@ class AdminAuthInterceptorTest {
         when(jwtUtil.validateToken("staff-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("staff-token")).thenReturn("staff@example.com");
         when(userRepository.findByEmailIgnoreCase("staff@example.com")).thenReturn(Optional.of(staff));
+        when(jwtUtil.validateTokenForUser("staff-token", staff)).thenReturn(true);
 
         assertFalse(interceptor.preHandle(request, response, new Object()));
         assertEquals(404, response.getStatus());
@@ -102,6 +104,7 @@ class AdminAuthInterceptorTest {
         when(jwtUtil.validateToken("admin-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("admin-token")).thenReturn("admin@example.com");
         when(userRepository.findByEmailIgnoreCase("admin@example.com")).thenReturn(Optional.of(admin));
+        when(jwtUtil.validateTokenForUser("admin-token", admin)).thenReturn(true);
 
         assertTrue(interceptor.preHandle(request, response, new Object()));
         assertEquals(200, response.getStatus());
@@ -119,6 +122,7 @@ class AdminAuthInterceptorTest {
         when(jwtUtil.validateToken("staff-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("staff-token")).thenReturn("staff@example.com");
         when(userRepository.findByEmailIgnoreCase("staff@example.com")).thenReturn(Optional.of(staff));
+        when(jwtUtil.validateTokenForUser("staff-token", staff)).thenReturn(true);
 
         assertFalse(interceptor.preHandle(request, response, new Object()));
         assertEquals(404, response.getStatus());

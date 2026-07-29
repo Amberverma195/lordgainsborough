@@ -446,6 +446,8 @@ class SignupOtpChallengeMongoConcurrencyTest {
 
         JwtUtil jwtUtil = mock(JwtUtil.class);
         when(jwtUtil.generateToken(anyString(), anyString())).thenReturn("test-token");
+        when(jwtUtil.generateToken(anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn("test-token");
 
         return new AuthController(
                 emailSenderService,
@@ -457,7 +459,10 @@ class SignupOtpChallengeMongoConcurrencyTest {
                 signupService,
                 abuseLimiter,
                 clientIpResolver,
-                observability);
+                observability,
+                mock(LoginRateLimiter.class),
+                mock(PasswordResetService.class),
+                mock(AuthSecurityObservability.class));
     }
 
     private static HttpServletRequest httpRequest() {

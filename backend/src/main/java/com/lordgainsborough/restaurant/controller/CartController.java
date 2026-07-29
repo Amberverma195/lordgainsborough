@@ -106,6 +106,7 @@ public class CartController {
         }
 
         String email = jwtUtil.getEmailFromToken(token);
-        return userRepository.findByEmail(email);
+        return userRepository.findByEmailIgnoreCase(email)
+                .filter(user -> jwtUtil.validateTokenForUser(token, user));
     }
 }

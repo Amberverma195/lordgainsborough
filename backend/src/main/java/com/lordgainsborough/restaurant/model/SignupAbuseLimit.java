@@ -13,7 +13,13 @@ public class SignupAbuseLimit {
         INITIAL_SEND_IP,
         TOTAL_SEND_IP,
         VERIFY_IP,
-        GLOBAL_PROVIDER_SEND
+        GLOBAL_PROVIDER_SEND,
+        LOGIN_REQUEST_IP,
+        RESET_NEW_CHALLENGE_EMAIL,
+        RESET_EMAIL_OPERATION_IP,
+        RESET_VERIFICATION_IP,
+        RESET_GLOBAL_EMAIL_OPERATION,
+        RESET_IDEMPOTENCY
     }
 
     @Id

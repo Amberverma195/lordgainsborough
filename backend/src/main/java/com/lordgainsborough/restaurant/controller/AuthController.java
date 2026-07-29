@@ -2,6 +2,9 @@ package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.dto.AuthResponse;
 import com.lordgainsborough.restaurant.dto.LoginRequest;
+import com.lordgainsborough.restaurant.dto.LoginResponse;
+import com.lordgainsborough.restaurant.dto.PasswordResetResendRequest;
+import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
 import com.lordgainsborough.restaurant.dto.ProfileVerificationRequest;
 import com.lordgainsborough.restaurant.dto.ProfileVerificationResponse;
 import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
@@ -20,7 +23,10 @@ import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
+import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
+import com.lordgainsborough.restaurant.service.LoginRateLimiter;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.PasswordResetService;
 import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
@@ -35,6 +41,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -69,6 +76,9 @@ public class AuthController {
     private final SignupAbuseLimiter signupAbuseLimiter;
     private final ClientIpResolver clientIpResolver;
     private final SignupOtpObservability signupOtpObservability;
+    private final LoginRateLimiter loginRateLimiter;
+    private final PasswordResetService passwordResetService;
+    private final AuthSecurityObservability authSecurityObservability;
 
     public AuthController(
             EmailSenderService emailSenderService,
@@ -80,7 +90,10 @@ public class AuthController {
             SignupOtpChallengeService signupOtpChallengeService,
             SignupAbuseLimiter signupAbuseLimiter,
             ClientIpResolver clientIpResolver,
-            SignupOtpObservability signupOtpObservability) {
+            SignupOtpObservability signupOtpObservability,
+            LoginRateLimiter loginRateLimiter,
+            PasswordResetService passwordResetService,
+            AuthSecurityObservability authSecurityObservability) {
         this.emailSenderService = emailSenderService;
         this.userRepository = userRepository;
         this.orderRepository = orderRepository;
@@ -91,6 +104,9 @@ public class AuthController {
         this.signupAbuseLimiter = signupAbuseLimiter;
         this.clientIpResolver = clientIpResolver;
         this.signupOtpObservability = signupOtpObservability;
+        this.loginRateLimiter = loginRateLimiter;
+        this.passwordResetService = passwordResetService;
+        this.authSecurityObservability = authSecurityObservability;
     }
 
     @PostMapping("/signup")
@@ -171,105 +187,208 @@ public class AuthController {
                     "Unable to complete signup with the provided details."));
         }
 
-        String token = jwtUtil.generateToken(user.getId(), user.getEmail());
+        String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         signupOtpChallengeService.clear(email);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(createAuthResponse(user, token));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest request) {
+    public ResponseEntity<?> login(@RequestBody LoginRequest request, HttpServletRequest httpRequest) {
+        Instant now = Instant.now();
+        String clientIp = resolveClientIp(httpRequest);
+        var ipLimit = loginRateLimiter.consumeIpRequest(clientIp);
+        if (ipLimit.isPresent()) {
+            return loginRateLimited(ipLimit.getAsLong(), now, AuthSecurityObservability.Reason.IP_LIMIT);
+        }
+
         String identifier = request.getEmailOrPhone() == null ? "" : request.getEmailOrPhone().trim();
         if (identifier.isBlank() || request.getPassword() == null || request.getPassword().isBlank()) {
-            return ResponseEntity.badRequest().body("Email or phone number and password are required.");
+            return ResponseEntity.badRequest().body(LoginResponse.error(
+                    "LOGIN_INVALID_REQUEST",
+                    "Email or phone number and password are required.",
+                    null,
+                    now));
         }
 
         boolean loginWithEmail = looksLikeEmail(identifier);
+        String normalizedIdentifier;
         Optional<User> userOpt;
 
         if (loginWithEmail) {
-            userOpt = userRepository.findByEmailIgnoreCase(normalizeEmail(identifier));
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body("No account found with this email.");
-            }
+            normalizedIdentifier = normalizeEmail(identifier);
+            userOpt = userRepository.findByEmailIgnoreCase(normalizedIdentifier);
         } else {
             String normalizedPhone = normalizePhone(identifier);
             if (normalizedPhone.length() != 10) {
-                return ResponseEntity.badRequest()
-                        .body("Enter a valid email address or 10-digit phone number.");
+                return invalidLoginCredentials("", clientIp, request.getPassword(), Optional.empty(), now);
             }
+            normalizedIdentifier = normalizedPhone;
             userOpt = findUserByPhone(normalizedPhone);
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body("No account found with this phone number.");
-            }
+        }
+
+        var cooldown = loginRateLimiter.activeCooldown(normalizedIdentifier, clientIp);
+        if (cooldown.isPresent()) {
+            return loginRateLimited(
+                    cooldown.getAsLong(),
+                    now,
+                    AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
+        }
+
+        if (userOpt.isEmpty()) {
+            return invalidLoginCredentials(
+                    normalizedIdentifier,
+                    clientIp,
+                    request.getPassword(),
+                    Optional.empty(),
+                    now);
         }
 
         User user = userOpt.get();
         if (!PasswordUtil.checkPassword(request.getPassword(), user.getPassword())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Incorrect password.");
+            return invalidLoginCredentials(
+                    normalizedIdentifier,
+                    clientIp,
+                    request.getPassword(),
+                    userOpt,
+                    now);
         }
 
-        String token = jwtUtil.generateToken(user.getId(), user.getEmail());
-        return ResponseEntity.ok(createAuthResponse(user, token));
+        // A concurrent failure may have started a cooldown while BCrypt was running.
+        cooldown = loginRateLimiter.activeCooldown(normalizedIdentifier, clientIp);
+        if (cooldown.isPresent()) {
+            return loginRateLimited(
+                    cooldown.getAsLong(),
+                    now,
+                    AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
+        }
+
+        loginRateLimiter.clearFailures(normalizedIdentifier, clientIp);
+        String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
+        authSecurityObservability.record(
+                AuthSecurityObservability.Flow.LOGIN,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.LOGIN_SUCCESS);
+        return ResponseEntity.ok(LoginResponse.success(createAuthResponse(user, token), now));
     }
 
     @PostMapping("/forgot-password/send-otp")
-    public ResponseEntity<String> sendPasswordResetOtp(@RequestBody SendOtpRequest request) {
+    public ResponseEntity<PasswordResetResponse> sendPasswordResetOtp(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody SendOtpRequest request,
+            HttpServletRequest httpRequest) {
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
-            return ResponseEntity.badRequest().body("Email is required.");
+            return ResponseEntity.badRequest().body(PasswordResetResponse.of(
+                    "RESET_CODE_INVALID",
+                    "Email is required.",
+                    Instant.now()));
         }
 
         Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("No account exists with this email.");
-        }
+        PasswordResetService.Result result = passwordResetService.requestInitial(
+                email,
+                userOpt,
+                resolveClientIp(httpRequest),
+                idempotencyKey);
+        return passwordResetResponse(result);
+    }
 
-        try {
-            String generatedOtp = generateOtp();
-            otpService.storeOtpForKey(passwordResetOtpKey(email), generatedOtp);
-            emailSenderService.sendOtpEmail(userOpt.get().getEmail(), generatedOtp);
-            return ResponseEntity.ok("Reset code sent to " + userOpt.get().getEmail() + ".");
-        } catch (Exception e) {
-            logSafeAuthFailure("password_reset_otp_send", e);
-            return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
+    @PostMapping("/forgot-password/resend-otp")
+    public ResponseEntity<PasswordResetResponse> resendPasswordResetOtp(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody PasswordResetResendRequest request,
+            HttpServletRequest httpRequest) {
+        String email = normalizeEmail(request.getEmail());
+        if (email.isBlank()) {
+            return ResponseEntity.badRequest().body(PasswordResetResponse.of(
+                    "RESET_CODE_INVALID",
+                    "Email is required.",
+                    Instant.now()));
         }
+        PasswordResetService.Result result = passwordResetService.resend(
+                email,
+                request.getChallengeId(),
+                resolveClientIp(httpRequest),
+                idempotencyKey);
+        return passwordResetResponse(result);
     }
 
     @PostMapping("/forgot-password/reset")
-    public ResponseEntity<String> resetPassword(@RequestBody ResetPasswordRequest request) {
+    public ResponseEntity<PasswordResetResponse> resetPassword(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody ResetPasswordRequest request,
+            HttpServletRequest httpRequest) {
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
-            return ResponseEntity.badRequest().body("Email is required.");
+            return ResponseEntity.badRequest().body(PasswordResetResponse.of(
+                    "RESET_CODE_INVALID",
+                    "Email is required.",
+                    Instant.now()));
         }
+        PasswordResetService.Result result = passwordResetService.complete(
+                email,
+                request.getChallengeId(),
+                request.getOtp(),
+                request.getPassword(),
+                resolveClientIp(httpRequest),
+                idempotencyKey);
+        return passwordResetResponse(result);
+    }
 
-        String otp = normalizeOtp(request.getOtp());
-        if (otp.isBlank()) {
-            return ResponseEntity.badRequest().body("Verification code is required.");
+    private ResponseEntity<LoginResponse> invalidLoginCredentials(
+            String normalizedIdentifier,
+            String clientIp,
+            String suppliedPassword,
+            Optional<User> user,
+            Instant now) {
+        if (user.isEmpty()) {
+            PasswordUtil.dummyPasswordCheck(suppliedPassword);
         }
-
-        String password = sanitizePassword(request.getPassword());
-        Optional<String> passwordError = validateNewPassword(password);
-        if (passwordError.isPresent()) {
-            return ResponseEntity.badRequest().body(passwordError.get());
+        LoginRateLimiter.FailureResult failure =
+                loginRateLimiter.recordFailure(normalizedIdentifier, clientIp);
+        if (failure.denied()) {
+            return loginRateLimited(
+                    failure.retryAfterSeconds(),
+                    now,
+                    AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
         }
+        authSecurityObservability.record(
+                AuthSecurityObservability.Flow.LOGIN,
+                AuthSecurityObservability.Outcome.INVALID,
+                AuthSecurityObservability.Reason.INVALID_CREDENTIALS);
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(LoginResponse.error(
+                "LOGIN_INVALID_CREDENTIALS",
+                "Invalid email, phone number, or password.",
+                null,
+                now));
+    }
 
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("No account exists with this email.");
+    private ResponseEntity<LoginResponse> loginRateLimited(
+            long retryAfterSeconds,
+            Instant now,
+            AuthSecurityObservability.Reason reason) {
+        authSecurityObservability.record(
+                AuthSecurityObservability.Flow.LOGIN,
+                AuthSecurityObservability.Outcome.DENIED,
+                reason);
+        LoginResponse body = LoginResponse.error(
+                "LOGIN_RATE_LIMITED",
+                "Too many login attempts. Please try again later.",
+                Math.max(1L, retryAfterSeconds),
+                now);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", String.valueOf(Math.max(1L, retryAfterSeconds)))
+                .body(body);
+    }
+
+    private ResponseEntity<PasswordResetResponse> passwordResetResponse(
+            PasswordResetService.Result result) {
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(result.status());
+        if (result.retryAfterSeconds() > 0) {
+            builder.header("Retry-After", String.valueOf(result.retryAfterSeconds()));
         }
-
-        if (!otpService.verifyOtpForKey(passwordResetOtpKey(email), otp)) {
-            return ResponseEntity.badRequest().body("Invalid or expired verification code.");
-        }
-
-        User user = userOpt.get();
-        user.setPassword(PasswordUtil.hashPassword(password));
-        userRepository.save(user);
-
-        return ResponseEntity.ok("Password reset successfully.");
+        return builder.body(result.body());
     }
 
     @GetMapping("/me")
@@ -284,7 +403,8 @@ public class AuthController {
         }
 
         String email = jwtUtil.getEmailFromToken(token);
-        Optional<User> userOpt = userRepository.findByEmail(email);
+        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email)
+                .filter(user -> jwtUtil.validateTokenForUser(token, user));
 
         if (userOpt.isEmpty()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("User not found.");
@@ -412,7 +532,7 @@ public class AuthController {
         user.setName(request.getName().trim());
         userRepository.save(user);
 
-        String token = jwtUtil.generateToken(user.getId(), user.getEmail());
+        String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         return ResponseEntity.ok(createAuthResponse(user, token));
     }
 
@@ -660,20 +780,6 @@ public class AuthController {
         return response;
     }
 
-    // Moved from root to /api/auth/send-otp
-    @GetMapping("/send-otp")
-    public ResponseEntity<String> requestOtp(@RequestParam String email) {
-        try {
-            String generatedOtp = generateOtp();
-            otpService.storeOtp(email, generatedOtp);
-            emailSenderService.sendOtpEmail(email, generatedOtp);
-            return ResponseEntity.ok("OTP successfully sent to " + email);
-        } catch (Exception e) {
-            logSafeAuthFailure("legacy_otp_send", e);
-            return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
-        }
-    }
-
     private String generateOtp() {
         SecureRandom random = new SecureRandom();
         return String.valueOf(100000 + random.nextInt(900000));
@@ -705,7 +811,8 @@ public class AuthController {
         }
 
         String email = jwtUtil.getEmailFromToken(token);
-        return userRepository.findByEmail(email);
+        return userRepository.findByEmailIgnoreCase(email)
+                .filter(user -> jwtUtil.validateTokenForUser(token, user));
     }
 
     private void applyReviewState(CustomerOrder order) {
@@ -733,10 +840,6 @@ public class AuthController {
 
     private String profilePhoneOtpKey(String userId) {
         return "profile-phone:" + userId;
-    }
-
-    private String passwordResetOtpKey(String email) {
-        return "password-reset:" + email.trim().toLowerCase();
     }
 
     private boolean looksLikeEmail(String identifier) {

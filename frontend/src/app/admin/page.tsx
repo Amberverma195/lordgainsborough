@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import styles from './admin.module.css';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -168,6 +168,7 @@ export default function AdminPage() {
   const [orderPeriodFilter, setOrderPeriodFilter] = useState<'all' | 'today' | 'week'>('all');
   const [orderDateFilter, setOrderDateFilter] = useState(getTodayString());
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const orderHistoryDateRef = useRef<HTMLInputElement>(null);
   const [showMenuForm, setShowMenuForm] = useState(false);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
@@ -220,6 +221,23 @@ export default function AdminPage() {
   const showNotification = (message: string, type: 'success' | 'error') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const openOrderHistoryDatePicker = () => {
+    const input = orderHistoryDateRef.current;
+    if (!input) {
+      return;
+    }
+    if (typeof input.showPicker === 'function') {
+      try {
+        input.showPicker();
+        return;
+      } catch {
+        // Fall through if the browser blocks showPicker outside a user gesture edge case.
+      }
+    }
+    input.focus();
+    input.click();
   };
 
   const fetchCategories = useCallback(async () => {
@@ -1237,10 +1255,20 @@ export default function AdminPage() {
               </p>
             </div>
             <div className={styles.orderDateControls}>
-              <label className={styles.orderDateField} htmlFor="orderHistoryDate">
+              <label
+                className={styles.orderDateField}
+                htmlFor="orderHistoryDate"
+                onClick={event => {
+                  // Open the native picker when clicking the whole control (icon/label included).
+                  // Without this, Chromium often only reacts to the tiny calendar glyph.
+                  event.preventDefault();
+                  openOrderHistoryDatePicker();
+                }}
+              >
                 <CalendarDays size={16} aria-hidden />
                 <span>Pickup date</span>
                 <input
+                  ref={orderHistoryDateRef}
                   id="orderHistoryDate"
                   type="date"
                   value={orderDateFilter || getTodayString()}
@@ -1248,6 +1276,7 @@ export default function AdminPage() {
                     setOrderDateFilter(event.target.value || getTodayString());
                     setOrderPeriodFilter('all');
                   }}
+                  onClick={event => event.stopPropagation()}
                 />
               </label>
               {orderDateFilter !== getTodayString() && (

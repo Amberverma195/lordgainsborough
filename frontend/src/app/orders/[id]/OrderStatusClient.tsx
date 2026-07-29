@@ -17,9 +17,7 @@ import {
   getStoredTrackingToken,
   orderStatusLabel,
 } from '@/lib/orders';
-
-const RESTAURANT_PHONE_DISPLAY = '519-472-4168';
-const RESTAURANT_PHONE_TEL = '+15194724168';
+import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
 
 function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<string, string>): string {
   if (status === 'NEW') return styleMap.statusNew;
@@ -57,6 +55,35 @@ function formatTimestamp(value?: string | null) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function formatOrdinalDay(day: number): string {
+  const rem10 = day % 10;
+  const rem100 = day % 100;
+  if (rem10 === 1 && rem100 !== 11) return `${day}st`;
+  if (rem10 === 2 && rem100 !== 12) return `${day}nd`;
+  if (rem10 === 3 && rem100 !== 13) return `${day}rd`;
+  return `${day}th`;
+}
+
+function formatPickedUpDateLabel(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  if (!year || !month || !day) {
+    return isoDate;
+  }
+  const monthName = new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'long' });
+  return `${formatOrdinalDay(day)} ${monthName}`;
+}
+
+function formatPickedUpTimeLabel(value?: string | null): string {
+  if (!value) {
+    return '';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 type OrderStatusClientProps = {
@@ -255,6 +282,8 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     NO_SHOW: 0,
   }[order.status];
   const isAsap = order.pickupTime?.trim().toLowerCase() === 'asap';
+  const isPickedUp = order.status === 'PICKED_UP';
+  const pickedUpTimeLabel = formatPickedUpTimeLabel(order.pickedUpAt);
 
   return (
     <main className={styles.container}>
@@ -262,15 +291,27 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         <p className={styles.eyebrow}>Order Status</p>
         <h1>#{formatOrderId(order.id)}</h1>
         <div className={styles.orderMeta}>
-          <span>{formatPickupDateLabel(order.pickupDate)}</span>
-          <span>{formatPickupTimeLabel(order.pickupTime)}</span>
-          {isAsap && <span>About {order.averageReadyMinutes} min</span>}
+          {isPickedUp ? (
+            <>
+              <span>Picked up</span>
+              <span>{formatPickedUpDateLabel(order.pickupDate)}</span>
+              {pickedUpTimeLabel && <span>{pickedUpTimeLabel}</span>}
+            </>
+          ) : (
+            <>
+              <span>{formatPickupDateLabel(order.pickupDate)}</span>
+              <span>{formatPickupTimeLabel(order.pickupTime)}</span>
+              {isAsap && <span>About {order.averageReadyMinutes} min</span>}
+            </>
+          )}
         </div>
-        <div className={styles.statusRow}>
-          <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
-            {orderStatusLabel(order.status)}
-          </span>
-        </div>
+        {!isPickedUp && (
+          <div className={styles.statusRow}>
+            <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
+              {orderStatusLabel(order.status)}
+            </span>
+          </div>
+        )}
       </header>
 
       <section className={styles.actionBar}>
@@ -327,7 +368,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
           onClick={() => setTimelineOpen(open => !open)}
           aria-expanded={timelineOpen}
         >
-          <span><Clock3 size={18} /> Live order timeline</span>
+          <span><Clock3 size={18} /> Order updates</span>
           <ChevronDown className={timelineOpen ? styles.chevronOpen : ''} size={18} />
         </button>
         {timelineOpen && (

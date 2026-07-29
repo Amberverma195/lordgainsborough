@@ -43,6 +43,16 @@ class ClientIpResolverTest {
     }
 
     @Test
+    void ignoresAttackerSuppliedLeftmostHopWhenTrustedProxyAppendsClientAddress() {
+        String resolved = resolver.resolve(
+                "10.0.0.5",
+                "192.0.2.77, 198.51.100.20, 10.0.0.5",
+                null);
+
+        assertEquals("198.51.100.20", resolved);
+    }
+
+    @Test
     void trustsXRealIpWhenPeerIsLoopbackAndNoXff() {
         String resolved = resolver.resolve("127.0.0.1", null, "203.0.113.9");
         assertEquals("203.0.113.9", resolved);

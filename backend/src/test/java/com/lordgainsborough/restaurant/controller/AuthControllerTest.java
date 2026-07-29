@@ -1,7 +1,7 @@
 package com.lordgainsborough.restaurant.controller;
 
-import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
 import com.lordgainsborough.restaurant.dto.SendOtpRequest;
+import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
 import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
@@ -11,9 +11,11 @@ import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
-import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
+import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
+import com.lordgainsborough.restaurant.service.LoginRateLimiter;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.PasswordResetService;
 import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
@@ -21,7 +23,6 @@ import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -50,7 +51,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AuthControllerTest {
@@ -66,6 +66,10 @@ class AuthControllerTest {
     private final ClientIpResolver clientIpResolver = mock(ClientIpResolver.class);
     private final SignupOtpObservability signupOtpObservability =
             mock(SignupOtpObservability.class);
+    private final LoginRateLimiter loginRateLimiter = mock(LoginRateLimiter.class);
+    private final PasswordResetService passwordResetService = mock(PasswordResetService.class);
+    private final AuthSecurityObservability authSecurityObservability =
+            mock(AuthSecurityObservability.class);
     private final HttpServletRequest httpRequest = mock(HttpServletRequest.class);
     private final AuthController controller = new AuthController(
             emailSenderService,
@@ -77,7 +81,10 @@ class AuthControllerTest {
             signupOtpChallengeService,
             signupAbuseLimiter,
             clientIpResolver,
-            signupOtpObservability);
+            signupOtpObservability,
+            loginRateLimiter,
+            passwordResetService,
+            authSecurityObservability);
 
     @BeforeEach
     void resetMocks() {
@@ -92,6 +99,9 @@ class AuthControllerTest {
                 signupAbuseLimiter,
                 clientIpResolver,
                 signupOtpObservability,
+                loginRateLimiter,
+                passwordResetService,
+                authSecurityObservability,
                 httpRequest);
         when(httpRequest.getRemoteAddr()).thenReturn("127.0.0.1");
         when(clientIpResolver.resolve(anyString(), nullable(String.class), nullable(String.class)))
@@ -126,92 +136,54 @@ class AuthControllerTest {
     }
 
     @Test
-    void sendPasswordResetOtpSanitizesEmailAndStoresPasswordResetKeyForExistingUser() {
+    void passwordResetRequestUsesGenericServiceResponseForExistingAccount() {
         User existing = new User();
         existing.setEmail("Member@Example.com");
-
         when(userRepository.findByEmailIgnoreCase("member@example.com")).thenReturn(Optional.of(existing));
+        PasswordResetResponse body = PasswordResetResponse.of(
+                "RESET_CODE_SENT",
+                "If an account exists for that email, a reset code has been sent.",
+                java.time.Instant.parse("2026-07-13T12:00:00Z"));
+        when(passwordResetService.requestInitial(
+                eq("member@example.com"),
+                eq(Optional.of(existing)),
+                eq("127.0.0.1"),
+                eq("request-key")))
+                .thenReturn(new PasswordResetService.Result(HttpStatus.ACCEPTED, body, 0L));
 
         SendOtpRequest request = new SendOtpRequest();
         request.setEmail("  Member@Example.com\u200B  ");
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp("request-key", request, httpRequest);
 
-        ResponseEntity<String> response = controller.sendPasswordResetOtp(request);
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals("Reset code sent to Member@Example.com.", response.getBody());
-        verify(otpService).storeOtpForKey(eq("password-reset:member@example.com"), anyString());
-        verify(emailSenderService).sendOtpEmail(eq("Member@Example.com"), anyString());
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals("RESET_CODE_SENT", response.getBody().getCode());
     }
 
     @Test
-    void sendPasswordResetOtpDoesNotEmailUnknownAccounts() {
+    void passwordResetRequestUsesSamePublicShapeForUnknownAccount() {
         when(userRepository.findByEmailIgnoreCase("missing@example.com")).thenReturn(Optional.empty());
+        PasswordResetResponse body = PasswordResetResponse.of(
+                "RESET_CODE_SENT",
+                "If an account exists for that email, a reset code has been sent.",
+                java.time.Instant.parse("2026-07-13T12:00:00Z"));
+        when(passwordResetService.requestInitial(
+                eq("missing@example.com"),
+                eq(Optional.empty()),
+                eq("127.0.0.1"),
+                eq("request-key")))
+                .thenReturn(new PasswordResetService.Result(HttpStatus.ACCEPTED, body, 0L));
 
         SendOtpRequest request = new SendOtpRequest();
         request.setEmail("missing@example.com");
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp("request-key", request, httpRequest);
 
-        ResponseEntity<String> response = controller.sendPasswordResetOtp(request);
-
-        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
-        assertEquals("No account exists with this email.", response.getBody());
-        verifyNoInteractions(emailSenderService);
-        verify(otpService, never()).storeOtpForKey(anyString(), anyString());
-    }
-
-    @Test
-    void resetPasswordRejectsUnknownEmailBeforeCheckingOtp() {
-        when(userRepository.findByEmailIgnoreCase("missing@example.com")).thenReturn(Optional.empty());
-
-        ResponseEntity<String> response = controller.resetPassword(resetPasswordRequest(
-                "missing@example.com",
-                "123456",
-                "NewPassword1!"));
-
-        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
-        assertEquals("No account exists with this email.", response.getBody());
-        verify(otpService, never()).verifyOtpForKey(anyString(), anyString());
-        verify(userRepository, never()).save(org.mockito.ArgumentMatchers.any(User.class));
-    }
-
-    @Test
-    void resetPasswordRejectsInvalidPasswordResetOtp() {
-        User existing = new User();
-        existing.setEmail("member@example.com");
-        existing.setPassword("old-hash");
-
-        when(userRepository.findByEmailIgnoreCase("member@example.com")).thenReturn(Optional.of(existing));
-        when(otpService.verifyOtpForKey("password-reset:member@example.com", "123456")).thenReturn(false);
-
-        ResponseEntity<String> response = controller.resetPassword(resetPasswordRequest(
-                "member@example.com",
-                "123456",
-                "NewPassword1!"));
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals("Invalid or expired verification code.", response.getBody());
-        verify(userRepository, never()).save(org.mockito.ArgumentMatchers.any(User.class));
-    }
-
-    @Test
-    void resetPasswordHashesAndSavesNewPasswordAfterValidOtp() {
-        User existing = new User();
-        existing.setEmail("member@example.com");
-        existing.setPassword("old-hash");
-
-        when(userRepository.findByEmailIgnoreCase("member@example.com")).thenReturn(Optional.of(existing));
-        when(otpService.verifyOtpForKey("password-reset:member@example.com", "123456")).thenReturn(true);
-
-        ResponseEntity<String> response = controller.resetPassword(resetPasswordRequest(
-                "member@example.com",
-                "123456",
-                "NewPassword1!"));
-
-        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).save(userCaptor.capture());
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals("Password reset successfully.", response.getBody());
-        assertTrue(PasswordUtil.checkPassword("NewPassword1!", userCaptor.getValue().getPassword()));
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals("RESET_CODE_SENT", response.getBody().getCode());
+        assertEquals(
+                "If an account exists for that email, a reset code has been sent.",
+                response.getBody().getMessage());
     }
 
     @Test
@@ -228,7 +200,8 @@ class AuthControllerTest {
 
         when(jwtUtil.validateToken("valid-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("valid-token")).thenReturn("member@example.com");
-        when(userRepository.findByEmail("member@example.com")).thenReturn(Optional.of(existing));
+        when(userRepository.findByEmailIgnoreCase("member@example.com")).thenReturn(Optional.of(existing));
+        when(jwtUtil.validateTokenForUser("valid-token", existing)).thenReturn(true);
         when(orderRepository.findByCustomerEmailIgnoreCaseOrderByCreatedAtDesc("member@example.com")).thenReturn(List.of(order));
         when(orderRepository.findByCustomerPhoneOrderByCreatedAtDesc("+1 (555)-123-4567")).thenReturn(List.of(order));
 
@@ -364,11 +337,4 @@ class AuthControllerTest {
         return request;
     }
 
-    private ResetPasswordRequest resetPasswordRequest(String email, String otp, String password) {
-        ResetPasswordRequest request = new ResetPasswordRequest();
-        request.setEmail(email);
-        request.setOtp(otp);
-        request.setPassword(password);
-        return request;
-    }
 }

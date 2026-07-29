@@ -37,12 +37,11 @@ export interface SignupOtpChallengeState {
   message?: string;
 }
 
-/** Credentials required to finish signup — never includes OTP. */
+/** Non-secret account details required to finish signup. */
 export interface PendingSignupCredentials {
   name: string;
   email: string;
   phone: string;
-  password: string;
 }
 
 export const PENDING_SIGNUP_KEY = 'pendingSignup';
@@ -142,7 +141,12 @@ export function isResendExhausted(state: SignupOtpChallengeState | null): boolea
 
 export function savePendingSignupCredentials(credentials: PendingSignupCredentials): void {
   if (typeof sessionStorage === 'undefined') return;
-  sessionStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify(credentials));
+  const safe: PendingSignupCredentials = {
+    name: credentials.name,
+    email: credentials.email,
+    phone: credentials.phone,
+  };
+  sessionStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify(safe));
 }
 
 export function loadPendingSignupCredentials(): PendingSignupCredentials | null {
@@ -150,9 +154,16 @@ export function loadPendingSignupCredentials(): PendingSignupCredentials | null 
   const raw = sessionStorage.getItem(PENDING_SIGNUP_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as PendingSignupCredentials;
-    if (!parsed?.email || !parsed?.password || !parsed?.name) return null;
-    return parsed;
+    const parsed = JSON.parse(raw) as PendingSignupCredentials & { password?: unknown };
+    if (!parsed?.email || !parsed?.name || !parsed?.phone) return null;
+    const safe: PendingSignupCredentials = {
+      name: parsed.name,
+      email: parsed.email,
+      phone: parsed.phone,
+    };
+    // Migrate any legacy value that contained a plaintext password.
+    sessionStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify(safe));
+    return safe;
   } catch {
     return null;
   }

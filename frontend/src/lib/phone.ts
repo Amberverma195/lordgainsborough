@@ -15,6 +15,10 @@ function extractNationalDigits(raw: string): string {
   return allDigits.slice(0, 10);
 }
 
+/** Public restaurant contact number (display + tel: href). */
+export const RESTAURANT_PHONE_DISPLAY = '519-472-4168';
+export const RESTAURANT_PHONE_TEL = '+15194724168';
+
 export function formatPhoneInput(raw: string): string {
   const digits = extractNationalDigits(raw);
 

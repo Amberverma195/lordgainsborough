@@ -61,6 +61,7 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
         String email = jwtUtil.getEmailFromToken(token);
         Predicate<String> allowedRoles = roleCheck.get();
         return userRepository.findByEmailIgnoreCase(email)
+                .filter(user -> jwtUtil.validateTokenForUser(token, user))
                 .filter(user -> allowedRoles.test(user.getRole()))
                 .map(user -> true)
                 .orElseGet(() -> {

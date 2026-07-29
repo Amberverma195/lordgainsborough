@@ -30,7 +30,7 @@ public class ClientIpResolver {
             return peer;
         }
 
-        String fromXff = firstForwardedClient(xForwardedFor);
+        String fromXff = firstUntrustedForwardedClient(xForwardedFor);
         if (fromXff != null) {
             return fromXff;
         }
@@ -68,13 +68,23 @@ public class ClientIpResolver {
         return false;
     }
 
-    private static String firstForwardedClient(String xForwardedFor) {
+    private String firstUntrustedForwardedClient(String xForwardedFor) {
         if (xForwardedFor == null || xForwardedFor.isBlank()) {
             return null;
         }
-        // client, proxy1, proxy2 — leftmost is the original client when proxies append.
-        String first = xForwardedFor.split(",")[0].trim();
-        return normalizeIp(first);
+        // Walk from the trusted edge toward the client. This prevents an attacker-supplied
+        // leftmost value from winning when a trusted proxy appends to X-Forwarded-For.
+        String[] hops = xForwardedFor.split(",");
+        for (int i = hops.length - 1; i >= 0; i--) {
+            String candidate = normalizeIp(hops[i]);
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            if (!isTrustedProxy(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     public static String normalizeIp(String ip) {

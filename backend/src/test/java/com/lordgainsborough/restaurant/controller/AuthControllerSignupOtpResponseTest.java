@@ -10,7 +10,10 @@ import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
+import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
+import com.lordgainsborough.restaurant.service.LoginRateLimiter;
 import com.lordgainsborough.restaurant.service.OtpService;
+import com.lordgainsborough.restaurant.service.PasswordResetService;
 import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
@@ -61,6 +64,10 @@ class AuthControllerSignupOtpResponseTest {
     private final ClientIpResolver clientIpResolver = mock(ClientIpResolver.class);
     private final SignupOtpObservability signupOtpObservability =
             mock(SignupOtpObservability.class);
+    private final LoginRateLimiter loginRateLimiter = mock(LoginRateLimiter.class);
+    private final PasswordResetService passwordResetService = mock(PasswordResetService.class);
+    private final AuthSecurityObservability authSecurityObservability =
+            mock(AuthSecurityObservability.class);
     private final HttpServletRequest httpRequest = mock(HttpServletRequest.class);
     private final AuthController controller = new AuthController(
             emailSenderService,
@@ -72,7 +79,10 @@ class AuthControllerSignupOtpResponseTest {
             signupOtpChallengeService,
             signupAbuseLimiter,
             clientIpResolver,
-            signupOtpObservability);
+            signupOtpObservability,
+            loginRateLimiter,
+            passwordResetService,
+            authSecurityObservability);
 
     @BeforeEach
     void resetMocks() {
@@ -87,6 +97,9 @@ class AuthControllerSignupOtpResponseTest {
                 signupAbuseLimiter,
                 clientIpResolver,
                 signupOtpObservability,
+                loginRateLimiter,
+                passwordResetService,
+                authSecurityObservability,
                 httpRequest);
         when(httpRequest.getRemoteAddr()).thenReturn("127.0.0.1");
         when(clientIpResolver.resolve(anyString(), nullable(String.class), nullable(String.class)))

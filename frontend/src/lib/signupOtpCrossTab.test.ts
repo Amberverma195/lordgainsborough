@@ -69,7 +69,7 @@ function createMemoryStorage() {
         newValue,
         oldValue: null,
         storageArea: storage,
-      } as StorageEvent;
+      } as unknown as StorageEvent;
       for (const listener of storageListeners) {
         listener(event);
       }

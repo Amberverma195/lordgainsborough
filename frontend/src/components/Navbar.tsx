@@ -49,7 +49,6 @@ const Navbar = () => {
 
       <div className={styles.navLinks}>
         <Link href="/" className={styles.navLink}>Home</Link>
-        <Link href="/menu" className={styles.navLink}>Menu</Link>
         <Link href="/about" className={styles.navLink}>About</Link>
         
         <div className={styles.actionsContainer}>

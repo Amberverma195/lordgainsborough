@@ -133,6 +133,60 @@
   box-shadow: 0 0 15px rgba(212, 175, 55, 0.15);
 }
 
+.passwordSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.passwordPrompt {
+  margin: 0;
+  color: var(--text-light);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.inputGroup label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-light);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.inputGroup input {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 1rem;
+  transition: var(--transition-smooth);
+}
+
+.inputGroup input:focus {
+  outline: none;
+  border-color: var(--secondary);
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.1);
+}
+
+.inputGroup input:disabled {
+  opacity: 0.7;
+}
+
+.inputInvalid {
+  border-color: rgba(220, 53, 69, 0.55) !important;
+}
+
 .verifyBtn {
   width: 100%;
   padding: 1rem;

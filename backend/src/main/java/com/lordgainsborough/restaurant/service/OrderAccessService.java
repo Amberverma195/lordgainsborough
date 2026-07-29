@@ -86,7 +86,8 @@ public class OrderAccessService {
         if (token == null || token.isBlank() || !jwtUtil.validateToken(token)) {
             return Optional.empty();
         }
-        return userRepository.findByEmailIgnoreCase(jwtUtil.getEmailFromToken(token));
+        return userRepository.findByEmailIgnoreCase(jwtUtil.getEmailFromToken(token))
+                .filter(user -> jwtUtil.validateTokenForUser(token, user));
     }
 
     private boolean ownsOrder(User user, CustomerOrder order) {

@@ -7,7 +7,6 @@ import { motion } from 'framer-motion';
 import { UserPlus, Mail, Lock, User, ArrowRight, Phone } from 'lucide-react';
 import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
 import {
-  sanitizePasswordInput,
   validatePassword,
   passwordsMatch,
   getPasswordValidationMessage,
@@ -83,7 +82,6 @@ export default function SignupPage() {
           name: formData.name.trim(),
           email,
           phone: formData.phone,
-          password: sanitizePasswordInput(formData.password),
         });
         // Notify other tabs that already have the verify page open.
         const sync = subscribeSignupOtpCrossTab(() => {});
