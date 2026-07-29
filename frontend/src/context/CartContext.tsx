@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MenuItem } from '@/lib/mockData';
+import { API_BASE } from '@/lib/orders';
 
 export interface CartItem extends MenuItem {
   quantity: number;
@@ -30,7 +31,6 @@ interface CartContextType {
   clearCart: () => void;
 }
 
-const API_BASE = 'http://localhost:8082';
 const CART_STORAGE_KEY = 'lord_gainsborough_cart';
 const AUTH_STORAGE_KEYS = new Set(['authToken', 'userRole', 'userName', 'userEmail', 'userPhone']);
 
@@ -108,7 +108,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fetchServerCart = useCallback(async (token: string): Promise<CartItem[]> => {
     try {
-      const res = await fetch(`${API_BASE}/api/cart`, {
+      const res = await fetch(`${API_BASE}/cart`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) return [];
@@ -123,7 +123,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const saveServerCart = useCallback(async (items: CartItem[], token: string) => {
     pendingServerSavesRef.current += 1;
     try {
-      const res = await fetch(`${API_BASE}/api/cart`, {
+      const res = await fetch(`${API_BASE}/cart`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

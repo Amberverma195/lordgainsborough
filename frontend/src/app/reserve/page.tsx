@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight } from 'lucide-react';
 import styles from './reserve.module.css';
 import { useRouter } from 'next/navigation';
+import { API_BASE } from '@/lib/orders';
 
 export default function ReservePage() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export default function ReservePage() {
     setLoading(true);
     
     try {
-      const res = await fetch('http://localhost:8082/api/reservations', {
+      const res = await fetch(`${API_BASE}/reservations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

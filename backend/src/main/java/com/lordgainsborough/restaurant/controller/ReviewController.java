@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@CrossOrigin(origins = "*")
 public class ReviewController {
     private final CustomerOrderRepository orderRepository;
     private final OrderReviewRepository reviewRepository;

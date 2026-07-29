@@ -15,7 +15,6 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/store-settings")
-@CrossOrigin(origins = "*")
 public class StoreSettingsController {
     private final StoreSettingsService storeSettingsService;
     private final JwtUtil jwtUtil;

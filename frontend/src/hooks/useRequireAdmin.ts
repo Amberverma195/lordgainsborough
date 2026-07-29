@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { notFound } from 'next/navigation';
 import { persistAuth } from '@/lib/auth';
 import { isAdminRole } from '@/lib/roles';
+import { API_BASE } from '@/lib/orders';
 
 export function useRequireAdmin() {
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
@@ -17,7 +18,7 @@ export function useRequireAdmin() {
       }
 
       try {
-        const res = await fetch('http://localhost:8082/api/auth/me', {
+        const res = await fetch(`${API_BASE}/auth/me`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 

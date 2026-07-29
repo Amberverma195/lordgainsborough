@@ -22,6 +22,8 @@ ABUSE_IP_HASH_SECRET=
 
 # Optional (defaults shown):
 # PORT=8082
+# APP_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+# SOCKETIO_ORIGIN=http://localhost:3000
 # MONGODB_DATABASE=LordGainsBorough
 # MAIL_FROM=lordgainsborough5@gmail.com
 # MAIL_FROM_NAME=Lord Gainsborough

@@ -18,7 +18,6 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/kds")
-@CrossOrigin(origins = "*")
 public class KdsController {
     private final CustomerOrderRepository orderRepository;
     private final OrderRealtimeService realtimeService;

@@ -31,6 +31,9 @@ public class SocketIoConfig {
     @Value("${socketio.port:9092}")
     private int port;
 
+    @Value("${socketio.origin:http://localhost:3000}")
+    private String origin;
+
     @Bean(initMethod = "start", destroyMethod = "stop")
     public SocketIOServer socketIoServer(
             CustomerOrderRepository orderRepository,
@@ -40,7 +43,7 @@ public class SocketIoConfig {
         Configuration config = new Configuration();
         config.setHostname(host);
         config.setPort(port);
-        config.setOrigin("*");
+        config.setOrigin(origin);
         // Netty-socketio's default ObjectMapper cannot serialize LocalDateTime, which
         // silently drops order.created / order.updated events to KDS and customers.
         config.setJsonSupport(new JavaTimeJacksonJsonSupport());
