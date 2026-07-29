@@ -283,7 +283,7 @@ export default function AdminPage() {
       const data = await res.json();
       setOrders(sortOrders(Array.isArray(data) ? data : []));
     } catch {
-      showNotification('Failed to load orders — is the backend running on port 8082?', 'error');
+      showNotification('Failed to load orders. Please refresh the page and try again.', 'error');
     }
   }, []);
 

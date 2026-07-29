@@ -65,7 +65,7 @@ export default function MenuPage() {
         setMenuError('');
       } catch {
         setItems([]);
-        setMenuError('Menu is unavailable. Start the backend on port 8082, then refresh this page.');
+        setMenuError('Menu is temporarily unavailable. Please refresh the page and try again.');
       } finally {
         setLoading(false);
       }
