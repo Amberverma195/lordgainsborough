@@ -17,6 +17,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Lord Gainsborough | Fine Dining",
   description: "Experience exquisite dining at Lord Gainsborough",
+  icons: {
+    icon: "/NavLOGO.png",
+  },
 };
 
 export default function RootLayout({
