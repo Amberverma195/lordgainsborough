@@ -106,7 +106,7 @@ export default function Home() {
           style={{ y: heroY, scale: heroScale }}
         >
           <Image
-            src="/hero_new.png"
+            src="/restaurant-interior.png"
             alt="Lord Gainsborough Interior"
             fill
             sizes="100vw"

@@ -26,7 +26,8 @@
 
 .heroImage {
   object-fit: cover;
-  filter: brightness(0.4);
+  object-position: center 60%;
+  filter: brightness(0.75);
 }
 
 .heroOverlay {
@@ -37,8 +38,9 @@
   height: 100%;
   background: linear-gradient(
     to bottom,
-    rgba(8, 8, 8, 0.4) 0%,
-    rgba(8, 8, 8, 0.8) 100%
+    rgba(8, 8, 8, 0.35) 0%,
+    rgba(8, 8, 8, 0.5) 50%,
+    rgba(8, 8, 8, 0.85) 100%
   );
   z-index: 2;
 }
