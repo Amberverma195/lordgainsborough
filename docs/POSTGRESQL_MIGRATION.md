@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T02:37:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T02:55:00-04:00 (America/Toronto)  
 
 ---
 
@@ -360,7 +360,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 40/40 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (239/239 tests) |
-| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
+| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundary semantics; production-safe `clear()`; 36/36 tests passed; full 13-suite regression passed (275/275 tests) |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
@@ -1444,7 +1444,95 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
    - **Combined Repository Total:** **243 tests run, 0 failures, 0 errors, 0 skipped**.
 
 **Next Task:**  
-`PG-013` — Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries (`NOT STARTED`).
+`PG-013` — Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries (`COMPLETED`).
+
+---
+
+### [2026-10-26T02:53:00-04:00] PG-013: Atomic PostgreSQL Abuse Counter Store
+
+**Overview & Objective:**  
+Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `PostgresAbuseCounterStore` implementing the existing `AbuseCounterStore` interface. Provides atomic, concurrency-safe fixed-window rate-limiting counter operations backed by the PostgreSQL `signup_abuse_limits` table while preserving the existing `MongoAbuseCounterStore` completely intact.
+
+**Design & Architectural Details:**
+1. **Atomic Single-Statement Upsert (`incrementAndGet`):**
+   - Implemented via a single atomic SQL statement with zero client-side locks or multi-query races:
+     ```sql
+     INSERT INTO signup_abuse_limits (id, bucket_type, subject_hash, count, window_start, expires_at)
+     VALUES (?, ?, ?, 1, ?, ?)
+     ON CONFLICT (id) DO UPDATE
+     SET count = signup_abuse_limits.count + 1
+     WHERE signup_abuse_limits.bucket_type = EXCLUDED.bucket_type
+       AND signup_abuse_limits.subject_hash = EXCLUDED.subject_hash
+       AND signup_abuse_limits.window_start = EXCLUDED.window_start
+       AND signup_abuse_limits.expires_at = EXCLUDED.expires_at
+     RETURNING count
+     ```
+   - **Conflicting Metadata Rejection:** If a primary key collision occurs with conflicting bucket type, subject hash, window start, or expires at, the `WHERE` condition in the `DO UPDATE` clause fails. PostgreSQL returns zero rows, which `PostgresAbuseCounterStore` detects immediately and raises an explicit `IllegalArgumentException`.
+   - **BIGINT Overflow Protection:** When `count` reaches `Long.MAX_VALUE`, PostgreSQL raises `ERROR: bigint out of range`. This is caught and translated to `ArithmeticException("Abuse counter overflow for ID: ...")` failing closed without resetting or wrapping.
+2. **Exact Boundary Semantics (`getCount`):**
+   - Retrieves `count` and `expires_at` via `SELECT count, expires_at FROM signup_abuse_limits WHERE id = ?`.
+   - Returns 0 if record does not exist or if `expires_at` is null.
+   - Exact boundary evaluation: Returns 0 when `!now.isBefore(expiresAt)` (i.e. `now >= expiresAt`).
+   - Retains expired rows in PostgreSQL without deleting them during query evaluation; returns active count only while `now.isBefore(expiresAt)`.
+3. **Safe Clear Operation (`clear`):**
+   - Guarded by constructor flag `allowClear`.
+   - In production runtime (`allowClear = false`), throws `UnsupportedOperationException("clear() is disabled in production runtime for PostgreSQL abuse store")`.
+   - In test harness (`allowClear = true`), executes `DELETE FROM signup_abuse_limits`.
+4. **Data Privacy & SQL Injection Protection:**
+   - Parameterized JDBC queries via `JdbcTemplate` prevent SQL injection across malicious IDs, subject hashes, or bucket types.
+   - Sensitive subject hashes and raw client identifiers are never exposed in log outputs.
+5. **Conditional Opt-In Configuration (`PostgresAbuseCounterStoreConfiguration`):**
+   - Gated by `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty(name = "app.security.postgres-abuse-store.enabled", havingValue = "true")`.
+   - Leaves `MongoAbuseCounterStore` as the default bean in standard profiles and production runtime.
+
+**Verification Results:**
+- **Unit Tests (`SignupAbuseLimiterTest`, `PasswordResetSupportServicesTest`):**
+  - **12 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`).
+- **Targeted Integration Suite (`PostgresAbuseCounterStoreIntegrationTest`):**
+  - 36 tests covering all requirements:
+    - Initial insert count = 1
+    - Monotonic atomic increment
+    - All 10 `BucketType` enum variants
+    - Non-existent record count = 0
+    - Exact boundary semantics (`now = expiresAt - 1ms` active, `now = expiresAt` expired = 0, `now = expiresAt + 1ms` expired = 0)
+    - Retained expired rows in database
+    - Conflicting metadata detection & rejection (`IllegalArgumentException`)
+    - Value scaling beyond `Integer.MAX_VALUE` (`Long.MAX_VALUE - 10`)
+    - BIGINT overflow protection (`Long.MAX_VALUE` increment raises `ArithmeticException`)
+    - Production safety guard on `clear()` (`UnsupportedOperationException`)
+    - Test mode `clear()` execution
+    - SQL injection resistance and log privacy
+    - Profile and property gating
+    - Multi-threaded concurrency:
+      - Test A: 20 concurrent threads on single bucket (exact final count = 20)
+      - Test B: 100 concurrent threads on single bucket (exact final count = 100)
+      - Test C: High contention across multiple threads
+      - Test D: Independent buckets concurrent increments without interference
+      - Test E: Multi-transaction atomicity under parallel connections
+      - Test F: Simultaneous first insert race condition
+      - Test G: Boundary integrity under concurrency
+  - Result: **36 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 23.41s).
+- **Full 13-Suite PostgreSQL Regression Total (Surefire Reports):**
+  1. `PostgresConfigurationSmokeTest`: **3** tests
+  2. `FlywayMigrationIntegrationTest`: **4** tests
+  3. `CoreJpaEntityIntegrationTest`: **7** tests
+  4. `OrderJpaEntityIntegrationTest`: **18** tests
+  5. `CartReviewReservationJpaIntegrationTest`: **26** tests
+  6. `SecurityChallengeJpaIntegrationTest`: **26** tests
+  7. `AbuseAndLoginFailureJpaIntegrationTest`: **25** tests
+  8. `CoreJpaRepositoryIntegrationTest`: **25** tests
+  9. `OperationalJpaRepositoryIntegrationTest`: **31** tests
+  10. `SecurityJpaRepositoryIntegrationTest`: **34** tests
+  11. `PostgresCatalogInitializerIntegrationTest`: **36** tests
+  12. `PostgresCatalogStartupActivationIntegrationTest`: **4** tests
+  13. `PostgresAbuseCounterStoreIntegrationTest`: **36** tests
+  - Total Tests Run: **275**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 1m 10s).
+- **MongoDB Initializer Regression:**
+  - `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.875s).
+- **Combined Repository Total:** **291 tests run, 0 failures, 0 errors, 0 skipped**.
+
+**Next Task:**  
+`PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).
 
 ---
 
