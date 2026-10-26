@@ -240,15 +240,14 @@ public class JpaPasswordResetOtpChallenge {
     }
 
     /**
-     * Excludes codeDigest, resetOperationId, and user security fields to avoid
-     * accidental credential disclosure in logs.
+     * Excludes codeDigest, resetOperationId, sendOperationId, clientIdempotencyKey,
+     * emailKey, challengeId, user, and userId to prevent accidental disclosure of
+     * security metadata and identifiers in logs.
      */
     @Override
     public String toString() {
         return "JpaPasswordResetOtpChallenge{"
-                + "challengeId='" + challengeId + '\''
-                + ", userId='" + getUserId() + '\''
-                + ", purpose=" + purpose
+                + "purpose=" + purpose
                 + ", status=" + status
                 + ", resendCount=" + resendCount
                 + ", failedVerificationAttempts=" + failedVerificationAttempts

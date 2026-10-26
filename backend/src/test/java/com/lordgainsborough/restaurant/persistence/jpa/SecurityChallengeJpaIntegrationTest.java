@@ -1261,8 +1261,85 @@ public class SecurityChallengeJpaIntegrationTest {
 
     @Test
     @Order(25)
+    @DisplayName("Logging Safeguards: toString excludes raw codes, digests, emailKey, challengeId, userId, and operation identifiers")
+    void test25_loggingSafeguards_toStringExcludesSensitiveIdentifiers() {
+        JpaSignupOtpChallenge signup = new JpaSignupOtpChallenge(
+                sha256Hex("test-signup-log@example.com"),
+                "Normalized.Signup.Log@Example.com",
+                "ch-signup-log-9999",
+                OtpChallengeStatus.ACTIVE,
+                "$2a$10$secretSignupOtpDigest12345",
+                Instant.now().plus(15, ChronoUnit.MINUTES)
+        );
+        signup.setOtpExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
+        signup.setSendOperationId("send-op-signup-secret-111");
+        signup.setClientIdempotencyKey("client-idemp-signup-222");
+
+        String signupLog = signup.toString();
+
+        // Must NOT contain sensitive identifiers, contact info, operation secrets, or digests
+        assertThat(signupLog).doesNotContain(signup.getEmailKey());
+        assertThat(signupLog).doesNotContain("Normalized.Signup.Log@Example.com");
+        assertThat(signupLog).doesNotContain("ch-signup-log-9999");
+        assertThat(signupLog).doesNotContain("$2a$10$secretSignupOtpDigest12345");
+        assertThat(signupLog).doesNotContain("send-op-signup-secret-111");
+        assertThat(signupLog).doesNotContain("client-idemp-signup-222");
+        assertThat(signupLog).doesNotContain("emailKey");
+        assertThat(signupLog).doesNotContain("challengeId");
+        assertThat(signupLog).doesNotContain("sendOperationId");
+
+        // Must retain operational flags
+        assertThat(signupLog).contains("status=ACTIVE");
+        assertThat(signupLog).contains("resendCount=0");
+
+        JpaUser user = new JpaUser(
+                "user-log-id-8888",
+                "Alice Logger",
+                "alice.log@example.com",
+                "519-555-0199",
+                "MEMBER"
+        );
+        user.setPassword("secretPasswordHash");
+
+        JpaPasswordResetOtpChallenge reset = new JpaPasswordResetOtpChallenge(
+                sha256Hex("test-reset-log@example.com"),
+                "ch-reset-log-7777",
+                user,
+                PasswordResetOtpChallenge.Purpose.PASSWORD_RESET,
+                PasswordResetChallengeStatus.ACTIVE,
+                Instant.now().plus(15, ChronoUnit.MINUTES)
+        );
+        reset.setCodeDigest("$2a$10$secretResetDigest777");
+        reset.setResetOperationId("reset-op-secret-888");
+        reset.setSendOperationId("send-op-secret-999");
+        reset.setClientIdempotencyKey("client-idemp-reset-333");
+
+        String resetLog = reset.toString();
+
+        // Must NOT contain sensitive identifiers, user ID, challenge ID, operation secrets, or digests
+        assertThat(resetLog).doesNotContain(reset.getEmailKey());
+        assertThat(resetLog).doesNotContain("ch-reset-log-7777");
+        assertThat(resetLog).doesNotContain("user-log-id-8888");
+        assertThat(resetLog).doesNotContain("Alice Logger");
+        assertThat(resetLog).doesNotContain("alice.log@example.com");
+        assertThat(resetLog).doesNotContain("secretPasswordHash");
+        assertThat(resetLog).doesNotContain("$2a$10$secretResetDigest777");
+        assertThat(resetLog).doesNotContain("reset-op-secret-888");
+        assertThat(resetLog).doesNotContain("send-op-secret-999");
+        assertThat(resetLog).doesNotContain("client-idemp-reset-333");
+        assertThat(resetLog).doesNotContain("challengeId");
+        assertThat(resetLog).doesNotContain("userId");
+        assertThat(resetLog).doesNotContain("emailKey");
+
+        // Must retain operational state
+        assertThat(resetLog).contains("status=ACTIVE");
+        assertThat(resetLog).contains("purpose=PASSWORD_RESET");
+    }
+
+    @Test
+    @Order(26)
     @DisplayName("Spring Boot Minimal Context: Boots and validates all 15 JPA entities with ddl-auto=validate")
-    void test25_springBootContext_bootsAndValidatesAllEntities() {
+    void test26_springBootContext_bootsAndValidatesAllEntities() {
         ApplicationContextRunner runner = new ApplicationContextRunner()
                 .withUserConfiguration(TestEntityScanConfig.class)
                 .withConfiguration(AutoConfigurations.of(

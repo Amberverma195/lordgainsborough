@@ -210,18 +210,15 @@ public class JpaSignupOtpChallenge {
     }
 
     /**
-     * Excludes normalizedEmail, otpDigest, and clientIdempotencyKey to avoid
-     * accidental disclosure in application logs.
+     * Excludes normalizedEmail, otpDigest, clientIdempotencyKey, emailKey, challengeId,
+     * and sendOperationId to prevent accidental disclosure of security metadata and identifiers in logs.
      */
     @Override
     public String toString() {
         return "JpaSignupOtpChallenge{"
-                + "emailKey='" + emailKey + '\''
-                + ", challengeId='" + challengeId + '\''
-                + ", status=" + status
+                + "status=" + status
                 + ", resendCount=" + resendCount
                 + ", failedVerifyAttempts=" + failedVerifyAttempts
-                + ", sendOperationId='" + sendOperationId + '\''
                 + ", sendStatus=" + sendStatus
                 + ", lastSendWasInitial=" + lastSendWasInitial
                 + '}';
