@@ -355,7 +355,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 18/18 JPA integration tests passed |
 | `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 20/20 JPA integration tests passed |
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 25/25 security integration tests passed |
-| `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `NOT STARTED` | — | — | Entity validation tests |
+| `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `COMPLETED` | 2026-10-25T22:51:00-04:00 | 2026-10-25T22:56:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED (all 17 entities); 25/25 integration tests passed; full 7-suite regression passed (109/109 tests) |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `NOT STARTED` | — | — | Repository compilation and method checks |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `NOT STARTED` | — | — | Repository query method tests |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `NOT STARTED` | — | — | Repository query tests |
@@ -824,6 +824,99 @@ Implemented the two operational security challenge JPA entities under `com.lordg
 
 **Next Task:**  
 `PG-008` — Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`).
+
+---
+
+### Task Progress: PG-007 Security Hardening Preflight (Fail-Closed Expiration & Logging Safeguards)
+**Date/Time:** 2026-10-25T22:43:00-04:00 to 2026-10-25T22:50:30-04:00 (`America/Toronto`)  
+**Status:** COMPLETED  
+**Commit Baseline:** `6a99fb2` → commits `8a5318b`, `fd31891`  
+**Description:**  
+Applied security preflight hardening to the PG-007 operational challenge entities (`JpaSignupOtpChallenge` and `JpaPasswordResetOtpChallenge`) before commencing PG-008:
+1. **Fail-Closed Missing Expiration Handling:**
+   - Corrected `isChallengeExpired(Instant now)` in both challenge entities to `return challengeExpiresAt == null || !now.isBefore(challengeExpiresAt);`.
+   - Prevents transient, unpersisted, or corrupted challenge entities with null expiry from being evaluated as valid.
+   - Updated integration test `test23_challengeExpirationBoundariesRespected` to verify missing/null expiry fails closed as expired (`isChallengeExpired() == true`).
+2. **Exclusion of Protected Identifiers from Routine Logging:**
+   - Removed `sendOperationId`, `emailKey`, and `challengeId` from `JpaSignupOtpChallenge.toString()`.
+   - Removed `challengeId`, `userId`, and `getUserId()` from `JpaPasswordResetOtpChallenge.toString()`.
+   - Retained only non-identifying operational state flags (`status`, `resendCount`, `failedVerifyAttempts`, `sendStatus`, `purpose`, etc.).
+   - Added integration test `test25_loggingSafeguards_toStringExcludesSensitiveIdentifiers` in `SecurityChallengeJpaIntegrationTest.java` verifying that synthetic marker strings for operation IDs, email keys, user IDs, and challenge IDs never appear in entity `toString()` logs.
+3. **Cart Mutability Documentation:**
+   - Added explicit Javadoc recommendations on `JpaCart.getItems()` documenting that direct collection mutation bypasses `touch()` and advising services to use dedicated helper methods (`addItem`, `removeItem`, `reorderItems`, `setItems`).
+4. **Verification:**
+   - `SecurityChallengeJpaIntegrationTest`: 26/26 tests passed against disposable PostgreSQL 17.11.
+   - Full regression suite across 6 test classes: 84/84 tests passed (`BUILD SUCCESS`, 20.855s).
+
+---
+
+### Task Progress: PG-008 — Abuse Counter and Login Failure State JPA Entities
+**Date/Time:** 2026-10-25T22:51:00-04:00 to 2026-10-25T22:56:00-04:00 (`America/Toronto`)  
+**Status:** COMPLETED  
+**Commit Baseline:** `fd31891`  
+**Scope:** Phase 7 Finalization — Map the final two tables of the 17-table Flyway V1 relational schema into JPA entities.  
+
+**Implementation Summary:**  
+1. **`JpaSignupAbuseLimit` (`signup_abuse_limits`):**
+   - Mapped `id` (`VARCHAR(128) PRIMARY KEY`), application-assigned using deterministic keyed cryptographic hashes without `@GeneratedValue` or UUID generation.
+   - Mapped `bucketType` (`@Enumerated(EnumType.STRING)` for `SignupAbuseLimit.BucketType`, `VARCHAR(50) NOT NULL`).
+   - Mapped `subjectHash` (`VARCHAR(128) NOT NULL`), protected with `@JsonIgnore` to prevent exposure of keyed IP or subject hashes.
+   - Mapped `count` (`BIGINT NOT NULL DEFAULT 1`) using Java `long`, respecting check constraint `chk_signup_abuse_count CHECK (count >= 0)`.
+   - Mapped `windowStart` and `expiresAt` (`TIMESTAMP WITH TIME ZONE NOT NULL`) using Java `Instant`.
+   - Provided model-level boundary helper `isExpired(Instant now)` enforcing exact boundary (`!now.isBefore(expiresAt)`) and fail-closed null semantics (`expiresAt == null`).
+   - Implemented custom `toString()` excluding `id` and `subjectHash` to safeguard internal security keys.
+2. **`JpaLoginFailureState` (`login_failure_states`):**
+   - Mapped `id` (`VARCHAR(128) PRIMARY KEY`), application-assigned string key without UUID generation.
+   - Mapped `subjectHash` (`VARCHAR(128) NOT NULL`), protected with `@JsonIgnore` to prevent exposure of keyed subject hashes.
+   - Mapped `failureCount` (`INT NOT NULL DEFAULT 1`) using Java `int`, respecting check constraint `chk_login_failure_count CHECK (failure_count >= 0)`.
+   - Mapped `windowStartedAt` (`TIMESTAMP WITH TIME ZONE NOT NULL`), `blockedUntil` (`TIMESTAMP WITH TIME ZONE` nullable), `updatedAt` (`TIMESTAMP WITH TIME ZONE NOT NULL`), and `expiresAt` (`TIMESTAMP WITH TIME ZONE NOT NULL`) using Java `Instant`.
+   - Provided model-level helper `isExpired(Instant now)` (fail-closed on null) and `isBlocked(Instant now)`:
+     - Returns `false` if record is expired (preventing stale records from triggering blocks).
+     - Returns `false` if `blockedUntil` is null.
+     - Returns `true` if `now.isBefore(blockedUntil)`.
+     - Returns `false` at exact boundary `now.equals(blockedUntil)`.
+   - Kept `updatedAt` explicitly managed without automatic `@PreUpdate` overwriting to preserve injected Clock values from service layers.
+   - Implemented custom `toString()` excluding `id` and `subjectHash`.
+3. **Entity Identity & Lifecycle Equality:**
+   - Both entities use safe primary key identity: distinct transient entities with null IDs never compare equal (`id != null && Objects.equals(id, that.id)`), with stable `hashCode()` (`getClass().hashCode()`).
+
+**Verification:**  
+- Created integration test suite `backend/src/test/java/com/lordgainsborough/restaurant/persistence/jpa/AbuseAndLoginFailureJpaIntegrationTest.java` (25 tests) executed against disposable PostgreSQL 17.11 initialized via Flyway V1:
+  1. Flyway V1 schema initialization confirmed for `signup_abuse_limits` and `login_failure_states`.
+  2. Hibernate `ddl-auto=validate` passed with all 17 JPA entities registered in metamodel.
+  3. Signup abuse record persisted and reloaded successfully across all fields.
+  4. Assigned `VARCHAR(128)` primary key preserved without alteration or truncation.
+  5. All 10 `BucketType` enum values persisted and reloaded as exact database strings.
+  6. `subjectHash` persisted without truncation up to 128 characters.
+  7. `count` persisted as BIGINT above `Integer.MAX_VALUE` (e.g. 7,000,000,000L).
+  8. `count = 0` accepted by PostgreSQL.
+  9. Negative `count` rejected by PostgreSQL CHECK constraint `chk_signup_abuse_count`.
+  10. `windowStart` and `expiresAt` round-trip with Instant precision.
+  11. `isExpired()` boundary behavior and null fail-closed semantics verified.
+  12. Required columns reject null values.
+  13. Login failure state persisted and reloaded successfully.
+  14. Login failure assigned primary key preserved unchanged.
+  15. `failureCount` persisted accurately as INT.
+  16. `failureCount = 0` accepted.
+  17. Negative `failureCount` rejected by PostgreSQL CHECK constraint `chk_login_failure_count`.
+  18. `blockedUntil` verified for both null and future timestamp states.
+  19. Time-based blocking ends at exact `blockedUntil` boundary and expired records do not trigger active blocks.
+  20. `updatedAt` and `windowStartedAt` round-trip correctly.
+  21. `expiresAt` preserved without unintended modification during entity updates.
+  22. Jackson serialization excludes sensitive hashes and internal identifiers.
+  23. Routine `toString()` logging excludes internal IDs and subject hashes.
+  24. Flyway V1 indexes confirmed in PostgreSQL `pg_indexes` catalog (`idx_abuse_limits_expires_at`, `idx_abuse_limits_bucket_subject`, `idx_login_failure_expires_at`, `idx_login_failure_blocked_until`).
+  25. Spring Boot minimal context boots with all 17 JPA entities validated against schema.
+- **Full PostgreSQL Regression Suite:**
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest -Dtest.postgres.port=54337`
+  - Results: **109 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 26.958s).
+- **Clean Compilation:** `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 116 source files compiled cleanly).
+
+**MongoDB Compatibility:**  
+- Fully preserved: `SignupAbuseLimit`, `LoginFailureState`, `SignupAbuseLimitRepository`, `MongoAbuseCounterStore`, and `LoginRateLimiter` remain untouched and operational.
+
+**Next Task:**  
+`PG-009` — Implement Spring Data JPA repositories for core domain and catalog entities (`UserRepository`, `CategoryRepository`, `MenuItemRepository`, `CatalogMigrationRepository`, `StoreSettingsRepository`).
 
 ---
 
