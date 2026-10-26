@@ -27,8 +27,9 @@ Environment variables used by the backend:
   MAIL_USERNAME
   MAIL_PASSWORD
   JWT_SECRET
+  ABUSE_IP_HASH_SECRET
 
 To check that they exist without printing secret values:
 
-  'MONGODB_URI','MONGODB_DATABASE','MAIL_USERNAME','MAIL_PASSWORD','JWT_SECRET' |
+  'MONGODB_URI','MONGODB_DATABASE','MAIL_USERNAME','MAIL_PASSWORD','JWT_SECRET','ABUSE_IP_HASH_SECRET' |
     ForEach-Object { "$_ = " + [bool][Environment]::GetEnvironmentVariable($_, 'User') }
