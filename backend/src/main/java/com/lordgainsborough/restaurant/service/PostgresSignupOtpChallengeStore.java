@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import javax.sql.DataSource;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -291,6 +292,14 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         );
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * <b>Parity Invariant:</b> Requires {@code next_resend_at <= ?}.
+     * If {@code next_resend_at} is NULL, the comparison evaluates to UNKNOWN (denied),
+     * matching MongoDB's fail-closed null-boundary behavior.
+     * </p>
+     */
     @Override
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicResend(
@@ -327,7 +336,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND status = 'ACTIVE'
                   AND challenge_expires_at > ?
                   AND resend_count < ?
-                  AND (next_resend_at IS NULL OR next_resend_at <= ?)
+                  AND next_resend_at <= ?
                 RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
                           resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                           challenge_expires_at, created_at, updated_at, send_operation_id,
@@ -469,13 +478,20 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
             String emailKey, Instant now) {
+        return tryAtomicRecordFailedVerify(emailKey, null, null, now);
+    }
+
+    @Override
+    @Transactional(transactionManager = "transactionManager")
+    public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
+            String emailKey, String challengeId, String otpDigest, Instant now) {
         if (emailKey == null || emailKey.isBlank()) {
             throw new IllegalArgumentException("emailKey is required");
         }
         Objects.requireNonNull(now, "now is required");
 
         return transactionTemplate.execute(status -> {
-            String sql = """
+            StringBuilder sql = new StringBuilder("""
                 UPDATE signup_otp_challenges
                 SET failed_verify_attempts = failed_verify_attempts + 1,
                     updated_at = ?
@@ -484,19 +500,33 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND challenge_expires_at > ?
                   AND otp_expires_at > ?
                   AND failed_verify_attempts < ?
+                """);
+
+            List<Object> params = new ArrayList<>();
+            params.add(toTimestamp(now));
+            params.add(emailKey);
+            params.add(toTimestamp(now));
+            params.add(toTimestamp(now));
+            params.add(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+
+            if (challengeId != null && !challengeId.isBlank()) {
+                sql.append("  AND challenge_id = ?\n");
+                params.add(challengeId);
+            }
+            if (otpDigest != null && !otpDigest.isBlank()) {
+                sql.append("  AND otp_digest = ?\n");
+                params.add(otpDigest);
+            }
+
+            sql.append("""
                 RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
                           resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                           challenge_expires_at, created_at, updated_at, send_operation_id,
                           send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                """);
 
-            List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
-                    toTimestamp(now),
-                    emailKey,
-                    toTimestamp(now),
-                    toTimestamp(now),
-                    SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS
-            );
+            List<SignupOtpChallenge> results = jdbcTemplate.query(
+                    sql.toString(), ROW_MAPPER, params.toArray());
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });
     }
@@ -505,30 +535,47 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, Instant now) {
+        return tryAtomicLockAfterMaxFailures(emailKey, null, now);
+    }
+
+    @Override
+    @Transactional(transactionManager = "transactionManager")
+    public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
+            String emailKey, String challengeId, Instant now) {
         if (emailKey == null || emailKey.isBlank()) {
             throw new IllegalArgumentException("emailKey is required");
         }
         Objects.requireNonNull(now, "now is required");
 
         return transactionTemplate.execute(status -> {
-            String sql = """
+            StringBuilder sql = new StringBuilder("""
                 UPDATE signup_otp_challenges
                 SET status = 'LOCKED',
                     updated_at = ?
                 WHERE email_key = ?
                   AND status = 'ACTIVE'
                   AND failed_verify_attempts >= ?
+                """);
+
+            List<Object> params = new ArrayList<>();
+            params.add(toTimestamp(now));
+            params.add(emailKey);
+            params.add(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+
+            if (challengeId != null && !challengeId.isBlank()) {
+                sql.append("  AND challenge_id = ?\n");
+                params.add(challengeId);
+            }
+
+            sql.append("""
                 RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
                           resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                           challenge_expires_at, created_at, updated_at, send_operation_id,
                           send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                """);
 
-            List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
-                    toTimestamp(now),
-                    emailKey,
-                    SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS
-            );
+            List<SignupOtpChallenge> results = jdbcTemplate.query(
+                    sql.toString(), ROW_MAPPER, params.toArray());
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });
     }

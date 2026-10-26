@@ -5,10 +5,12 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateOutput;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.flywaydb.core.api.output.ValidateResult;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration;
@@ -24,11 +26,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class FlywayMigrationIntegrationTest {
+
+    private static final String TEST_DB_PREFIX = "flyway_test_";
 
     private static final Set<String> EXPECTED_APPLICATION_TABLES = Set.of(
             "users",
@@ -50,6 +57,12 @@ public class FlywayMigrationIntegrationTest {
             "login_failure_states"
     );
 
+    private static DisposableDatabaseSession directDatabaseSession;
+    private static String directDbName;
+
+    private static DisposableDatabaseSession springDatabaseSession;
+    private static String springDbName;
+
     private String getTestPort() {
         return System.getProperty("test.postgres.port");
     }
@@ -59,26 +72,73 @@ public class FlywayMigrationIntegrationTest {
         return "jdbc:postgresql://127.0.0.1:" + port + "/" + dbName + "?sslmode=disable";
     }
 
-    private void ensureDatabaseExists(String dbName) throws Exception {
-        String port = getTestPort();
-        String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
-        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + dbName + "'");
-            if (!rs.next()) {
+    static void assertSafeTestEnvironment(String port, String dbName) {
+        assertThat(port)
+                .withFailMessage("Test PostgreSQL port must not be blank")
+                .isNotBlank();
+        assertThat(dbName)
+                .withFailMessage("Test database name must start with expected prefix: " + TEST_DB_PREFIX)
+                .startsWith(TEST_DB_PREFIX);
+        assertThat(dbName)
+                .withFailMessage("Test database name must match expected identifier pattern")
+                .matches("^[a-z0-9_]{5,63}$");
+        assertThat(dbName)
+                .withFailMessage("Refusing to operate on system/production database")
+                .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
+    }
+
+    static class DisposableDatabaseSession {
+        private final String port;
+        private final String dbName;
+        private boolean createdAndOwned = false;
+
+        DisposableDatabaseSession(String port, String dbName) {
+            this.port = port;
+            this.dbName = dbName;
+        }
+
+        void provision() throws Exception {
+            assertSafeTestEnvironment(port, dbName);
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
                 stmt.executeUpdate("CREATE DATABASE " + dbName);
+                this.createdAndOwned = true;
             }
+        }
+
+        void drop() {
+            if (!createdAndOwned || dbName == null) {
+                return;
+            }
+            assertSafeTestEnvironment(port, dbName);
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
+                stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
+                this.createdAndOwned = false;
+            } catch (Exception e) {
+                System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
+            }
+        }
+
+        boolean isCreatedAndOwned() {
+            return createdAndOwned;
+        }
+
+        String getDbName() {
+            return dbName;
         }
     }
 
-    private void ensureFreshDatabase(String dbName) throws Exception {
-        String port = getTestPort();
-        String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
-        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
-            stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
-            stmt.executeUpdate("CREATE DATABASE " + dbName);
+    @AfterAll
+    static void tearDownAll() {
+        if (directDatabaseSession != null) {
+            directDatabaseSession.drop();
+        }
+        if (springDatabaseSession != null) {
+            springDatabaseSession.drop();
         }
     }
 
@@ -92,9 +152,12 @@ public class FlywayMigrationIntegrationTest {
             return;
         }
 
-        String dbName = "flyway_direct_test";
-        ensureFreshDatabase(dbName);
-        String jdbcUrl = getJdbcUrl(dbName);
+        directDbName = TEST_DB_PREFIX + "direct_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        directDatabaseSession = new DisposableDatabaseSession(port, directDbName);
+        directDatabaseSession.provision();
+        assertThat(directDatabaseSession.isCreatedAndOwned()).isTrue();
+
+        String jdbcUrl = getJdbcUrl(directDbName);
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
@@ -202,8 +265,12 @@ public class FlywayMigrationIntegrationTest {
             return;
         }
 
-        String dbName = "flyway_direct_test";
-        String jdbcUrl = getJdbcUrl(dbName);
+        assertThat(directDatabaseSession)
+                .withFailMessage("directDatabaseSession must be initialized by test1")
+                .isNotNull();
+        assertThat(directDatabaseSession.isCreatedAndOwned()).isTrue();
+
+        String jdbcUrl = getJdbcUrl(directDbName);
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
@@ -241,8 +308,12 @@ public class FlywayMigrationIntegrationTest {
             return;
         }
 
-        String dbName = "flyway_direct_test";
-        String jdbcUrl = getJdbcUrl(dbName);
+        assertThat(directDatabaseSession)
+                .withFailMessage("directDatabaseSession must be initialized by test1")
+                .isNotNull();
+        assertThat(directDatabaseSession.isCreatedAndOwned()).isTrue();
+
+        String jdbcUrl = getJdbcUrl(directDbName);
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
@@ -269,9 +340,12 @@ public class FlywayMigrationIntegrationTest {
             return;
         }
 
-        String dbName = "flyway_spring_test";
-        ensureDatabaseExists(dbName);
-        String jdbcUrl = getJdbcUrl(dbName);
+        springDbName = TEST_DB_PREFIX + "spring_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        springDatabaseSession = new DisposableDatabaseSession(port, springDbName);
+        springDatabaseSession.provision();
+        assertThat(springDatabaseSession.isCreatedAndOwned()).isTrue();
+
+        String jdbcUrl = getJdbcUrl(springDbName);
 
         ApplicationContextRunner runner = new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(
@@ -332,5 +406,59 @@ public class FlywayMigrationIntegrationTest {
                 }
             }
         });
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("Disposable database session refuses unowned drops and enforces safe naming guardrails")
+    void test5_disposableDatabaseSession_guardrails() throws Exception {
+        // 1. Assert protected names and invalid prefixes are rejected
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "postgres"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "template0"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "template1"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "public"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "lordgainsborough"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "restaurant"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("5432", "invalid_prefix_db"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment("", TEST_DB_PREFIX + "valid"))
+                .isInstanceOf(AssertionError.class);
+
+        // 2. An unowned session must refuse to drop the database
+        DisposableDatabaseSession unownedSession = new DisposableDatabaseSession("5432", TEST_DB_PREFIX + "unowned");
+        assertThat(unownedSession.isCreatedAndOwned()).isFalse();
+        unownedSession.drop(); // Safe NO-OP
+        assertThat(unownedSession.isCreatedAndOwned()).isFalse();
+
+        // 3. Live provision/ownership/drop lifecycle if test.postgres.port is provided
+        String port = getTestPort();
+        if (port != null && !port.isBlank()) {
+            String ownedName = TEST_DB_PREFIX + "guard_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            DisposableDatabaseSession ownedSession = new DisposableDatabaseSession(port, ownedName);
+            ownedSession.provision();
+            assertThat(ownedSession.isCreatedAndOwned()).isTrue();
+
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + ownedName + "'")) {
+                assertThat(rs.next()).isTrue();
+            }
+
+            ownedSession.drop();
+            assertThat(ownedSession.isCreatedAndOwned()).isFalse();
+
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + ownedName + "'")) {
+                assertThat(rs.next()).isFalse();
+            }
+        }
     }
 }

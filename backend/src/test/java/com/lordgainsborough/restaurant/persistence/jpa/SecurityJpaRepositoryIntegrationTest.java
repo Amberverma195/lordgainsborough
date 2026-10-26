@@ -392,8 +392,8 @@ public class SecurityJpaRepositoryIntegrationTest {
 
     @Test
     @Order(6)
-    @DisplayName("Req 6: Signup challenge update and reload work")
-    void test06_signupChallengeUpdateAndReload() {
+    @DisplayName("Req 6: Signup challenge update and reload work and advance updatedAt via @PreUpdate")
+    void test06_signupChallengeUpdateAndReload() throws Exception {
         String email = "signup.upd." + UUID.randomUUID() + "@example.com";
         String emailKey = sha256Hex(email);
 
@@ -405,18 +405,26 @@ public class SecurityJpaRepositoryIntegrationTest {
                 "$2a$10$syntheticDigestForUpdateTest00000000000000000000000000",
                 Instant.now().plus(30, ChronoUnit.MINUTES)
         );
-        signupOtpRepository.saveAndFlush(challenge);
+        JpaSignupOtpChallenge saved = signupOtpRepository.saveAndFlush(challenge);
+        Instant initialUpdatedAt = saved.getUpdatedAt();
+        assertThat(initialUpdatedAt).isNotNull();
+
+        // Brief delay to ensure clock tick between initial persist and update
+        Thread.sleep(15);
 
         JpaSignupOtpChallenge toUpdate = signupOtpRepository.findById(emailKey).orElseThrow();
         toUpdate.setStatus(OtpChallengeStatus.VERIFIED);
         toUpdate.setResendCount(2);
         toUpdate.setFailedVerifyAttempts(1);
+        // Note: toUpdate.updatedAt is NOT manually updated here; JPA @PreUpdate must advance it
         signupOtpRepository.saveAndFlush(toUpdate);
 
         JpaSignupOtpChallenge reloaded = signupOtpRepository.findById(emailKey).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(OtpChallengeStatus.VERIFIED);
         assertThat(reloaded.getResendCount()).isEqualTo(2);
         assertThat(reloaded.getFailedVerifyAttempts()).isEqualTo(1);
+        assertThat(reloaded.getUpdatedAt()).isNotNull();
+        assertThat(reloaded.getUpdatedAt()).isAfter(initialUpdatedAt);
     }
 
     @Test

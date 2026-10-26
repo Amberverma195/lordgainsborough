@@ -221,6 +221,7 @@ class SignupOtpChallengeVerificationTest {
                 || !matchesInstantGt(queryDoc, "challengeExpiresAt", current.getChallengeExpiresAt())
                 || !matchesInstantGt(queryDoc, "otpExpiresAt", current.getOtpExpiresAt())
                 || !matchesDigest(queryDoc, current)
+                || !matchesChallengeId(queryDoc, current)
                 || !matchesFailedAttemptsLt(queryDoc, current)
                 || !matchesFailedAttemptsGte(queryDoc, current)) {
             return null;
@@ -278,6 +279,13 @@ class SignupOtpChallengeVerificationTest {
             return true;
         }
         return queryDoc.getString("otpDigest").equals(current.getOtpDigest());
+    }
+
+    private static boolean matchesChallengeId(Document queryDoc, SignupOtpChallenge current) {
+        if (!queryDoc.containsKey("challengeId")) {
+            return true;
+        }
+        return queryDoc.getString("challengeId").equals(current.getChallengeId());
     }
 
     private static boolean matchesFailedAttemptsLt(Document queryDoc, SignupOtpChallenge current) {

@@ -99,6 +99,10 @@ public class JpaSignupOtpChallenge {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Lifecycle callback before entity insert.
+     * Ensures {@code createdAt} and {@code updatedAt} are populated if unset.
+     */
     @PrePersist
     public void prePersist() {
         if (this.createdAt == null) {
@@ -109,11 +113,18 @@ public class JpaSignupOtpChallenge {
         }
     }
 
+    /**
+     * Lifecycle callback before entity update.
+     * <p>
+     * <b>Timestamp Contract:</b> Unconditionally advances {@link #updatedAt} to {@link Instant#now()}
+     * whenever an existing entity is updated and flushed through JPA (e.g. {@code JpaSignupOtpChallengeRepository}).
+     * This guarantees that entity modifications not explicitly touching {@code updatedAt} never retain a stale
+     * timestamp, preserving behavioral parity with direct JDBC updates that execute {@code updated_at = ?}.
+     * </p>
+     */
     @PreUpdate
     public void preUpdate() {
-        if (this.updatedAt == null) {
-            this.updatedAt = Instant.now();
-        }
+        this.updatedAt = Instant.now();
     }
 
     public boolean isChallengeExpired(Instant now) {

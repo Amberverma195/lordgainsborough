@@ -42,6 +42,11 @@ public interface SignupOtpChallengeStore {
 
     /**
      * Atomically claims one resend slot, rotates the OTP digest, and reserves a send operation.
+     * <p>
+     * <b>Cooldown Policy & Parity Invariant:</b> Resend requires {@code nextResendAt <= now}.
+     * If {@code nextResendAt} is null or uninitialized, resend fails closed (denies resend),
+     * ensuring strict cross-backend behavioral parity between PostgreSQL and MongoDB.
+     * </p>
      */
     Optional<SignupOtpChallenge> tryAtomicResend(
             String emailKey,
@@ -76,12 +81,30 @@ public interface SignupOtpChallengeStore {
     /**
      * Atomically increments failed verify attempts for an ACTIVE, unexpired challenge.
      */
+    default Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
+            String emailKey, Instant now) {
+        return tryAtomicRecordFailedVerify(emailKey, null, null, now);
+    }
+
+    /**
+     * Atomically increments failed verify attempts for an ACTIVE, unexpired challenge
+     * bound to the observed challenge ID and OTP digest.
+     */
     Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
-            String emailKey, Instant now);
+            String emailKey, String challengeId, String otpDigest, Instant now);
 
     /**
      * Atomically locks an ACTIVE challenge that has exhausted failed verify attempts.
      */
+    default Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
+            String emailKey, Instant now) {
+        return tryAtomicLockAfterMaxFailures(emailKey, null, now);
+    }
+
+    /**
+     * Atomically locks an ACTIVE challenge that has exhausted failed verify attempts
+     * bound to the observed challenge ID.
+     */
     Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
-            String emailKey, Instant now);
+            String emailKey, String challengeId, Instant now);
 }

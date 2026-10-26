@@ -115,6 +115,13 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
         repository.deleteById(emailKey);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * <b>Parity Invariant:</b> Requires {@code nextResendAt <= now}.
+     * Null or missing {@code nextResendAt} fails closed and denies resend, matching PostgreSQL.
+     * </p>
+     */
     @Override
     public Optional<SignupOtpChallenge> tryAtomicResend(
             String emailKey,
@@ -247,16 +254,31 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
     @Override
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
             String emailKey, Instant now) {
+        return tryAtomicRecordFailedVerify(emailKey, null, null, now);
+    }
+
+    @Override
+    public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
+            String emailKey, String challengeId, String otpDigest, Instant now) {
         if (emailKey == null || emailKey.isBlank()) {
             throw new IllegalArgumentException("emailKey is required");
         }
         Objects.requireNonNull(now, "now is required");
 
-        Query query = new Query(Criteria.where("_id").is(emailKey)
+        Criteria criteria = Criteria.where("_id").is(emailKey)
                 .and("status").is(OtpChallengeStatus.ACTIVE)
                 .and("challengeExpiresAt").gt(now)
                 .and("otpExpiresAt").gt(now)
-                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS));
+                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+
+        if (challengeId != null && !challengeId.isBlank()) {
+            criteria = criteria.and("challengeId").is(challengeId);
+        }
+        if (otpDigest != null && !otpDigest.isBlank()) {
+            criteria = criteria.and("otpDigest").is(otpDigest);
+        }
+
+        Query query = new Query(criteria);
 
         Update update = new Update()
                 .inc("failedVerifyAttempts", 1)
@@ -273,14 +295,26 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
     @Override
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, Instant now) {
+        return tryAtomicLockAfterMaxFailures(emailKey, null, now);
+    }
+
+    @Override
+    public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
+            String emailKey, String challengeId, Instant now) {
         if (emailKey == null || emailKey.isBlank()) {
             throw new IllegalArgumentException("emailKey is required");
         }
         Objects.requireNonNull(now, "now is required");
 
-        Query query = new Query(Criteria.where("_id").is(emailKey)
+        Criteria criteria = Criteria.where("_id").is(emailKey)
                 .and("status").is(OtpChallengeStatus.ACTIVE)
-                .and("failedVerifyAttempts").gte(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS));
+                .and("failedVerifyAttempts").gte(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+
+        if (challengeId != null && !challengeId.isBlank()) {
+            criteria = criteria.and("challengeId").is(challengeId);
+        }
+
+        Query query = new Query(criteria);
 
         Update update = new Update()
                 .set("status", OtpChallengeStatus.LOCKED)

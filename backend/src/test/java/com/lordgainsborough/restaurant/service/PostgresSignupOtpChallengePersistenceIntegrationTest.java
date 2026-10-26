@@ -73,9 +73,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -1038,6 +1042,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         String email = "idemp-conc@example.com";
         String idempKey = "client-key-conc";
 
+        reset(emailSenderService);
+        doNothing().when(emailSenderService).sendOtpEmail(any(), any(), any());
+
         int threads = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threads);
         CyclicBarrier barrier = new CyclicBarrier(threads);
@@ -1058,13 +1065,23 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         }
         executor.shutdown();
 
-        // Exactly one challenge created; all returns are Sent
+        // All concurrent replays must return documented replay states:
+        // Sent when the send has completed, or InFlight if evaluated while the initial RESERVED lease is active.
         for (RequestOtpResult res : results) {
-            assertThat(res).isInstanceOf(RequestOtpResult.Sent.class);
+            assertTrue(res instanceof RequestOtpResult.Sent || res instanceof RequestOtpResult.InFlight,
+                    () -> "Expected Sent or InFlight replay state but got: " + res.getClass().getSimpleName());
         }
+
+        long sentCount = results.stream().filter(r -> r instanceof RequestOtpResult.Sent).count();
+        assertThat(sentCount).isGreaterThanOrEqualTo(1);
+
+        // Verify exactly one email provider invocation occurred despite concurrent replays
+        verify(emailSenderService, times(1)).sendOtpEmail(eq(email), any(), any());
 
         SignupOtpChallenge ch = persistence.findByEmailKey(persistence.emailKeyFromRawEmail(email)).orElseThrow();
         assertEquals(0, ch.getResendCount()); // No extra resends occurred!
+        assertEquals(idempKey, ch.getClientIdempotencyKey());
+        assertEquals(OtpSendStatus.SENT, ch.getSendStatus());
     }
 
     @Test
@@ -1308,13 +1325,93 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         clock.advance(Duration.ofSeconds(35));
         Instant now = clock.instant();
 
-        // Rotate first
-        String newDigest = persistence.digestOtp("222222");
-        persistence.tryAtomicResend(ch.getEmailKey(), newDigest, "op-new", "k-new", now);
+        String newOtp = "222222";
+        String newDigest = persistence.digestOtp(newOtp);
 
-        // Verify with old digest must fail
-        Optional<SignupOtpChallenge> verified = persistence.tryAtomicMarkVerified(ch.getEmailKey(), oldDigest, now);
-        assertTrue(verified.isEmpty());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch resendUpdated = new CountDownLatch(1);
+        CountDownLatch verifyStarted = new CountDownLatch(1);
+
+        DefaultTransactionDefinition def1 = new DefaultTransactionDefinition();
+        def1.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        DefaultTransactionDefinition def2 = new DefaultTransactionDefinition();
+        def2.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        // Transaction 1: Rotates the digest and holds the transaction open with row lock
+        Future<Optional<SignupOtpChallenge>> resendFuture = executor.submit(() -> {
+            var status1 = transactionManager.getTransaction(def1);
+            try {
+                Optional<SignupOtpChallenge> resendRes = persistence.tryAtomicResend(
+                        ch.getEmailKey(), newDigest, "op-new", "k-new", now);
+
+                // Signal that the resend update has occurred and tx1 is holding the row lock
+                resendUpdated.countDown();
+
+                // Wait until tx2 (verification) has actively begun and overlapped
+                assertTrue(verifyStarted.await(5, TimeUnit.SECONDS));
+
+                // Brief pause to guarantee tx2 has entered row-lock wait in PostgreSQL
+                Thread.sleep(50);
+
+                transactionManager.commit(status1);
+                return resendRes;
+            } catch (Exception e) {
+                transactionManager.rollback(status1);
+                throw e;
+            }
+        });
+
+        // Transaction 2: Concurrently attempts verification with old digest while tx1 is in-flight
+        Future<Optional<SignupOtpChallenge>> verifyFuture = executor.submit(() -> {
+            // Wait until tx1 has acquired the row lock with the rotated digest
+            assertTrue(resendUpdated.await(5, TimeUnit.SECONDS));
+
+            var status2 = transactionManager.getTransaction(def2);
+            try {
+                // Signal that tx2 is starting its verification attempt, overlapping tx1
+                verifyStarted.countDown();
+
+                // tryAtomicMarkVerified executes UPDATE ... WHERE otp_digest = oldDigest
+                // In PostgreSQL, this blocks until tx1 commits, then re-evaluates the WHERE clause
+                Optional<SignupOtpChallenge> verified = persistence.tryAtomicMarkVerified(
+                        ch.getEmailKey(), oldDigest, now);
+
+                transactionManager.commit(status2);
+                return verified;
+            } catch (Exception e) {
+                transactionManager.rollback(status2);
+                throw e;
+            }
+        });
+
+        Optional<SignupOtpChallenge> resendResult;
+        Optional<SignupOtpChallenge> verifiedResult;
+        try {
+            resendResult = resendFuture.get(10, TimeUnit.SECONDS);
+            verifiedResult = verifyFuture.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdown();
+        }
+
+        // 1. Resend succeeded and rotated digest
+        assertTrue(resendResult.isPresent());
+        assertEquals(newDigest, resendResult.get().getOtpDigest());
+
+        // 2. Racing verification with old digest failed cleanly
+        assertTrue(verifiedResult.isEmpty());
+
+        // 3. Database state reflects rotated digest and ACTIVE status
+        SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(OtpChallengeStatus.ACTIVE, current.getStatus());
+        assertEquals(1, current.getResendCount());
+        assertEquals(newDigest, current.getOtpDigest());
+
+        // 4. Verifying with the newly rotated OTP succeeds
+        Optional<SignupOtpChallenge> newVerified = persistence.tryAtomicMarkVerified(
+                ch.getEmailKey(), newDigest, now);
+        assertTrue(newVerified.isPresent());
+        assertEquals(OtpChallengeStatus.VERIFIED, newVerified.get().getStatus());
     }
 
     // =========================================================================

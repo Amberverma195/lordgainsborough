@@ -253,11 +253,13 @@ public class SignupOtpChallengeService {
         }
 
         if (!persistence.otpMatches(rawOtp, challenge.getOtpDigest())) {
-            var updated = persistence.tryAtomicRecordFailedVerify(emailKey, now);
+            var updated = persistence.tryAtomicRecordFailedVerify(
+                    emailKey, challenge.getChallengeId(), challenge.getOtpDigest(), now);
             if (updated.isPresent()
                     && updated.get().getFailedVerifyAttempts()
                     >= SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS) {
-                SignupOtpChallenge locked = persistence.tryAtomicLockAfterMaxFailures(emailKey, now)
+                SignupOtpChallenge locked = persistence.tryAtomicLockAfterMaxFailures(
+                        emailKey, challenge.getChallengeId(), now)
                         .orElse(updated.get());
                 observability.record(
                         SignupOtpObservability.Event.VERIFICATION_FAILURE,
