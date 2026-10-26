@@ -23,6 +23,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -66,7 +67,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class CoreJpaRepositoryIntegrationTest {
 
-    private static final String TEST_DB = "core_jpa_repo_test";
+    private static final String TEST_DB_PREFIX = "core_jpa_repo_test_";
+    private String testDb;
+    private String testPort;
     private static String testJdbcUrl;
 
     private AnnotationConfigApplicationContext context;
@@ -122,17 +125,17 @@ public class CoreJpaRepositoryIntegrationTest {
 
     @BeforeAll
     void setUpAll() throws Exception {
-        String testPort = getRequiredPort();
-        testJdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + TEST_DB + "?sslmode=disable";
+        testPort = getRequiredPort();
+        testDb = TEST_DB_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        testJdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + testDb + "?sslmode=disable";
 
-        // 1. Ensure test database exists
+        assertSafeTestEnvironment(testPort, testDb);
+
+        // 1. Ensure uniquely provisioned disposable test database exists
         String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
         try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
              Statement stmt = conn.createStatement()) {
-            ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + TEST_DB + "'");
-            if (!rs.next()) {
-                stmt.executeUpdate("CREATE DATABASE " + TEST_DB);
-            }
+            stmt.executeUpdate("CREATE DATABASE " + testDb);
         }
 
         // 2. Initialize Flyway schema
@@ -144,17 +147,7 @@ public class CoreJpaRepositoryIntegrationTest {
                 .load();
         flyway.migrate();
 
-        // 3. Clean any existing records from prior test runs
-        try (Connection conn = DriverManager.getConnection(testJdbcUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("DELETE FROM menu_items");
-            stmt.executeUpdate("DELETE FROM categories");
-            stmt.executeUpdate("DELETE FROM catalog_migrations");
-            stmt.executeUpdate("DELETE FROM users");
-            stmt.executeUpdate("DELETE FROM store_settings");
-        }
-
-        // 4. Initialize Spring application context with JPA repository support
+        // 3. Initialize Spring application context with JPA repository support
         context = new AnnotationConfigApplicationContext(TestJpaRepoConfig.class);
         entityManagerFactory = context.getBean(EntityManagerFactory.class);
         userRepository = context.getBean(JpaUserRepository.class);
@@ -168,6 +161,38 @@ public class CoreJpaRepositoryIntegrationTest {
     void tearDownAll() {
         if (context != null) {
             context.close();
+        }
+        dropDisposableDatabaseSafely(testPort, testDb);
+    }
+
+    private void assertSafeTestEnvironment(String port, String dbName) {
+        assertThat(port)
+                .withFailMessage("Test PostgreSQL port must not be blank")
+                .isNotBlank();
+        assertThat(dbName)
+                .withFailMessage("Test database name must start with expected prefix: " + TEST_DB_PREFIX)
+                .startsWith(TEST_DB_PREFIX);
+        assertThat(dbName)
+                .withFailMessage("Test database name must match expected identifier pattern")
+                .matches("^[a-z0-9_]{5,63}$");
+        assertThat(dbName)
+                .withFailMessage("Refusing to operate on system/production database")
+                .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
+    }
+
+    private void dropDisposableDatabaseSafely(String port, String dbName) {
+        if (port == null || dbName == null) {
+            return;
+        }
+        assertSafeTestEnvironment(port, dbName);
+
+        String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
+            stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName);
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
         }
     }
 
@@ -266,6 +291,9 @@ public class CoreJpaRepositoryIntegrationTest {
         // Mismatched casing returns empty for exact method
         Optional<JpaUser> mismatched = userRepository.findByEmail(mixedEmail.toLowerCase());
         assertThat(mismatched).isEmpty();
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     @Test
@@ -281,6 +309,9 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(userRepository.findByEmailIgnoreCase(mixedEmail.toUpperCase())).isPresent();
         assertThat(userRepository.findByEmailIgnoreCase(mixedEmail)).isPresent();
         assertThat(userRepository.findByEmailIgnoreCase("nonexistent." + UUID.randomUUID() + "@example.com")).isEmpty();
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     @Test
@@ -300,6 +331,9 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(userRepository.existsByEmailIgnoreCase(mixedEmail.toLowerCase())).isTrue();
         assertThat(userRepository.existsByEmailIgnoreCase(mixedEmail.toUpperCase())).isTrue();
         assertThat(userRepository.existsByEmailIgnoreCase("nobody." + UUID.randomUUID() + "@domain.org")).isFalse();
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     @Test
@@ -313,6 +347,9 @@ public class CoreJpaRepositoryIntegrationTest {
         JpaUser user2 = new JpaUser("u2-" + UUID.randomUUID(), "Second", email.toLowerCase(), "519-555-0112", "MEMBER");
         assertThatThrownBy(() -> userRepository.saveAndFlush(user2))
                 .isInstanceOf(DataIntegrityViolationException.class);
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(user1.getId());
     }
 
     // =========================================================================
@@ -324,8 +361,9 @@ public class CoreJpaRepositoryIntegrationTest {
     @DisplayName("Req 9: Exact phone and normalized-phone finders work")
     void test09_exactPhoneAndNormalizedPhoneFinders() {
         String id = "user-phone-" + UUID.randomUUID();
-        String rawPhone = "519-555-0188";
-        String normalizedPhone = "5195550188";
+        String phoneSuffix = String.format("%04d", (int)(Math.random() * 10000));
+        String rawPhone = "519-555-" + phoneSuffix;
+        String normalizedPhone = "519555" + phoneSuffix;
         JpaUser user = new JpaUser(id, "Phone User", "phone." + UUID.randomUUID() + "@example.com", rawPhone, "MEMBER");
         user.setPhoneNormalized(normalizedPhone);
         userRepository.save(user);
@@ -342,6 +380,9 @@ public class CoreJpaRepositoryIntegrationTest {
 
         List<JpaUser> withPhone = userRepository.findByPhoneIsNotNull();
         assertThat(withPhone).isNotEmpty();
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     @Test
@@ -357,6 +398,9 @@ public class CoreJpaRepositoryIntegrationTest {
 
         List<JpaUser> matches = userRepository.findByPhoneNormalizedContaining(suffix);
         assertThat(matches).anyMatch(u -> u.getId().equals(id));
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     // =========================================================================
@@ -383,6 +427,9 @@ public class CoreJpaRepositoryIntegrationTest {
         List<JpaUser> byEmail = userRepository.findByEmailContainingIgnoreCase("WELLINGTON." + marker.toUpperCase());
         assertThat(byEmail).isNotEmpty();
         assertThat(byEmail.get(0).getId()).isEqualTo(id);
+
+        // Per-test fixture cleanup
+        userRepository.deleteById(id);
     }
 
     @Test
@@ -390,17 +437,49 @@ public class CoreJpaRepositoryIntegrationTest {
     @DisplayName("Req 12: SQL wildcard characters are handled safely without unintended wildcard expansion")
     void test12_sqlWildcardInputHandledSafely() {
         String token = UUID.randomUUID().toString().substring(0, 6);
+
+        // Case A: '%' character safety (zero or more character wildcard in SQL LIKE)
+        // name1 has literal '%', name2 has arbitrary digit matching unescaped '%'
         String name1 = "Special 100% Chef " + token;
         String name2 = "Special 1000 Chef " + token;
-
         JpaUser user1 = new JpaUser("u-wild1-" + UUID.randomUUID(), name1, "wild1." + token + "@example.com", null, "MEMBER");
         JpaUser user2 = new JpaUser("u-wild2-" + UUID.randomUUID(), name2, "wild2." + token + "@example.com", null, "MEMBER");
-        userRepository.saveAll(List.of(user1, user2));
 
-        // Searching for exact substring with % should not throw SQL exception
-        List<JpaUser> results = userRepository.findByNameContainingIgnoreCase("100% Chef " + token);
-        assertThat(results).isNotEmpty();
-        assertThat(results).allMatch(u -> u.getName().contains("100%"));
+        // Case B: '_' character safety (single character wildcard in SQL LIKE)
+        // name3 has literal '_', name4 and name5 have single characters ('-', 'X') that would match unescaped '_'
+        String name3 = "Chef_Gordon " + token;
+        String name4 = "Chef-Gordon " + token;
+        String name5 = "ChefXGordon " + token;
+        JpaUser user3 = new JpaUser("u-wild3-" + UUID.randomUUID(), name3, "wild3." + token + "@example.com", null, "MEMBER");
+        JpaUser user4 = new JpaUser("u-wild4-" + UUID.randomUUID(), name4, "wild4." + token + "@example.com", null, "MEMBER");
+        JpaUser user5 = new JpaUser("u-wild5-" + UUID.randomUUID(), name5, "wild5." + token + "@example.com", null, "MEMBER");
+
+        userRepository.saveAll(List.of(user1, user2, user3, user4, user5));
+
+        try {
+            // 1. Verify '%' search: Searching for exact substring with '%' matches only user1 and explicitly excludes user2
+            List<JpaUser> percentResults = userRepository.findByNameContainingIgnoreCase("100% Chef " + token);
+            assertThat(percentResults)
+                    .extracting(JpaUser::getId)
+                    .contains(user1.getId())
+                    .doesNotContain(user2.getId());
+            assertThat(percentResults).allMatch(u -> u.getName().contains("100%"));
+
+            // 2. Verify '_' search: Searching for exact substring with '_' matches only user3 and explicitly excludes user4 and user5
+            List<JpaUser> underscoreResults = userRepository.findByNameContainingIgnoreCase("Chef_Gordon " + token);
+            assertThat(underscoreResults)
+                    .extracting(JpaUser::getId)
+                    .contains(user3.getId())
+                    .doesNotContain(user4.getId(), user5.getId());
+            assertThat(underscoreResults).allMatch(u -> u.getName().contains("Chef_Gordon"));
+        } finally {
+            // Per-test fixture cleanup
+            userRepository.deleteById(user1.getId());
+            userRepository.deleteById(user2.getId());
+            userRepository.deleteById(user3.getId());
+            userRepository.deleteById(user4.getId());
+            userRepository.deleteById(user5.getId());
+        }
     }
 
     // =========================================================================
@@ -420,6 +499,9 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(found).isNotNull();
         assertThat(found.getId()).isEqualTo(catId);
         assertThat(found.getName()).isEqualTo(catName);
+
+        // Per-test fixture cleanup
+        categoryRepository.deleteById(catId);
     }
 
     @Test
@@ -454,6 +536,11 @@ public class CoreJpaRepositoryIntegrationTest {
         JpaCategory updatedCat3 = categoryRepository.findByName("Desserts " + suffix);
         assertThat(updatedCat3).isNotNull();
         assertThat(updatedCat3.getDisplayOrder()).isEqualTo(5);
+
+        // Per-test fixture cleanup
+        categoryRepository.deleteById(cat1.getId());
+        categoryRepository.deleteById(cat2.getId());
+        categoryRepository.deleteById(cat3.getId());
     }
 
     // =========================================================================
@@ -476,6 +563,9 @@ public class CoreJpaRepositoryIntegrationTest {
         // Empty category returns empty list
         List<JpaMenuItem> emptyCategory = menuItemRepository.findByCategory("Nonexistent Category " + UUID.randomUUID());
         assertThat(emptyCategory).isEmpty();
+
+        // Per-test fixture cleanup
+        menuItemRepository.deleteById(itemId);
     }
 
     @Test
@@ -494,6 +584,9 @@ public class CoreJpaRepositoryIntegrationTest {
         Optional<JpaMenuItem> foundUpper = menuItemRepository.findFirstByNameIgnoreCase(name.toUpperCase());
         assertThat(foundUpper).isPresent();
         assertThat(foundUpper.get().getId()).isEqualTo(itemId);
+
+        // Per-test fixture cleanup
+        menuItemRepository.deleteById(itemId);
     }
 
     @Test
@@ -519,6 +612,10 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(stable).isPresent();
         String expectedId = id1.compareTo(id2) < 0 ? id1 : id2;
         assertThat(stable.get().getId()).isEqualTo(expectedId);
+
+        // Per-test fixture cleanup
+        menuItemRepository.deleteById(id1);
+        menuItemRepository.deleteById(id2);
     }
 
     @Test
@@ -534,6 +631,9 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(loaded).isPresent();
         assertThat(loaded.get().getPrice()).isEqualByComparingTo(exactPrice);
         assertThat(loaded.get().getPrice().scale()).isEqualTo(2);
+
+        // Per-test fixture cleanup
+        menuItemRepository.deleteById(itemId);
     }
 
     // =========================================================================
@@ -554,6 +654,9 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(loaded).isPresent();
         assertThat(loaded.get().getId()).isEqualTo(assignedId);
         assertThat(loaded.get().getAppliedAt()).isEqualTo(now);
+
+        // Per-test fixture cleanup
+        catalogMigrationRepository.deleteById(assignedId);
     }
 
     @Test
@@ -565,6 +668,9 @@ public class CoreJpaRepositoryIntegrationTest {
 
         catalogMigrationRepository.save(new JpaCatalogMigration(testMigrationId, Instant.now()));
         assertThat(catalogMigrationRepository.existsById(testMigrationId)).isTrue();
+
+        // Per-test fixture cleanup
+        catalogMigrationRepository.deleteById(testMigrationId);
     }
 
     // =========================================================================
@@ -599,6 +705,11 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(updated).isPresent();
         assertThat(updated.get().getDefaultReadyMinutes()).isEqualTo(35);
         assertThat(updated.get().isPickupOrdersEnabled()).isFalse();
+
+        // Per-test fixture cleanup: reset singleton operational parameters
+        settings.setDefaultReadyMinutes(25);
+        settings.setPickupOrdersEnabled(true);
+        storeSettingsRepository.save(settings);
     }
 
     @Test
@@ -618,6 +729,10 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(loaded).isPresent();
         assertThat(loaded.get().getTaxRate()).isEqualByComparingTo(taxRate);
         assertThat(loaded.get().getTaxRate().scale()).isEqualTo(4);
+
+        // Per-test fixture cleanup: reset singleton tax rate
+        settings.setTaxRate(new BigDecimal("0.1300"));
+        storeSettingsRepository.save(settings);
     }
 
     // =========================================================================
@@ -647,10 +762,44 @@ public class CoreJpaRepositoryIntegrationTest {
     @Order(25)
     @DisplayName("Req 25: The default MongoDB configuration remains isolated from JPA repository activation")
     void test25_defaultMongoConfigurationRemainsIsolated() {
-        // Assert that legacy repository classes are in a completely distinct package
+        // 1. Assert package boundary separation between legacy Mongo and relational JPA packages
         assertThat(com.lordgainsborough.restaurant.repository.UserRepository.class.getPackage().getName())
                 .isEqualTo("com.lordgainsborough.restaurant.repository");
         assertThat(JpaUserRepository.class.getPackage().getName())
                 .isEqualTo("com.lordgainsborough.restaurant.persistence.jpa.repository");
+
+        // 2. Prove that default application configuration starts cleanly without PostgreSQL
+        // and that no JPA repository beans or relational persistence infrastructure activate
+        ApplicationContextRunner runner = new ApplicationContextRunner()
+                .withPropertyValues(
+                        "spring.autoconfigure.exclude="
+                                + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+                                + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration,"
+                                + "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration,"
+                                + "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
+                        "spring.flyway.enabled=false"
+                );
+
+        runner.run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+
+            // Verify no relational infrastructure beans are activated
+            assertThat(ctx.containsBean("dataSource")).isFalse();
+            assertThat(ctx.containsBean("entityManagerFactory")).isFalse();
+            assertThat(ctx.containsBean("flyway")).isFalse();
+
+            // Verify NO JPA repositories are registered or activated as beans
+            assertThat(ctx.containsBean("jpaUserRepository")).isFalse();
+            assertThat(ctx.containsBean("jpaCategoryRepository")).isFalse();
+            assertThat(ctx.containsBean("jpaMenuItemRepository")).isFalse();
+            assertThat(ctx.containsBean("jpaCatalogMigrationRepository")).isFalse();
+            assertThat(ctx.containsBean("jpaStoreSettingsRepository")).isFalse();
+
+            assertThat(ctx.getBeanNamesForType(JpaUserRepository.class)).isEmpty();
+            assertThat(ctx.getBeanNamesForType(JpaCategoryRepository.class)).isEmpty();
+            assertThat(ctx.getBeanNamesForType(JpaMenuItemRepository.class)).isEmpty();
+            assertThat(ctx.getBeanNamesForType(JpaCatalogMigrationRepository.class)).isEmpty();
+            assertThat(ctx.getBeanNamesForType(JpaStoreSettingsRepository.class)).isEmpty();
+        });
     }
 }

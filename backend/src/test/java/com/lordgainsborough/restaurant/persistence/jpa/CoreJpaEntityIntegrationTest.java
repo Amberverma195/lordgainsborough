@@ -47,7 +47,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class CoreJpaEntityIntegrationTest {
 
-    private static final String TEST_DB = "core_jpa_test";
+    private static final String TEST_DB_PREFIX = "core_jpa_test_";
+    private String testDb;
     private String testPort;
     private String jdbcUrl;
     private PGSimpleDataSource dataSource;
@@ -69,16 +70,16 @@ public class CoreJpaEntityIntegrationTest {
     @BeforeAll
     void setUpAll() throws Exception {
         testPort = getRequiredPort();
-        jdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + TEST_DB + "?sslmode=disable";
+        testDb = TEST_DB_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        jdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + testDb + "?sslmode=disable";
 
-        // 1. Ensure test database exists
+        assertSafeTestEnvironment(testPort, testDb);
+
+        // 1. Ensure uniquely provisioned disposable test database exists
         String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
         try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
              Statement stmt = conn.createStatement()) {
-            ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + TEST_DB + "'");
-            if (!rs.next()) {
-                stmt.executeUpdate("CREATE DATABASE " + TEST_DB);
-            }
+            stmt.executeUpdate("CREATE DATABASE " + testDb);
         }
 
         // 2. Initialize schema using Flyway (Flyway owns the database schema)
@@ -89,16 +90,6 @@ public class CoreJpaEntityIntegrationTest {
                 .cleanDisabled(true)
                 .load();
         flyway.migrate();
-
-        // Ensure database is clean of prior run fixtures for safe repeatability
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("DELETE FROM menu_items");
-            stmt.executeUpdate("DELETE FROM categories");
-            stmt.executeUpdate("DELETE FROM catalog_migrations");
-            stmt.executeUpdate("DELETE FROM users");
-            stmt.executeUpdate("DELETE FROM store_settings");
-        }
 
         // 3. Configure DataSource
         dataSource = new PGSimpleDataSource();
@@ -130,6 +121,38 @@ public class CoreJpaEntityIntegrationTest {
         }
         if (emfBean != null) {
             emfBean.destroy();
+        }
+        dropDisposableDatabaseSafely(testPort, testDb);
+    }
+
+    private void assertSafeTestEnvironment(String port, String dbName) {
+        assertThat(port)
+                .withFailMessage("Test PostgreSQL port must not be blank")
+                .isNotBlank();
+        assertThat(dbName)
+                .withFailMessage("Test database name must start with expected prefix: " + TEST_DB_PREFIX)
+                .startsWith(TEST_DB_PREFIX);
+        assertThat(dbName)
+                .withFailMessage("Test database name must match expected identifier pattern")
+                .matches("^[a-z0-9_]{5,63}$");
+        assertThat(dbName)
+                .withFailMessage("Refusing to operate on system/production database")
+                .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
+    }
+
+    private void dropDisposableDatabaseSafely(String port, String dbName) {
+        if (port == null || dbName == null) {
+            return;
+        }
+        assertSafeTestEnvironment(port, dbName);
+
+        String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
+            stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName);
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
         }
     }
 
@@ -239,6 +262,22 @@ public class CoreJpaEntityIntegrationTest {
         } finally {
             collEm.close();
         }
+
+        // Per-test fixture cleanup: remove test user by explicit ID
+        EntityManager cleanupEm = emf.createEntityManager();
+        EntityTransaction cleanupTx = cleanupEm.getTransaction();
+        try {
+            cleanupTx.begin();
+            JpaUser userToClean = cleanupEm.find(JpaUser.class, userId);
+            if (userToClean != null) {
+                cleanupEm.remove(userToClean);
+            }
+            cleanupTx.commit();
+        } catch (Exception ignored) {
+            if (cleanupTx.isActive()) cleanupTx.rollback();
+        } finally {
+            cleanupEm.close();
+        }
     }
 
     @Test
@@ -293,6 +332,22 @@ public class CoreJpaEntityIntegrationTest {
             assertThat(verified.getDescription()).isEqualTo("Updated chef selections");
         } finally {
             em.close();
+        }
+
+        // Per-test fixture cleanup: remove test category by explicit ID
+        EntityManager cleanupEm = emf.createEntityManager();
+        EntityTransaction cleanupTx = cleanupEm.getTransaction();
+        try {
+            cleanupTx.begin();
+            JpaCategory catToClean = cleanupEm.find(JpaCategory.class, catId);
+            if (catToClean != null) {
+                cleanupEm.remove(catToClean);
+            }
+            cleanupTx.commit();
+        } catch (Exception ignored) {
+            if (cleanupTx.isActive()) cleanupTx.rollback();
+        } finally {
+            cleanupEm.close();
         }
     }
 
@@ -363,6 +418,22 @@ public class CoreJpaEntityIntegrationTest {
         } finally {
             em.close();
         }
+
+        // Per-test fixture cleanup: remove test menu item by explicit ID
+        EntityManager cleanupEm = emf.createEntityManager();
+        EntityTransaction cleanupTx = cleanupEm.getTransaction();
+        try {
+            cleanupTx.begin();
+            JpaMenuItem itemToClean = cleanupEm.find(JpaMenuItem.class, itemId);
+            if (itemToClean != null) {
+                cleanupEm.remove(itemToClean);
+            }
+            cleanupTx.commit();
+        } catch (Exception ignored) {
+            if (cleanupTx.isActive()) cleanupTx.rollback();
+        } finally {
+            cleanupEm.close();
+        }
     }
 
     @Test
@@ -396,6 +467,22 @@ public class CoreJpaEntityIntegrationTest {
             assertThat(ChronoUnit.SECONDS.between(loaded.getAppliedAt(), appliedTime)).isEqualTo(0);
         } finally {
             em.close();
+        }
+
+        // Per-test fixture cleanup: remove test catalog migration by explicit ID
+        EntityManager cleanupEm = emf.createEntityManager();
+        EntityTransaction cleanupTx = cleanupEm.getTransaction();
+        try {
+            cleanupTx.begin();
+            JpaCatalogMigration migToClean = cleanupEm.find(JpaCatalogMigration.class, migrationId);
+            if (migToClean != null) {
+                cleanupEm.remove(migToClean);
+            }
+            cleanupTx.commit();
+        } catch (Exception ignored) {
+            if (cleanupTx.isActive()) cleanupTx.rollback();
+        } finally {
+            cleanupEm.close();
         }
     }
 
@@ -464,6 +551,23 @@ public class CoreJpaEntityIntegrationTest {
             assertThat(updated.getTaxRate().setScale(4, RoundingMode.UNNECESSARY)).isEqualTo(new BigDecimal("0.1425"));
         } finally {
             em.close();
+        }
+
+        // Per-test fixture cleanup: reset singleton store settings
+        EntityManager cleanupEm = emf.createEntityManager();
+        EntityTransaction cleanupTx = cleanupEm.getTransaction();
+        try {
+            cleanupTx.begin();
+            JpaStoreSettings settingsToReset = cleanupEm.find(JpaStoreSettings.class, JpaStoreSettings.DEFAULT_ID);
+            if (settingsToReset != null) {
+                settingsToReset.setTaxRate(new BigDecimal("0.1300"));
+                settingsToReset.setDefaultReadyMinutes(25);
+            }
+            cleanupTx.commit();
+        } catch (Exception ignored) {
+            if (cleanupTx.isActive()) cleanupTx.rollback();
+        } finally {
+            cleanupEm.close();
         }
     }
 
