@@ -86,6 +86,16 @@ public class OrderController {
             return ResponseEntity.badRequest().body(menuValidationError);
         }
 
+        // Guest orders need contact details, but never require a registered account.
+        // Keep existing cart/availability errors ahead of this new validation.
+        if (order.getCustomerName() == null || order.getCustomerName().isBlank()
+                || order.getCustomerEmail() == null || order.getCustomerEmail().isBlank()
+                || order.getCustomerPhone() == null || order.getCustomerPhone().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "MISSING_CUSTOMER_DETAILS",
+                    "message", "Customer name, email and phone are required."));
+        }
+
         order.setId(null);
         order.setStatus("NEW");
         order.setAverageReadyMinutes(normalizeReadyMinutes(orderStore.settings().getDefaultReadyMinutes()));

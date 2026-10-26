@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T18:45:18-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-26T18:56:07-04:00 (America/Toronto)
 
 ---
 
@@ -364,7 +364,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `COMPLETED` | 2026-10-26T03:30:00-04:00 | 2026-10-26T03:42:00-04:00 | Extracted `LoginFailureStateStore` SPI; implemented `PostgresLoginFailureStateStore` with atomic upsert + `SELECT ... FOR UPDATE` row-level locking; fail-closed `Integer.MAX_VALUE` overflow guard; exact millisecond active cooldown boundaries; targeted `clearFailures`; 38/38 new tests; 14-suite regression passed (318/318 tests) |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T05:35:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; hardened with 5-finding resolution (atomic locking, deprecated unguarded overloads, fail-closed resend cooldown, Flyway disposable DB lifecycle with CI skip/fail controls, JPA timestamp integrity); 63/63 integration tests passed; full regression passed |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T17:53:00-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 48/48 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` executed against live disposable PostgreSQL; full 16-suite PostgreSQL regression passed (438/438 tests, 0 skipped); MongoDB unit & support tests passed (11/11) |
-| `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `BLOCKED` | 2026-10-26T18:30:37-04:00 | — | Implemented and PostgreSQL verified: 35 new live integration tests; 438 existing PostgreSQL tests; final available regression 639/639, no skips. Full closeout BLOCKED by unavailable Docker for 3 Mongo container suites |
+| `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `BLOCKED` | 2026-10-26T18:30:37-04:00 | — | Implemented and PostgreSQL verified: 47 live order integration tests including required contact validation; 438 existing PostgreSQL tests; available regression 654/654, no skips. Full closeout BLOCKED by unavailable Docker for 3 Mongo container suites |
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `NOT STARTED` | — | — | Cart API endpoint tests |
 | `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `NOT STARTED` | — | — | KDS order and status tests |
 | `PG-020` | Phase 11 | Adapt `ReviewController` and `ReservationController` for JPA persistence | `NOT STARTED` | — | — | `ReviewControllerTest` pass |
@@ -2098,3 +2098,18 @@ Environment: fresh owned loopback-only PostgreSQL 17.10 cluster at 127.0.0.1:543
 The baseline 16-suite PostgreSQL run passed 438 tests before implementation. The final full available regression passed **639 tests, 0 failures, 0 errors, 0 skips** (BUILD SUCCESS, 3m 05s), including all 16 PostgreSQL suites again (438 tests) plus 35 new live order integration tests. Final focused suite counts: PostgresOrderPersistenceConfigurationTest 10; PostgresOrderControllerIntegrationTest 35; CustomerOrderMapperTest 3; OrderMoneyTest 10; OrderAccessServiceTest 8; OrderControllerTest 9. Failed intermediate runs above were corrected and rerun; none are represented as green.
 
 **Remaining blocker:** Docker is unavailable. LoginRateLimiterMongoTest and SignupOtpChallengeMongoConcurrencyTest each fail container initialization; PasswordResetMongoTest skips 16 cases under its existing disabledWithoutDocker policy. The initial Mongo run passed 32 non-container cases but had 2 environment errors and 16 skips, so full Mongo compatibility is not independently proven. The final available run covers all non-container auth, reset, order, review, no-show, settings-access and security tests, but cannot substitute for those missing live Mongo runs. Re-run the three container suites in a working Docker environment before marking PG-017 COMPLETED. Production enablement is also intentionally guarded pending coordinated later tasks; those tasks have not been initiated.
+
+---
+
+### [2026-10-26T18:56:07-04:00] PG-017 follow-up: required customer contact validation
+
+Fixed the medium-severity missing-field contract gap before order persistence. For both MongoDB and PostgreSQL, POST /api/orders returns HTTP 400 with exactly {"code":"MISSING_CUSTOMER_DETAILS","message":"Customer name, email and phone are required."} if customerName, customerEmail or customerPhone is omitted, null, empty or whitespace-only. Validation runs after the existing empty-cart, pickup/no-show availability and menu checks, preserving their error precedence, and before tracking-token generation, persistence or realtime delivery. No new account, JWT, email-format or phone-format requirement was introduced. Valid guest orders still return HTTP 200 without a registered-user association. Checkout already supplies and checks these contact fields; no frontend changes were needed.
+
+Added 12 real-HTTP/PostgreSQL parameterized cases covering each field in each missing-value form, asserting the exact response, zero parent/item/message writes and no realtime delivery. Added three Mongo-path unit cases proving no save/token generation/notification on rejection. Existing valid guest, DTO, pricing, authorization and concurrency tests remain green. Updated legacy valid-order fixtures to include contact data.
+
+Verification (backend directory; PostgreSQL 17.10 at loopback 127.0.0.1:54353, owned disposable order databases, Flyway V1):
+
+- `.\mvnw.cmd test '-Dtest=OrderControllerTest,PostgresOrderControllerIntegrationTest,OrderAccessServiceTest,PostgresOrderPersistenceConfigurationTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'`: 77 tests, 0 failures, 0 errors, 0 skips; BUILD SUCCESS.
+- `.\mvnw.cmd test '-Dtest=*Test,!LoginRateLimiterMongoTest,!SignupOtpChallengeMongoConcurrencyTest,!PasswordResetMongoTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'`: 654 tests, 0 failures, 0 errors, 0 skips; BUILD SUCCESS (2m 51s), including all 16 existing PostgreSQL migration suites and the expanded 47-case PostgreSQL order suite.
+
+PG-017 remains BLOCKED for the previously documented live MongoDB container verification; these three Docker-dependent suites were explicitly excluded, not treated as passed. PG-018 and later work was not started. No schema, persistence activation or live infrastructure change.

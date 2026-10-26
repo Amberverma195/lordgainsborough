@@ -14,6 +14,9 @@ import com.lordgainsborough.restaurant.service.*;
 import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -147,6 +150,30 @@ class PostgresOrderControllerIntegrationTest {
         assertThat(response.getStatusCode().value()).isEqualTo(status);
         assertThat(response.getBody()).isEqualTo(Map.of("code", code, "message", message));
         assertThat(orders.count()).isZero();
+    }
+
+    static java.util.stream.Stream<Arguments> missingCustomerDetails() {
+        return java.util.stream.Stream.of("customerName", "customerEmail", "customerPhone")
+                .flatMap(field -> java.util.stream.Stream.of(
+                        Arguments.of(field, null, true), Arguments.of(field, null, false),
+                        Arguments.of(field, "", false), Arguments.of(field, " \t ", false)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("missingCustomerDetails")
+    void missingContactFieldReturnsConsistentHttp400WithoutWriting(String field, String value, boolean omit) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode body = json.valueToTree(request());
+        if (omit) body.remove(field);
+        else if (value == null) body.putNull(field);
+        else body.put(field, value);
+        String response = mvc.perform(post("/api/orders").contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+        assertThat(json.readTree(response)).isEqualTo(json.valueToTree(Map.of(
+                "code", "MISSING_CUSTOMER_DETAILS", "message", "Customer name, email and phone are required.")));
+        assertThat(orders.count()).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM order_items", Long.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM order_messages", Long.class)).isZero();
+        verify(sockets.getRoomOperations("kds"), never()).sendEvent(anyString(), any());
     }
 
     @Test void validCreationRepricesAndReloadsOrderedChildrenWithoutUserAssociation() {

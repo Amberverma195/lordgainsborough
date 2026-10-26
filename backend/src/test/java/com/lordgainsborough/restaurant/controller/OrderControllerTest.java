@@ -14,6 +14,8 @@ import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -221,8 +223,31 @@ class OrderControllerTest {
         verify(orderRepository, never()).save(any()); org.mockito.Mockito.verifyNoInteractions(realtimeService);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"customerName", "customerEmail", "customerPhone"})
+    void missingCustomerDetailReturnsBadRequestBeforeMongoPersistence(String field) {
+        CustomerOrder order = orderWith("pizza-1", 17.99);
+        switch (field) {
+            case "customerName" -> order.setCustomerName(null);
+            case "customerEmail" -> order.setCustomerEmail(null);
+            case "customerPhone" -> order.setCustomerPhone(null);
+            default -> throw new AssertionError(field);
+        }
+        when(menuItemRepository.findById("pizza-1")).thenReturn(Optional.of(
+                new MenuItem("pizza-1", "Pepperoni Pizza", "", 17.99, "Pizzas", "", true)));
+        var response = controller.createOrder(order);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(Map.of("code", "MISSING_CUSTOMER_DETAILS",
+                "message", "Customer name, email and phone are required."), response.getBody());
+        verify(orderRepository, never()).save(any());
+        org.mockito.Mockito.verifyNoInteractions(realtimeService, orderAccessService);
+    }
+
     private CustomerOrder orderWith(String menuItemId, double clientUnitPrice) {
         CustomerOrder order = new CustomerOrder();
+        order.setCustomerName("Guest");
+        order.setCustomerEmail("guest@example.com");
+        order.setCustomerPhone("5195551212");
         CustomerOrder.OrderItem item = new CustomerOrder.OrderItem();
         item.setMenuItemId(menuItemId);
         item.setName("Tampered Name");
