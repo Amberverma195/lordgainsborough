@@ -1199,6 +1199,43 @@ Implement Spring Data JPA repositories in `com.lordgainsborough.restaurant.persi
 **Next Task:**
 `PG-011` — Implement Spring Data JPA repositories for security challenges and abuse limits (`JpaSignupOtpChallengeRepository`, `JpaPasswordResetOtpChallengeRepository`, `JpaSignupAbuseLimitRepository`, `JpaLoginFailureStateRepository`).
 
+### [2026-10-26T00:34:00-04:00] — PG-010 Code Review Findings Resolution & Verification Hardening
+
+**Task:** PG-010 Code Review Findings Resolution  
+**Status:** COMPLETED  
+**Timestamp:** 2026-10-26T00:34:00-04:00  
+
+**Resolution Summary:**  
+Resolved all three verification gaps and edge cases identified during the PG-010 code review:
+1. **Cart Expiration Inclusive Boundary Hardening (`JpaCart`):**
+   - Refactored `JpaCart.isExpired(Instant)` to calculate `expiresAt = this.updatedAt.plusSeconds(TTL_SECONDS)` and evaluate `!now.isBefore(expiresAt)`, ensuring exact instant expiration matching project-wide security challenge TTL semantics.
+   - Enforced fail-closed behavior on `null` `updatedAt` timestamps (`return true`).
+   - Hardened `OperationalJpaRepositoryIntegrationTest.test22` to assert exact boundary behavior: `-1ms` -> unexpired (`false`), exact instant -> expired (`true`), `+1ms` -> expired (`true`), and `null` -> expired (`true`).
+2. **Supplementary Repository Execution Coverage (`JpaCartRepository` & `JpaReservationRepository`):**
+   - Expanded `OperationalJpaRepositoryIntegrationTest.test18` to exercise both explicit JPQL `deleteByUserId()` and Spring Data derived `deleteByUser_Id()`, verifying that both successfully delete the cart and cascade to `cart_items` while preserving `users`.
+   - Added `OperationalJpaRepositoryIntegrationTest.test29` exercising all three supplementary reservation queries:
+     - `findByDateOrderByTimeAsc(date)`: strictly orders reservations for the target date ascending by time ("17:30", "19:15", "20:00").
+     - `findByEmailIgnoreCaseOrderByCreatedAtDesc(email)`: case-insensitive email match, ordered descending by `createdAt`.
+     - `findByStatus(status)`: accurately filters reservations by status ("CONFIRMED", "PENDING").
+3. **Strengthened Default MongoDB Profile Isolation Test (`OperationalJpaRepositoryIntegrationTest.test31`):**
+   - Replaced empty context check with a multi-layered Spring Boot auto-configuration isolation test:
+     - Proves `DataJpaRepositoriesAutoConfiguration` with `@AutoConfigurationPackage` scanning backs off cleanly when `DataSource` / `EntityManagerFactory` beans are absent (as in default profile), registering 0 JPA repository beans.
+     - Proves `DataSourceAutoConfiguration` without PostgreSQL connection properties fails immediately.
+     - Proves `@EnableAutoConfiguration` configured with production `application.properties` exclusions (`spring.autoconfigure.exclude=...`) boots cleanly with zero relational infrastructure beans (`DataSource`, `EntityManagerFactory`, `Flyway`) and zero JPA repository beans.
+
+**Verification:**  
+- **Targeted Suite Run (`OperationalJpaRepositoryIntegrationTest`):** 31 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 10.60s).
+- **Complete PostgreSQL 9-Suite Regression Suite:**
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest -Dtest.postgres.port=54349`
+  - Results: **165 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 34.776s across all 9 suites).
+- **Clean Compilation:** `mvn clean compile -DskipTests` (`BUILD SUCCESS`).
+
+**MongoDB Compatibility:**  
+- Fully preserved: existing MongoDB model classes, repositories, controllers, and services remain completely untouched and operational.
+
+**Next Task:**  
+`PG-011` — Implement Spring Data JPA repositories for security challenges and abuse limits (`JpaSignupOtpChallengeRepository`, `JpaPasswordResetOtpChallengeRepository`, `JpaSignupAbuseLimitRepository`, `JpaLoginFailureStateRepository`).
+
 ---
 
 ## Agent Execution Rules

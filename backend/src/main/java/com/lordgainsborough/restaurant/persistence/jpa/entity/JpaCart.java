@@ -96,18 +96,33 @@ public class JpaCart {
         this.updatedAt = timestamp != null ? timestamp : Instant.now();
     }
 
+    /**
+     * Checks whether the cart has expired relative to the current system clock.
+     * Carts expire 7 days after the last {@link #updatedAt} timestamp.
+     *
+     * @return {@code true} if expired or if {@link #updatedAt} is null (fail-closed); {@code false} otherwise
+     */
     public boolean isExpired() {
-        if (this.updatedAt == null) {
-            return true;
-        }
-        return this.updatedAt.isBefore(Instant.now().minusSeconds(TTL_SECONDS));
+        return isExpired(Instant.now());
     }
 
+    /**
+     * Checks whether the cart has expired relative to a specific reference instant.
+     * <p>
+     * Boundary is exact: at {@code referenceTime.equals(updatedAt.plusSeconds(TTL_SECONDS))},
+     * the 7-day TTL has fully elapsed and the cart is evaluated as expired.
+     * </p>
+     *
+     * @param referenceTime the reference instant to check against (defaults to {@link Instant#now()} if null)
+     * @return {@code true} if expired or if {@link #updatedAt} is null (fail-closed); {@code false} otherwise
+     */
     public boolean isExpired(Instant referenceTime) {
         if (this.updatedAt == null) {
             return true;
         }
-        return this.updatedAt.isBefore(referenceTime.minusSeconds(TTL_SECONDS));
+        Instant now = referenceTime != null ? referenceTime : Instant.now();
+        Instant expiresAt = this.updatedAt.plusSeconds(TTL_SECONDS);
+        return !now.isBefore(expiresAt);
     }
 
     public void addItem(JpaCartItem item) {

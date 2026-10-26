@@ -27,6 +27,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration;
+import org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration;
+import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -589,21 +596,33 @@ public class OperationalJpaRepositoryIntegrationTest {
 
     @Test
     @Order(18)
-    @DisplayName("Req 18: Delete cart by associated user ID")
+    @DisplayName("Req 18: Delete cart by associated user ID via JPQL and derived methods")
     void test18_deleteCartByAssociatedUserId() {
-        String userId = "usr-delcart-" + UUID.randomUUID();
-        JpaUser user = new JpaUser(userId, "Del Cart User", "delcart." + UUID.randomUUID() + "@example.com", "555-0118", "MEMBER");
-        userRepository.save(user);
+        // 1. Verify deleteByUserId (explicit JPQL)
+        String userId1 = "usr-delcart1-" + UUID.randomUUID();
+        JpaUser user1 = new JpaUser(userId1, "Del Cart User 1", "delcart1." + UUID.randomUUID() + "@example.com", "555-0118", "MEMBER");
+        userRepository.save(user1);
 
-        String cartId = "cart-del-" + UUID.randomUUID();
-        JpaCart cart = new JpaCart(cartId, user);
-        cartRepository.saveAndFlush(cart);
+        String cartId1 = "cart-del1-" + UUID.randomUUID();
+        JpaCart cart1 = new JpaCart(cartId1, user1);
+        cartRepository.saveAndFlush(cart1);
 
-        assertThat(cartRepository.findByUserId(userId)).isPresent();
+        assertThat(cartRepository.findByUserId(userId1)).isPresent();
+        cartRepository.deleteByUserId(userId1);
+        assertThat(cartRepository.findByUserId(userId1)).isEmpty();
 
-        cartRepository.deleteByUserId(userId);
+        // 2. Verify deleteByUser_Id (Spring Data derived traversal delete)
+        String userId2 = "usr-delcart2-" + UUID.randomUUID();
+        JpaUser user2 = new JpaUser(userId2, "Del Cart User 2", "delcart2." + UUID.randomUUID() + "@example.com", "555-0119", "MEMBER");
+        userRepository.save(user2);
 
-        assertThat(cartRepository.findByUserId(userId)).isEmpty();
+        String cartId2 = "cart-del2-" + UUID.randomUUID();
+        JpaCart cart2 = new JpaCart(cartId2, user2);
+        cartRepository.saveAndFlush(cart2);
+
+        assertThat(cartRepository.findByUser_Id(userId2)).isPresent();
+        cartRepository.deleteByUser_Id(userId2);
+        assertThat(cartRepository.findByUser_Id(userId2)).isEmpty();
     }
 
     @Test
@@ -717,6 +736,25 @@ public class OperationalJpaRepositoryIntegrationTest {
         JpaCart freshReload = cartRepository.findById(cartId).orElseThrow();
         assertThat(freshReload.isExpired(Instant.now())).isFalse();
         assertThat(freshReload.getUpdatedAt()).isAfterOrEqualTo(refreshedInstant);
+
+        // Verify exact 7-day expiration boundary semantics (inclusive at 7-day mark, fail-closed on null)
+        Instant fixedUpdated = Instant.parse("2026-10-01T12:00:00Z");
+        freshReload.touch(fixedUpdated);
+        Instant exactBoundary = fixedUpdated.plusSeconds(7L * 24 * 60 * 60);
+
+        // 1 millisecond before boundary: unexpired
+        assertThat(freshReload.isExpired(exactBoundary.minusMillis(1))).isFalse();
+
+        // Exact boundary instant: expired (inclusive boundary)
+        assertThat(freshReload.isExpired(exactBoundary)).isTrue();
+
+        // 1 millisecond after boundary: expired
+        assertThat(freshReload.isExpired(exactBoundary.plusMillis(1))).isTrue();
+
+        // Null updatedAt: fail-closed (expired)
+        freshReload.setUpdatedAt(null);
+        assertThat(freshReload.isExpired()).isTrue();
+        assertThat(freshReload.isExpired(exactBoundary)).isTrue();
     }
 
     // =========================================================================
@@ -874,8 +912,53 @@ public class OperationalJpaRepositoryIntegrationTest {
 
     @Test
     @Order(29)
-    @DisplayName("Req 29: Invalid reservation party size is rejected by PostgreSQL")
-    void test29_invalidReservationPartySizeRejectedByPostgreSQL() {
+    @DisplayName("Req 29: Reservation supplementary finders (byDate, byEmailIgnoreCase, byStatus)")
+    void test29_reservationSupplementaryFinders_byDateByEmailAndByStatus() {
+        String testSuffix = UUID.randomUUID().toString().substring(0, 8);
+        String targetDate = "2026-12-25";
+        String otherDate = "2026-12-26";
+        String targetEmail = "Guest." + testSuffix + "@Example.COM";
+
+        // 1. Test findByDateOrderByTimeAsc
+        JpaReservation res1 = new JpaReservation("res-sup-1-" + testSuffix, "Guest 1", targetEmail, "555-0201", targetDate, "20:00", 2);
+        JpaReservation res2 = new JpaReservation("res-sup-2-" + testSuffix, "Guest 2", "other1." + testSuffix + "@test.com", "555-0202", targetDate, "17:30", 4);
+        JpaReservation res3 = new JpaReservation("res-sup-3-" + testSuffix, "Guest 3", targetEmail, "555-0203", targetDate, "19:15", 3);
+        JpaReservation res4 = new JpaReservation("res-sup-4-" + testSuffix, "Guest 4", "other2." + testSuffix + "@test.com", "555-0204", otherDate, "18:00", 2);
+
+        res1.setStatus("CONFIRMED");
+        res2.setStatus("PENDING");
+        res3.setStatus("CONFIRMED");
+        res4.setStatus("CANCELLED");
+
+        LocalDateTime baseTime = LocalDateTime.now().minusMinutes(10);
+        res1.setCreatedAt(baseTime);
+        res3.setCreatedAt(baseTime.plusMinutes(5));
+
+        reservationRepository.saveAllAndFlush(List.of(res1, res2, res3, res4));
+
+        List<JpaReservation> byDate = reservationRepository.findByDateOrderByTimeAsc(targetDate);
+        List<String> idsForDate = byDate.stream().map(JpaReservation::getId).filter(id -> id.contains(testSuffix)).toList();
+        assertThat(idsForDate).containsExactly("res-sup-2-" + testSuffix, "res-sup-3-" + testSuffix, "res-sup-1-" + testSuffix);
+
+        // 2. Test findByEmailIgnoreCaseOrderByCreatedAtDesc
+        List<JpaReservation> byEmail = reservationRepository.findByEmailIgnoreCaseOrderByCreatedAtDesc("guest." + testSuffix + "@example.com");
+        List<String> idsForEmail = byEmail.stream().map(JpaReservation::getId).filter(id -> id.contains(testSuffix)).toList();
+        assertThat(idsForEmail).containsExactly("res-sup-3-" + testSuffix, "res-sup-1-" + testSuffix);
+
+        // 3. Test findByStatus
+        List<JpaReservation> confirmed = reservationRepository.findByStatus("CONFIRMED");
+        List<String> idsConfirmed = confirmed.stream().map(JpaReservation::getId).filter(id -> id.contains(testSuffix)).toList();
+        assertThat(idsConfirmed).containsExactlyInAnyOrder("res-sup-1-" + testSuffix, "res-sup-3-" + testSuffix);
+
+        List<JpaReservation> pending = reservationRepository.findByStatus("PENDING");
+        List<String> idsPending = pending.stream().map(JpaReservation::getId).filter(id -> id.contains(testSuffix)).toList();
+        assertThat(idsPending).containsExactly("res-sup-2-" + testSuffix);
+    }
+
+    @Test
+    @Order(30)
+    @DisplayName("Req 30: Invalid reservation party size is rejected by PostgreSQL")
+    void test30_invalidReservationPartySizeRejectedByPostgreSQL() {
         String resIdZero = "res-invalid-0-" + UUID.randomUUID();
         JpaReservation resZero = new JpaReservation(resIdZero, "Zero Party", "zero." + UUID.randomUUID() + "@example.com", "555-0129", "2026-12-01", "18:00", 0);
         assertThatThrownBy(() -> reservationRepository.saveAndFlush(resZero))
@@ -888,14 +971,22 @@ public class OperationalJpaRepositoryIntegrationTest {
     }
 
     // =========================================================================
-    // Requirement 30: Isolation and No Bean Collisions
+    // Requirement 31: Isolation and No Bean Collisions
     // =========================================================================
 
+    @Configuration(proxyBeanMethods = false)
+    @AutoConfigurationPackage
+    static class DefaultProfileTestConfig {}
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    static class DefaultProfileIsolationConfig {}
+
     @Test
-    @Order(30)
-    @DisplayName("Req 30: No repository bean name collisions or unintended MongoDB profile activation")
-    void test30_noRepositoryBeanNameCollisionsOrUnintendedMongoDBProfileActivation() {
-        // 1. Verify JPA repositories have unique bean names
+    @Order(31)
+    @DisplayName("Req 31: Default MongoDB profile isolation and no repository bean collisions")
+    void test31_noRepositoryBeanNameCollisionsOrUnintendedMongoDBProfileActivation() {
+        // 1. Verify JPA repositories have unique bean names in active JPA context
         assertThat(context.containsBean("jpaCustomerOrderRepository")).isTrue();
         assertThat(context.containsBean("jpaCartRepository")).isTrue();
         assertThat(context.containsBean("jpaOrderReviewRepository")).isTrue();
@@ -907,10 +998,51 @@ public class OperationalJpaRepositoryIntegrationTest {
         assertThat(context.containsBean("orderReviewRepository")).isFalse();
         assertThat(context.containsBean("reservationRepository")).isFalse();
 
-        // 3. Verify via ApplicationContextRunner that default configuration isolates MongoDB and excludes JPA repositories
+        // 3. Meaningful repository auto-configuration test:
+        // When DataJpaRepositoriesAutoConfiguration executes against the repository package,
+        // verify that without DataSource / EntityManagerFactory beans (as in the default profile),
+        // it cleanly backs off and activates ZERO JPA repository beans.
         new ApplicationContextRunner()
-                .withPropertyValues("spring.profiles.active=default")
+                .withUserConfiguration(DefaultProfileTestConfig.class)
+                .withConfiguration(AutoConfigurations.of(DataJpaRepositoriesAutoConfiguration.class))
                 .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean(JpaCustomerOrderRepository.class);
+                    assertThat(ctx).doesNotHaveBean(JpaCartRepository.class);
+                    assertThat(ctx).doesNotHaveBean(JpaOrderReviewRepository.class);
+                    assertThat(ctx).doesNotHaveBean(JpaReservationRepository.class);
+                    assertThat(ctx.getBeanNamesForType(JpaCustomerOrderRepository.class)).isEmpty();
+                    assertThat(ctx.getBeanNamesForType(JpaCartRepository.class)).isEmpty();
+                    assertThat(ctx.getBeanNamesForType(JpaOrderReviewRepository.class)).isEmpty();
+                    assertThat(ctx.getBeanNamesForType(JpaReservationRepository.class)).isEmpty();
+                });
+
+        // 4. Meaningful DataSource auto-configuration test:
+        // Verify that DataSourceAutoConfiguration without PostgreSQL connection settings fails,
+        // proving that unexcluded relational auto-configuration cannot start in the default environment.
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class))
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                });
+
+        // 5. Meaningful Spring Boot @EnableAutoConfiguration test using actual application settings:
+        // With production spring.autoconfigure.exclude applied, relational infrastructure is completely excluded.
+        new ApplicationContextRunner()
+                .withUserConfiguration(DefaultProfileIsolationConfig.class)
+                .withPropertyValues(
+                        "spring.autoconfigure.exclude="
+                                + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+                                + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration,"
+                                + "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration,"
+                                + "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
+                        "spring.flyway.enabled=false"
+                )
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean(DataSource.class);
+                    assertThat(ctx).doesNotHaveBean(EntityManagerFactory.class);
+                    assertThat(ctx).doesNotHaveBean(Flyway.class);
                     assertThat(ctx).doesNotHaveBean(JpaCustomerOrderRepository.class);
                     assertThat(ctx).doesNotHaveBean(JpaCartRepository.class);
                     assertThat(ctx).doesNotHaveBean(JpaOrderReviewRepository.class);
