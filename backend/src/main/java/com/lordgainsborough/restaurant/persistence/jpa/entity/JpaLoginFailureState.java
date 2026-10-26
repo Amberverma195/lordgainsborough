@@ -23,6 +23,7 @@ import java.util.Objects;
 public class JpaLoginFailureState {
 
     @Id
+    @JsonIgnore
     @Column(name = "id", length = 128, nullable = false)
     private String id;
 

@@ -958,8 +958,11 @@ public class AbuseAndLoginFailureJpaIntegrationTest {
     @DisplayName("22. Jackson Serialization: Does not reveal sensitive hashes or internal identifiers")
     void test22_jacksonOutputDoesNotRevealSensitiveHashesOrInternalIdentifiers() throws Exception {
         String secretSubjectHash = "secret-hash-999-synthetic-key";
+        String secretAbuseId = "abuse-id-secret-111";
+        String secretFailureId = "lfs-id-secret-222";
+
         JpaSignupAbuseLimit abuseLimit = new JpaSignupAbuseLimit(
-                "abuse-id-secret-111",
+                secretAbuseId,
                 SignupAbuseLimit.BucketType.LOGIN_REQUEST_IP,
                 secretSubjectHash,
                 2L,
@@ -968,7 +971,7 @@ public class AbuseAndLoginFailureJpaIntegrationTest {
         );
 
         JpaLoginFailureState failureState = new JpaLoginFailureState(
-                "lfs-id-secret-222",
+                secretFailureId,
                 secretSubjectHash,
                 3,
                 Instant.now(),
@@ -983,10 +986,14 @@ public class AbuseAndLoginFailureJpaIntegrationTest {
         String abuseJson = mapper.writeValueAsString(abuseLimit);
         assertThat(abuseJson).doesNotContain(secretSubjectHash);
         assertThat(abuseJson).doesNotContain("subjectHash");
+        assertThat(abuseJson).doesNotContain(secretAbuseId);
+        assertThat(abuseJson).doesNotContain("\"id\":");
 
         String failureJson = mapper.writeValueAsString(failureState);
         assertThat(failureJson).doesNotContain(secretSubjectHash);
         assertThat(failureJson).doesNotContain("subjectHash");
+        assertThat(failureJson).doesNotContain(secretFailureId);
+        assertThat(failureJson).doesNotContain("\"id\":");
     }
 
     @Test

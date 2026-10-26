@@ -24,6 +24,7 @@ import java.util.Objects;
 public class JpaSignupAbuseLimit {
 
     @Id
+    @JsonIgnore
     @Column(name = "id", length = 128, nullable = false)
     private String id;
 

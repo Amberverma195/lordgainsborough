@@ -90,6 +90,16 @@ public class CoreJpaEntityIntegrationTest {
                 .load();
         flyway.migrate();
 
+        // Ensure database is clean of prior run fixtures for safe repeatability
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate("DELETE FROM menu_items");
+            stmt.executeUpdate("DELETE FROM categories");
+            stmt.executeUpdate("DELETE FROM catalog_migrations");
+            stmt.executeUpdate("DELETE FROM users");
+            stmt.executeUpdate("DELETE FROM store_settings");
+        }
+
         // 3. Configure DataSource
         dataSource = new PGSimpleDataSource();
         dataSource.setUrl(jdbcUrl);
@@ -140,8 +150,8 @@ public class CoreJpaEntityIntegrationTest {
         EntityTransaction tx = em.getTransaction();
 
         String userId = UUID.randomUUID().toString();
-        String initialEmail = "User.One@LordGainsborough.com";
-        String normalizedPhone = "5195550101";
+        String initialEmail = "User.One." + UUID.randomUUID() + "@LordGainsborough.com";
+        String normalizedPhone = "519555" + String.format("%04d", (int)(Math.random() * 10000));
 
         try {
             tx.begin();
@@ -238,10 +248,11 @@ public class CoreJpaEntityIntegrationTest {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
         String catId = "cat-" + UUID.randomUUID();
+        String catName = "Signature Mains " + UUID.randomUUID();
 
         try {
             tx.begin();
-            JpaCategory category = new JpaCategory(catId, "Signature Mains", "Our premier chef selections", 1);
+            JpaCategory category = new JpaCategory(catId, catName, "Our premier chef selections", 1);
             em.persist(category);
             em.flush();
             tx.commit();
@@ -258,7 +269,7 @@ public class CoreJpaEntityIntegrationTest {
             tx.begin();
             JpaCategory loaded = em.find(JpaCategory.class, catId);
             assertThat(loaded).isNotNull();
-            assertThat(loaded.getName()).isEqualTo("Signature Mains");
+            assertThat(loaded.getName()).isEqualTo(catName);
             assertThat(loaded.getDescription()).isEqualTo("Our premier chef selections");
             assertThat(loaded.getDisplayOrder()).isEqualTo(1);
 
@@ -292,13 +303,14 @@ public class CoreJpaEntityIntegrationTest {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
         String itemId = "item-" + UUID.randomUUID();
+        String itemName = "Prime Rib Roast " + UUID.randomUUID();
         BigDecimal price = new BigDecimal("24.95");
 
         try {
             tx.begin();
             JpaMenuItem item = new JpaMenuItem(
                     itemId,
-                    "Prime Rib Roast",
+                    itemName,
                     "Slow-roasted prime rib with au jus and Yorkshire pudding",
                     price,
                     "Signature Mains",
@@ -322,7 +334,7 @@ public class CoreJpaEntityIntegrationTest {
             tx.begin();
             JpaMenuItem loaded = em.find(JpaMenuItem.class, itemId);
             assertThat(loaded).isNotNull();
-            assertThat(loaded.getName()).isEqualTo("Prime Rib Roast");
+            assertThat(loaded.getName()).isEqualTo(itemName);
             assertThat(loaded.getPrice().compareTo(price)).isEqualTo(0);
             assertThat(loaded.getPrice().setScale(2, RoundingMode.UNNECESSARY)).isEqualTo(new BigDecimal("24.95"));
             assertThat(loaded.isAvailable()).isTrue();
@@ -359,7 +371,7 @@ public class CoreJpaEntityIntegrationTest {
     void test5_catalogMigrationEntity_explicitIdAndInstantTimestamp() {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
-        String migrationId = "2026-10-lord-gains-autumn-menu";
+        String migrationId = "2026-10-autumn-" + UUID.randomUUID();
         Instant appliedTime = Instant.now().truncatedTo(ChronoUnit.MILLIS);
 
         try {
