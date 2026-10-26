@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T21:08:45-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T21:43:00-04:00 (America/Toronto)  
 
 ---
 
@@ -352,7 +352,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-002` | Phase 4 | Configure DataSource, HikariCP, and Flyway in `application.properties` | `COMPLETED` | 2026-10-25T20:07:10-04:00 | 2026-10-25T20:19:30-04:00 | Profile isolation verified; `mvn clean compile -DskipTests` SUCCESS; HikariCP live test passed (3/3 tests) |
 | `PG-003` | Phase 2 | Create `V1__init_relational_schema.sql` with full relational DDL, constraints, and indexes | `COMPLETED` | 2026-10-25T19:14:28-04:00 | 2026-10-25T19:44:21-04:00 | 17 tables, 55 indexes, 72/72 assertions passed on PostgreSQL 17.11 |
 | `PG-004` | Phase 5 | Create core domain JPA entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`) | `COMPLETED` | 2026-10-25T21:02:53-04:00 | 2026-10-25T21:08:45-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 7/7 JPA integration tests passed |
-| `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `NOT STARTED` | — | — | Unit tests for order entity mapping |
+| `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 12/12 JPA integration tests passed |
 | `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `NOT STARTED` | — | — | Unit tests for cart & review mappings |
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `NOT STARTED` | — | — | Entity validation tests |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `NOT STARTED` | — | — | Entity validation tests |
@@ -529,7 +529,7 @@ Implemented strict environment isolation between the default MongoDB persistence
 
 **Transaction Manager & Dual-Persistence Analysis:**  
 - When running in default profile, relational auto-configurations are excluded; `MongoTransactionManager` configured in `MongoConfig.java` remains the exclusive transaction manager.
-- When `postgres-migration` profile is activated, `JpaTransactionManager` is introduced. `MongoConfig` explicitly registers `transactionManager` (`MongoTransactionManager`). In subsequent phases (PG-016), when services transition to PostgreSQL, `@Transactional` boundaries will be explicitly qualified or transitioned to `JpaTransactionManager` as MongoDB services are retired.
+- When `postgres-migration` profile is activated, `JpaTransactionManager` is introduced. `MongoConfig` explicitly registers `mongoTransactionManager` (`MongoTransactionManager`). In subsequent phases (PG-016), when services transition to PostgreSQL, `@Transactional` boundaries will be explicitly qualified or transitioned to `JpaTransactionManager` as MongoDB services are retired.
 
 **Next Task:**  
 `PG-028` — Early Flyway Migration Execution Smoke Test.
@@ -591,6 +591,46 @@ Created the five foundational PostgreSQL JPA entities in dedicated package `com.
 
 **Next Task:**  
 `PG-005` — Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`).
+
+### [2026-10-25T21:43:00-04:00] — Task PG-005: Operational JPA Entity Mapping for Orders
+
+**Task:** PG-005 — Operational JPA Entity Mapping for Orders  
+**Status:** COMPLETED  
+**Started At:** 2026-10-25T21:37:01-04:00  
+**Completed At:** 2026-10-25T21:43:00-04:00  
+
+**Implementation Summary:**  
+Created the three operational PostgreSQL JPA entities in dedicated package `com.lordgainsborough.restaurant.persistence.jpa.entity` mapping directly to the Flyway V1 schema (`customer_orders`, `order_items`, `order_messages`):
+1. `JpaCustomerOrder` (`customer_orders` table): String PK (`id` length 64), `customer_name`, `customer_email`, `customer_phone`, `pickup_date`, `pickup_time`, `special_instructions` (`TEXT`), `status` (default `'NEW'`), `average_ready_minutes` (default 25), `subtotal`, `tax`, `total` (all `BigDecimal` precision 10, scale 2), `created_at`, `accepted_at`, `ready_at`, `picked_up_at`, `no_show_at` (`LocalDateTime`), `reviewed` (`boolean` default `false`), and `tracking_token_hash` (`@JsonIgnore` protected from accidental serialization). Supported guest checkouts without mandatory user relationship.
+2. `JpaOrderItem` (`order_items` table): String PK (`id`), `order` (`@ManyToOne` lazy to `JpaCustomerOrder`), read-only `item_index` (`insertable = false, updatable = false`), nullable snapshot reference `menu_item_id`, `name`, `quantity`, `unit_price`, `total` (`BigDecimal` precision 10, scale 2), and `notes` (`TEXT`).
+3. `JpaOrderMessage` (`order_messages` table): String PK (`id`), `order` (`@ManyToOne` lazy to `JpaCustomerOrder`), read-only `item_index`, `sender_role`, `sender_name`, `text` (`TEXT`), and `created_at` (`LocalDateTime`).
+4. **Parent-Child Ownership and Ordering Strategy:**
+   - Designed bidirectional relationships on `JpaCustomerOrder` with `@OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)` and `@OrderColumn(name = "item_index", nullable = false)` for both `items` and `messages`.
+   - On the child entities (`JpaOrderItem` and `JpaOrderMessage`), the parent relationship is mapped via `@JoinColumn(name = "order_id", nullable = false)`. The `item_index` column is exposed read-only (`insertable = false, updatable = false`).
+   - This bidirectional design satisfies the strict `NOT NULL` constraints on both `order_id` and `item_index` in the V1 schema. Hibernate 7 populates `order_id` and the zero-based `item_index` immediately during the child's initial `INSERT` statement, eliminating intermediate `UPDATE` statements or transient null constraint violations.
+   - Child insertion, removal (orphan deletion), reordering (`Collections.swap`), and cascading order deletion are fully automated and verified via database queries.
+5. Preserved 100% MongoDB compatibility: Existing MongoDB models (`CustomerOrder`, embedded `OrderItem`, `OrderMessage`), repositories (`CustomerOrderRepository`), controllers (`OrderController`, `KdsController`), DTOs, and Socket.IO services remain untouched.
+
+**Verification:**  
+- Executed `OrderJpaEntityIntegrationTest` against disposable PostgreSQL 17.11 instance on loopback port 54338 initialized with Flyway V1:
+  - `test1_hibernateMetadataValidation_succeedsAgainstV1Schema`: PASSED. Verified all order entities pass Hibernate 7 `hibernate.hbm2ddl.auto=validate`.
+  - `test2_guestOrder_insertedWithoutRegisteredUser`: PASSED. Confirmed guest order persistence without user FK.
+  - `test3_cascadePersistenceAndOrdering_itemsAndMessages`: PASSED. Verified cascade insertion and list ordering preservation in fresh session and via direct JDBC query against `item_index`.
+  - `test4_appendMessage_toExistingOrder`: PASSED. Appending messages increments `item_index` correctly.
+  - `test5_orphanRemoval_removesItemRow`: PASSED. Removing child item deletes database row and reindexes siblings.
+  - `test6_reorderItems_updatesItemIndex`: PASSED. Swapping elements in child collection updates `item_index` in PostgreSQL.
+  - `test7_statusAndTimestamps_updatePersists`: PASSED. Verified lifecycle timestamp updates (`acceptedAt`, `readyAt`, `pickedUpAt`, `reviewed`).
+  - `test8_explicitChildIds_preservedWithoutRegeneration`: PASSED. Verified explicitly supplied UUIDs are preserved.
+  - `test9_bigDecimalPrecision_roundTripExact`: PASSED. Exact round-trip verification of `BigDecimal(10,2)` monetary fields.
+  - `test10_cascadeDelete_removesChildren`: PASSED. Removing parent order cascades deletion to all child items and messages.
+  - `test11_checkConstraints_rejectedByDatabase`: PASSED. Database rejects `quantity <= 0` and `subtotal < 0.00`.
+  - `test12_springBootContext_bootsAndValidatesAllEntities`: PASSED. Minimal Spring Boot 4 context boots and validates all 8 entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`, `JpaCustomerOrder`, `JpaOrderItem`, `JpaOrderMessage`).
+  - Tests run: 12, Failures: 0, Errors: 0, Skipped: 0 in 5.886s.
+- Executed full test suite: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest -Dtest.postgres.port=54337` (`BUILD SUCCESS`, Tests run: 26, Failures: 0, Errors: 0, Skipped: 0 in 10.738s).
+- Executed `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 107 source files compiled cleanly).
+
+**Next Task:**  
+`PG-006` — Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`).
 
 ---
 
