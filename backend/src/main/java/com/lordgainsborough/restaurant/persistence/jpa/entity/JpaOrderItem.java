@@ -81,8 +81,19 @@ public class JpaOrderItem {
     public JpaCustomerOrder getOrder() { return order; }
     public void setOrder(JpaCustomerOrder order) { this.order = order; }
 
+    /**
+     * Managed by Hibernate @OrderColumn on JpaCustomerOrder.items.
+     * Exposed read-only on the child entity for query or inspection purposes.
+     * Collection ordering in JpaCustomerOrder.getItems() is the authoritative source.
+     */
     public Integer getItemIndex() { return itemIndex; }
-    public void setItemIndex(Integer itemIndex) { this.itemIndex = itemIndex; }
+
+    /**
+     * Internal/package-private setter. Callers must reorder the parent
+     * {@link JpaCustomerOrder#getItems()} collection to persist new positions.
+     * Direct invocation does not alter database persistence.
+     */
+    void setItemIndex(Integer itemIndex) { this.itemIndex = itemIndex; }
 
     public String getMenuItemId() { return menuItemId; }
     public void setMenuItemId(String menuItemId) { this.menuItemId = menuItemId; }
@@ -106,11 +117,11 @@ public class JpaOrderItem {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof JpaOrderItem that)) return false;
-        return Objects.equals(id, that.id);
+        return this.id != null && Objects.equals(this.id, that.id);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return getClass().hashCode();
     }
 }

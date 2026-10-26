@@ -37,8 +37,10 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -192,12 +194,12 @@ public class OrderJpaEntityIntegrationTest {
         EntityTransaction tx = em.getTransaction();
         String orderId = "order-cascade-" + UUID.randomUUID();
 
-        String item1Id = "item-id-1";
-        String item2Id = "item-id-2";
-        String item3Id = "item-id-3";
+        String item1Id = "item-1-" + UUID.randomUUID();
+        String item2Id = "item-2-" + UUID.randomUUID();
+        String item3Id = "item-3-" + UUID.randomUUID();
 
-        String msg1Id = "msg-id-1";
-        String msg2Id = "msg-id-2";
+        String msg1Id = "msg-1-" + UUID.randomUUID();
+        String msg2Id = "msg-2-" + UUID.randomUUID();
 
         try {
             tx.begin();
@@ -304,10 +306,13 @@ public class OrderJpaEntityIntegrationTest {
         EntityTransaction tx = em.getTransaction();
         String orderId = "order-msg-" + UUID.randomUUID();
 
+        String msg1Id = "msg-bob-1-" + UUID.randomUUID();
+        String msg2Id = "msg-bob-2-" + UUID.randomUUID();
+
         try {
             tx.begin();
             JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Bob", "bob@example.com", "519-555-3344", "2026-11-02");
-            order.addMessage(new JpaOrderMessage("msg-bob-1", "CUSTOMER", "Bob", "First message"));
+            order.addMessage(new JpaOrderMessage(msg1Id, "CUSTOMER", "Bob", "First message"));
             em.persist(order);
             em.flush();
             tx.commit();
@@ -324,7 +329,7 @@ public class OrderJpaEntityIntegrationTest {
         try {
             tx.begin();
             JpaCustomerOrder order = em.find(JpaCustomerOrder.class, orderId);
-            order.addMessage(new JpaOrderMessage("msg-bob-2", "KITCHEN", "Kitchen Staff", "Second message"));
+            order.addMessage(new JpaOrderMessage(msg2Id, "KITCHEN", "Kitchen Staff", "Second message"));
             em.flush();
             tx.commit();
         } catch (Exception e) {
@@ -339,11 +344,11 @@ public class OrderJpaEntityIntegrationTest {
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT id, item_index FROM order_messages WHERE order_id = '" + orderId + "' ORDER BY item_index")) {
             assertThat(rs.next()).isTrue();
-            assertThat(rs.getString("id")).isEqualTo("msg-bob-1");
+            assertThat(rs.getString("id")).isEqualTo(msg1Id);
             assertThat(rs.getInt("item_index")).isEqualTo(0);
 
             assertThat(rs.next()).isTrue();
-            assertThat(rs.getString("id")).isEqualTo("msg-bob-2");
+            assertThat(rs.getString("id")).isEqualTo(msg2Id);
             assertThat(rs.getInt("item_index")).isEqualTo(1);
 
             assertThat(rs.next()).isFalse();
@@ -357,8 +362,8 @@ public class OrderJpaEntityIntegrationTest {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
         String orderId = "order-orphan-" + UUID.randomUUID();
-        String itemToRemoveId = "item-remove-me";
-        String itemToKeepId = "item-keep-me";
+        String itemToRemoveId = "item-remove-" + UUID.randomUUID();
+        String itemToKeepId = "item-keep-" + UUID.randomUUID();
 
         try {
             tx.begin();
@@ -418,8 +423,8 @@ public class OrderJpaEntityIntegrationTest {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
         String orderId = "order-reorder-" + UUID.randomUUID();
-        String firstItemId = "item-reorder-A";
-        String secondItemId = "item-reorder-B";
+        String firstItemId = "item-reorder-A-" + UUID.randomUUID();
+        String secondItemId = "item-reorder-B-" + UUID.randomUUID();
 
         try {
             tx.begin();
@@ -737,5 +742,372 @@ public class OrderJpaEntityIntegrationTest {
             assertThat(springEmf.getMetamodel().entity(JpaOrderMessage.class)).isNotNull();
             assertThat(springEmf.getMetamodel().entity(JpaUser.class)).isNotNull();
         });
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("Self-Assignment: order.setItems(getItems()) and setMessages(getMessages()) do not clear collections")
+    void test13_selfAssignment_preservesCollectionsWithoutClearing() {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String orderId = "order-self-assign-" + UUID.randomUUID();
+        String item1Id = "item-self-1-" + UUID.randomUUID();
+        String item2Id = "item-self-2-" + UUID.randomUUID();
+        String msg1Id = "msg-self-1-" + UUID.randomUUID();
+
+        try {
+            tx.begin();
+            JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Sam", "sam@example.com", "519-555-1212", "2026-11-10");
+            order.addItem(new JpaOrderItem(item1Id, "m1", "Item 1", 1, new BigDecimal("10.00"), new BigDecimal("10.00")));
+            order.addItem(new JpaOrderItem(item2Id, "m2", "Item 2", 1, new BigDecimal("15.00"), new BigDecimal("15.00")));
+            order.addMessage(new JpaOrderMessage(msg1Id, "CUSTOMER", "Sam", "Hello"));
+            em.persist(order);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Perform self-assignment on managed entities
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCustomerOrder order = em.find(JpaCustomerOrder.class, orderId);
+            assertThat(order.getItems()).hasSize(2);
+            assertThat(order.getMessages()).hasSize(1);
+
+            // Self-assignment must not wipe out collections!
+            order.setItems(order.getItems());
+            order.setMessages(order.getMessages());
+
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Verify elements survived in database and fresh session
+        em = emf.createEntityManager();
+        try {
+            JpaCustomerOrder loaded = em.find(JpaCustomerOrder.class, orderId);
+            assertThat(loaded.getItems()).hasSize(2);
+            assertThat(loaded.getItems().get(0).getId()).isEqualTo(item1Id);
+            assertThat(loaded.getItems().get(1).getId()).isEqualTo(item2Id);
+            assertThat(loaded.getMessages()).hasSize(1);
+            assertThat(loaded.getMessages().get(0).getId()).isEqualTo(msg1Id);
+        } finally {
+            em.close();
+        }
+    }
+
+    @Test
+    @Order(14)
+    @DisplayName("Managed Collection Replacement: Retained items stay managed, dropped items deleted as orphans")
+    void test14_replacementOfManagedCollection_preservesRetainedAndRemovesOrphans() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String orderId = "order-replace-" + UUID.randomUUID();
+        String itemAId = "item-rep-A-" + UUID.randomUUID();
+        String itemBId = "item-rep-B-" + UUID.randomUUID();
+        String itemCId = "item-rep-C-" + UUID.randomUUID();
+
+        String msg1Id = "msg-rep-1-" + UUID.randomUUID();
+        String msg2Id = "msg-rep-2-" + UUID.randomUUID();
+        String msg3Id = "msg-rep-3-" + UUID.randomUUID();
+
+        try {
+            tx.begin();
+            JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Tina", "tina@example.com", "519-555-3434", "2026-11-11");
+            order.addItem(new JpaOrderItem(itemAId, "m1", "Item A", 1, new BigDecimal("10.00"), new BigDecimal("10.00")));
+            order.addItem(new JpaOrderItem(itemBId, "m2", "Item B", 1, new BigDecimal("20.00"), new BigDecimal("20.00")));
+            order.addMessage(new JpaOrderMessage(msg1Id, "CUSTOMER", "Tina", "Msg 1"));
+            order.addMessage(new JpaOrderMessage(msg2Id, "KITCHEN", "Chef", "Msg 2"));
+            em.persist(order);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Replace items with [B, C] (drop A, retain B, add C) and messages with [M2, M3]
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCustomerOrder order = em.find(JpaCustomerOrder.class, orderId);
+            JpaOrderItem managedB = order.getItems().get(1);
+            assertThat(managedB.getId()).isEqualTo(itemBId);
+
+            JpaOrderItem newC = new JpaOrderItem(itemCId, "m3", "Item C", 1, new BigDecimal("30.00"), new BigDecimal("30.00"));
+            List<JpaOrderItem> replacementItems = new ArrayList<>();
+            replacementItems.add(managedB);
+            replacementItems.add(newC);
+            order.setItems(replacementItems);
+
+            JpaOrderMessage managedM2 = order.getMessages().get(1);
+            assertThat(managedM2.getId()).isEqualTo(msg2Id);
+            JpaOrderMessage newM3 = new JpaOrderMessage(msg3Id, "CUSTOMER", "Tina", "Msg 3");
+            List<JpaOrderMessage> replacementMessages = new ArrayList<>();
+            replacementMessages.add(managedM2);
+            replacementMessages.add(newM3);
+            order.setMessages(replacementMessages);
+
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Verify in database: A and M1 are deleted, B, C, M2, M3 exist in correct order
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+
+            // A is deleted
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM order_items WHERE id = '" + itemAId + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isEqualTo(0);
+            }
+            // M1 is deleted
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM order_messages WHERE id = '" + msg1Id + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isEqualTo(0);
+            }
+            // B and C exist with item_index 0 and 1
+            try (ResultSet rs = stmt.executeQuery("SELECT id, item_index FROM order_items WHERE order_id = '" + orderId + "' ORDER BY item_index")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(itemBId);
+                assertThat(rs.getInt("item_index")).isEqualTo(0);
+
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(itemCId);
+                assertThat(rs.getInt("item_index")).isEqualTo(1);
+
+                assertThat(rs.next()).isFalse();
+            }
+            // M2 and M3 exist with item_index 0 and 1
+            try (ResultSet rs = stmt.executeQuery("SELECT id, item_index FROM order_messages WHERE order_id = '" + orderId + "' ORDER BY item_index")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(msg2Id);
+                assertThat(rs.getInt("item_index")).isEqualTo(0);
+
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(msg3Id);
+                assertThat(rs.getInt("item_index")).isEqualTo(1);
+
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    @Order(15)
+    @DisplayName("Unrelated Child Removal: Attempting to remove a child belonging to another order does not detach it")
+    void test15_attemptedRemovalOfUnrelatedChild_doesNotDetachChild() {
+        JpaCustomerOrder order1 = new JpaCustomerOrder("order-1-" + UUID.randomUUID(), "User 1", "u1@example.com", "519-555-1111", "2026-11-12");
+        JpaCustomerOrder order2 = new JpaCustomerOrder("order-2-" + UUID.randomUUID(), "User 2", "u2@example.com", "519-555-2222", "2026-11-12");
+
+        JpaOrderItem itemOrder1 = new JpaOrderItem("item-1-" + UUID.randomUUID(), "m1", "Dish 1", 1, new BigDecimal("10.00"), new BigDecimal("10.00"));
+        JpaOrderItem itemOrder2 = new JpaOrderItem("item-2-" + UUID.randomUUID(), "m2", "Dish 2", 1, new BigDecimal("20.00"), new BigDecimal("20.00"));
+
+        order1.addItem(itemOrder1);
+        order2.addItem(itemOrder2);
+
+        JpaOrderMessage msgOrder1 = new JpaOrderMessage("msg-1-" + UUID.randomUUID(), "CUSTOMER", "U1", "Text 1");
+        JpaOrderMessage msgOrder2 = new JpaOrderMessage("msg-2-" + UUID.randomUUID(), "CUSTOMER", "U2", "Text 2");
+
+        order1.addMessage(msgOrder1);
+        order2.addMessage(msgOrder2);
+
+        // Attempt to remove order2's item and message from order1
+        order1.removeItem(itemOrder2);
+        order1.removeMessage(msgOrder2);
+
+        // Crucial verification: itemOrder2 and msgOrder2 must NOT have their parent order detached!
+        assertThat(itemOrder2.getOrder()).isSameAs(order2);
+        assertThat(msgOrder2.getOrder()).isSameAs(order2);
+        assertThat(order1.getItems()).containsExactly(itemOrder1);
+        assertThat(order2.getItems()).containsExactly(itemOrder2);
+        assertThat(order1.getMessages()).containsExactly(msgOrder1);
+        assertThat(order2.getMessages()).containsExactly(msgOrder2);
+    }
+
+    @Test
+    @Order(16)
+    @DisplayName("Equality and HashCode: Distinct transient entities with null IDs never compare equal, hashCode remains stable")
+    void test16_distinctTransientEntitiesWithNullIds_equalityAndHashCodeContract() {
+        // 1. JpaOrderItem
+        JpaOrderItem item1 = new JpaOrderItem("m1", "Item 1", 1, new BigDecimal("10.00"), new BigDecimal("10.00"));
+        JpaOrderItem item2 = new JpaOrderItem("m2", "Item 2", 1, new BigDecimal("20.00"), new BigDecimal("20.00"));
+        assertThat(item1.getId()).isNull();
+        assertThat(item2.getId()).isNull();
+
+        // Must NOT compare equal solely because both IDs are null
+        assertThat(item1.equals(item2)).isFalse();
+        assertThat(item2.equals(item1)).isFalse();
+        assertThat(item1.equals(item1)).isTrue(); // reflexive
+        assertThat(item1.equals(null)).isFalse();
+        assertThat(item1.equals(new Object())).isFalse();
+
+        Set<JpaOrderItem> itemSet = new HashSet<>();
+        itemSet.add(item1);
+        itemSet.add(item2);
+        assertThat(itemSet).hasSize(2);
+
+        // HashCode stability across persistence
+        int item1HashBefore = item1.hashCode();
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String orderId = "order-eq-" + UUID.randomUUID();
+        try {
+            tx.begin();
+            JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Ursula", "ursula@example.com", "519-555-4545", "2026-11-13");
+            order.addItem(item1);
+            em.persist(order);
+            em.flush();
+            tx.commit();
+        } finally {
+            em.close();
+        }
+
+        assertThat(item1.getId()).isNotNull();
+        assertThat(item1.hashCode()).isEqualTo(item1HashBefore);
+        assertThat(itemSet.contains(item1)).isTrue(); // Set lookup remains valid after persistence
+
+        // 2. JpaOrderMessage
+        JpaOrderMessage msg1 = new JpaOrderMessage("CUSTOMER", "Ursula", "Msg 1");
+        JpaOrderMessage msg2 = new JpaOrderMessage("KITCHEN", "Chef", "Msg 2");
+        assertThat(msg1.getId()).isNull();
+        assertThat(msg2.getId()).isNull();
+        assertThat(msg1.equals(msg2)).isFalse();
+        assertThat(msg1.equals(msg1)).isTrue();
+
+        Set<JpaOrderMessage> msgSet = new HashSet<>();
+        msgSet.add(msg1);
+        msgSet.add(msg2);
+        assertThat(msgSet).hasSize(2);
+        int msg1HashBefore = msg1.hashCode();
+
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCustomerOrder order = em.find(JpaCustomerOrder.class, orderId);
+            order.addMessage(msg1);
+            em.flush();
+            tx.commit();
+        } finally {
+            em.close();
+        }
+        assertThat(msg1.getId()).isNotNull();
+        assertThat(msg1.hashCode()).isEqualTo(msg1HashBefore);
+        assertThat(msgSet.contains(msg1)).isTrue();
+
+        // 3. JpaCustomerOrder
+        JpaCustomerOrder orderTransient1 = new JpaCustomerOrder();
+        JpaCustomerOrder orderTransient2 = new JpaCustomerOrder();
+        assertThat(orderTransient1.getId()).isNull();
+        assertThat(orderTransient2.getId()).isNull();
+        assertThat(orderTransient1.equals(orderTransient2)).isFalse();
+        assertThat(orderTransient1.equals(orderTransient1)).isTrue();
+    }
+
+    @Test
+    @Order(17)
+    @DisplayName("Repeated Execution Isolation: Multiple independent order lifecycle cycles execute without ID collisions")
+    void test17_repeatedExecutionIsolation_multipleCyclesSucceed() {
+        for (int cycle = 0; cycle < 3; cycle++) {
+            EntityManager em = emf.createEntityManager();
+            EntityTransaction tx = em.getTransaction();
+            String orderId = "order-repeat-cycle-" + cycle + "-" + UUID.randomUUID();
+            String itemId = "item-repeat-cycle-" + cycle + "-" + UUID.randomUUID();
+            String msgId = "msg-repeat-cycle-" + cycle + "-" + UUID.randomUUID();
+
+            try {
+                tx.begin();
+                JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Repeat Customer", "repeat@example.com", "519-555-0000", "2026-11-14");
+                order.addItem(new JpaOrderItem(itemId, "m1", "Repeated Dish", 1, new BigDecimal("12.00"), new BigDecimal("12.00")));
+                order.addMessage(new JpaOrderMessage(msgId, "CUSTOMER", "Repeat Customer", "Cycle " + cycle));
+                em.persist(order);
+                em.flush();
+                tx.commit();
+            } finally {
+                em.close();
+            }
+
+            em = emf.createEntityManager();
+            try {
+                JpaCustomerOrder loaded = em.find(JpaCustomerOrder.class, orderId);
+                assertThat(loaded).isNotNull();
+                assertThat(loaded.getItems()).hasSize(1);
+                assertThat(loaded.getItems().get(0).getId()).isEqualTo(itemId);
+                assertThat(loaded.getMessages()).hasSize(1);
+                assertThat(loaded.getMessages().get(0).getId()).isEqualTo(msgId);
+            } finally {
+                em.close();
+            }
+        }
+    }
+
+    @Test
+    @Order(18)
+    @DisplayName("ItemIndex Read-Only: JpaOrderItem and JpaOrderMessage do not expose public setItemIndex, collection order is authoritative")
+    void test18_readOnlyItemIndex_collectionOrderAuthoritative() throws Exception {
+        // Verify setItemIndex is not public on JpaOrderItem or JpaOrderMessage
+        assertThat(java.lang.reflect.Modifier.isPublic(
+                JpaOrderItem.class.getDeclaredMethod("setItemIndex", Integer.class).getModifiers()))
+                .isFalse();
+        assertThat(java.lang.reflect.Modifier.isPublic(
+                JpaOrderMessage.class.getDeclaredMethod("setItemIndex", Integer.class).getModifiers()))
+                .isFalse();
+
+        // Verify collection order authoritatively sets item_index in PostgreSQL
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String orderId = "order-index-auth-" + UUID.randomUUID();
+        String item1Id = "item-idx-1-" + UUID.randomUUID();
+        String item2Id = "item-idx-2-" + UUID.randomUUID();
+
+        try {
+            tx.begin();
+            JpaCustomerOrder order = new JpaCustomerOrder(orderId, "Victor", "victor@example.com", "519-555-7878", "2026-11-15");
+            JpaOrderItem item1 = new JpaOrderItem(item1Id, "m1", "First", 1, new BigDecimal("10.00"), new BigDecimal("10.00"));
+            JpaOrderItem item2 = new JpaOrderItem(item2Id, "m2", "Second", 1, new BigDecimal("20.00"), new BigDecimal("20.00"));
+
+            order.addItem(item1);
+            order.addItem(item2);
+            em.persist(order);
+            em.flush();
+            tx.commit();
+        } finally {
+            em.close();
+        }
+
+        // Verify that database item_index reflects list position (0, 1)
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT id, item_index FROM order_items WHERE order_id = '" + orderId + "' ORDER BY item_index")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("id")).isEqualTo(item1Id);
+            assertThat(rs.getInt("item_index")).isEqualTo(0);
+
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("id")).isEqualTo(item2Id);
+            assertThat(rs.getInt("item_index")).isEqualTo(1);
+
+            assertThat(rs.next()).isFalse();
+        }
     }
 }

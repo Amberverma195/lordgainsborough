@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T21:43:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T22:01:30-04:00 (America/Toronto)  
 
 ---
 
@@ -352,7 +352,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-002` | Phase 4 | Configure DataSource, HikariCP, and Flyway in `application.properties` | `COMPLETED` | 2026-10-25T20:07:10-04:00 | 2026-10-25T20:19:30-04:00 | Profile isolation verified; `mvn clean compile -DskipTests` SUCCESS; HikariCP live test passed (3/3 tests) |
 | `PG-003` | Phase 2 | Create `V1__init_relational_schema.sql` with full relational DDL, constraints, and indexes | `COMPLETED` | 2026-10-25T19:14:28-04:00 | 2026-10-25T19:44:21-04:00 | 17 tables, 55 indexes, 72/72 assertions passed on PostgreSQL 17.11 |
 | `PG-004` | Phase 5 | Create core domain JPA entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`) | `COMPLETED` | 2026-10-25T21:02:53-04:00 | 2026-10-25T21:08:45-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 7/7 JPA integration tests passed |
-| `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 12/12 JPA integration tests passed |
+| `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 18/18 JPA integration tests passed |
 | `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `NOT STARTED` | — | — | Unit tests for cart & review mappings |
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `NOT STARTED` | — | — | Entity validation tests |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `NOT STARTED` | — | — | Entity validation tests |
@@ -628,6 +628,43 @@ Created the three operational PostgreSQL JPA entities in dedicated package `com.
   - Tests run: 12, Failures: 0, Errors: 0, Skipped: 0 in 5.886s.
 - Executed full test suite: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest -Dtest.postgres.port=54337` (`BUILD SUCCESS`, Tests run: 26, Failures: 0, Errors: 0, Skipped: 0 in 10.738s).
 - Executed `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 107 source files compiled cleanly).
+
+**Next Task:**  
+`PG-006` — Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`).
+
+### [2026-10-25T22:01:30-04:00] — PG-005 Follow-Up: Relationship Helper Hardening
+
+**Task:** PG-005 Follow-Up — Relationship Helper Hardening  
+**Status:** COMPLETED  
+**Timestamp:** 2026-10-25T22:01:30-04:00  
+
+**Implementation Summary:**  
+Hardened relationship helper methods, collection replacement, identifier equality/hashing, and test isolation across the three operational order JPA entities:
+1. **Safe Collection Replacement (`setItems` / `setMessages`):**
+   - Added reference guard (`if (this.items == items) return;`) to ensure self-assignment never inadvertently clears collections or triggers orphan deletion.
+   - Replaced naive `clear()` calls with an in-place collection synchronization algorithm: snapshots the incoming list, iterates through existing elements removing and detaching only those no longer present, and synchronizes positions/adds new items. This avoids clearing managed `PersistentCollection` instances in Hibernate while properly triggering orphan removal for removed items.
+2. **Strict Child Detachment Guard (`removeItem` / `removeMessage`):**
+   - Guarded parent detachment so that `item.setOrder(null)` only executes when `this.items.remove(item)` returns `true` and `item.getOrder() == this`. Prevents unintended detachment or corruption when attempting to remove an unrelated child entity belonging to another parent.
+3. **Transient Equality and Stable Hash Codes:**
+   - Corrected `equals()` across `JpaCustomerOrder`, `JpaOrderItem`, and `JpaOrderMessage` to require non-null IDs (`this.id != null && Objects.equals(this.id, that.id)`). Distinct transient entities with null IDs never compare equal solely because both IDs are null.
+   - Stabilized `hashCode()` by returning `getClass().hashCode()`. Guarantees hash codes do not mutate across entity lifecycle states (transient → persisted), preserving `HashSet` and `HashMap` bucket integrity upon ID generation.
+4. **Read-Only `itemIndex` Accessors:**
+   - Restated package-private visibility for `setItemIndex()` on `JpaOrderItem` and `JpaOrderMessage`, removing it from the public API. Javadoc clearly specifies that collection ordering in `JpaCustomerOrder` is the sole authoritative source of database positions.
+5. **Dynamic Test Fixture Isolation:**
+   - Replaced all hardcoded child fixture IDs (`item-id-*`, `msg-id-*`, `item-remove-*`, `item-reorder-*`) with dynamic UUIDs in `OrderJpaEntityIntegrationTest` to eliminate primary key collision risks during repeated test execution.
+
+**Verification:**  
+- Executed `OrderJpaEntityIntegrationTest` against disposable PostgreSQL 17.11 instance on loopback port 54338:
+  - 12 existing tests passed.
+  - Added `test13_selfAssignment_preservesCollectionsWithoutClearing`: PASSED. Confirmed self-assignment preserves collections.
+  - Added `test14_replacementOfManagedCollection_preservesRetainedAndRemovesOrphans`: PASSED. Confirmed retained items remain managed, new items are added, and dropped items are deleted as orphans.
+  - Added `test15_attemptedRemovalOfUnrelatedChild_doesNotDetachChild`: PASSED. Confirmed attempting to remove an unrelated child does not detach its parent reference.
+  - Added `test16_distinctTransientEntitiesWithNullIds_equalityAndHashCodeContract`: PASSED. Confirmed distinct new entities with null IDs do not compare equal, and hash codes remain stable in `Set` across persistence.
+  - Added `test17_repeatedExecutionIsolation_multipleCyclesSucceed`: PASSED. Multi-cycle lifecycle runs cleanly without ID collisions.
+  - Added `test18_readOnlyItemIndex_collectionOrderAuthoritative`: PASSED. Confirmed non-public `setItemIndex` and authoritative collection ordering.
+  - Tests run: 18, Failures: 0, Errors: 0, Skipped: 0 in 6.540s.
+- Full regression suite: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest -Dtest.postgres.port=54337` (`BUILD SUCCESS`, Tests run: 32, Failures: 0, Errors: 0, Skipped: 0 in 11.548s).
+- Clean compilation: `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 107 source files compiled cleanly).
 
 **Next Task:**  
 `PG-006` — Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`).

@@ -74,8 +74,19 @@ public class JpaOrderMessage {
     public JpaCustomerOrder getOrder() { return order; }
     public void setOrder(JpaCustomerOrder order) { this.order = order; }
 
+    /**
+     * Managed by Hibernate @OrderColumn on JpaCustomerOrder.messages.
+     * Exposed read-only on the child entity for query or inspection purposes.
+     * Collection ordering in JpaCustomerOrder.getMessages() is the authoritative source.
+     */
     public Integer getItemIndex() { return itemIndex; }
-    public void setItemIndex(Integer itemIndex) { this.itemIndex = itemIndex; }
+
+    /**
+     * Internal/package-private setter. Callers must reorder the parent
+     * {@link JpaCustomerOrder#getMessages()} collection to persist new positions.
+     * Direct invocation does not alter database persistence.
+     */
+    void setItemIndex(Integer itemIndex) { this.itemIndex = itemIndex; }
 
     public String getSenderRole() { return senderRole; }
     public void setSenderRole(String senderRole) { this.senderRole = senderRole; }
@@ -93,11 +104,11 @@ public class JpaOrderMessage {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof JpaOrderMessage that)) return false;
-        return Objects.equals(id, that.id);
+        return this.id != null && Objects.equals(this.id, that.id);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return getClass().hashCode();
     }
 }

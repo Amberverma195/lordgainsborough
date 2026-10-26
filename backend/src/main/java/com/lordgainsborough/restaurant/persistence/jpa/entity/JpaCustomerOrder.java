@@ -125,9 +125,10 @@ public class JpaCustomerOrder {
     }
 
     public void removeItem(JpaOrderItem item) {
-        if (item != null) {
-            items.remove(item);
-            item.setOrder(null);
+        if (item != null && items.remove(item)) {
+            if (item.getOrder() == this) {
+                item.setOrder(null);
+            }
         }
     }
 
@@ -139,9 +140,10 @@ public class JpaCustomerOrder {
     }
 
     public void removeMessage(JpaOrderMessage message) {
-        if (message != null) {
-            messages.remove(message);
-            message.setOrder(null);
+        if (message != null && messages.remove(message)) {
+            if (message.getOrder() == this) {
+                message.setOrder(null);
+            }
         }
     }
 
@@ -204,20 +206,106 @@ public class JpaCustomerOrder {
 
     public List<JpaOrderItem> getItems() { return items; }
     public void setItems(List<JpaOrderItem> items) {
-        this.items.clear();
-        if (items != null) {
-            for (JpaOrderItem item : items) {
-                addItem(item);
+        if (this.items == items) {
+            return;
+        }
+        if (items == null) {
+            java.util.Iterator<JpaOrderItem> iterator = this.items.iterator();
+            while (iterator.hasNext()) {
+                JpaOrderItem existing = iterator.next();
+                iterator.remove();
+                if (existing.getOrder() == this) {
+                    existing.setOrder(null);
+                }
+            }
+            return;
+        }
+
+        List<JpaOrderItem> incoming = new ArrayList<>(items);
+
+        // 1. Remove elements no longer present in incoming list
+        java.util.Iterator<JpaOrderItem> iterator = this.items.iterator();
+        while (iterator.hasNext()) {
+            JpaOrderItem existing = iterator.next();
+            if (!incoming.contains(existing)) {
+                iterator.remove();
+                if (existing.getOrder() == this) {
+                    existing.setOrder(null);
+                }
+            }
+        }
+
+        // 2. Synchronize order and add new items
+        for (int i = 0; i < incoming.size(); i++) {
+            JpaOrderItem targetItem = incoming.get(i);
+            targetItem.setOrder(this);
+            int currentIndex = this.items.indexOf(targetItem);
+            if (currentIndex == -1) {
+                if (i < this.items.size()) {
+                    this.items.add(i, targetItem);
+                } else {
+                    this.items.add(targetItem);
+                }
+            } else if (currentIndex != i) {
+                this.items.remove(currentIndex);
+                if (i < this.items.size()) {
+                    this.items.add(i, targetItem);
+                } else {
+                    this.items.add(targetItem);
+                }
             }
         }
     }
 
     public List<JpaOrderMessage> getMessages() { return messages; }
     public void setMessages(List<JpaOrderMessage> messages) {
-        this.messages.clear();
-        if (messages != null) {
-            for (JpaOrderMessage message : messages) {
-                addMessage(message);
+        if (this.messages == messages) {
+            return;
+        }
+        if (messages == null) {
+            java.util.Iterator<JpaOrderMessage> iterator = this.messages.iterator();
+            while (iterator.hasNext()) {
+                JpaOrderMessage existing = iterator.next();
+                iterator.remove();
+                if (existing.getOrder() == this) {
+                    existing.setOrder(null);
+                }
+            }
+            return;
+        }
+
+        List<JpaOrderMessage> incoming = new ArrayList<>(messages);
+
+        // 1. Remove elements no longer present in incoming list
+        java.util.Iterator<JpaOrderMessage> iterator = this.messages.iterator();
+        while (iterator.hasNext()) {
+            JpaOrderMessage existing = iterator.next();
+            if (!incoming.contains(existing)) {
+                iterator.remove();
+                if (existing.getOrder() == this) {
+                    existing.setOrder(null);
+                }
+            }
+        }
+
+        // 2. Synchronize order and add new messages
+        for (int i = 0; i < incoming.size(); i++) {
+            JpaOrderMessage targetMsg = incoming.get(i);
+            targetMsg.setOrder(this);
+            int currentIndex = this.messages.indexOf(targetMsg);
+            if (currentIndex == -1) {
+                if (i < this.messages.size()) {
+                    this.messages.add(i, targetMsg);
+                } else {
+                    this.messages.add(targetMsg);
+                }
+            } else if (currentIndex != i) {
+                this.messages.remove(currentIndex);
+                if (i < this.messages.size()) {
+                    this.messages.add(i, targetMsg);
+                } else {
+                    this.messages.add(targetMsg);
+                }
             }
         }
     }
@@ -226,11 +314,11 @@ public class JpaCustomerOrder {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof JpaCustomerOrder that)) return false;
-        return Objects.equals(id, that.id);
+        return this.id != null && Objects.equals(this.id, that.id);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id);
+        return getClass().hashCode();
     }
 }
