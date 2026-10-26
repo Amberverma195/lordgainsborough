@@ -358,7 +358,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `COMPLETED` | 2026-10-25T22:51:00-04:00 | 2026-10-25T22:56:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED (all 17 entities); 25/25 integration tests passed; full 7-suite regression passed (109/109 tests) |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 30/30 repository integration tests passed; full 9-suite regression passed (164/164 tests) |
-| `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `NOT STARTED` | — | — | Repository query tests |
+| `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 33/33 security repository integration tests passed; full 10-suite regression passed (198/198 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `NOT STARTED` | — | — | `DataInitializerTest` pass |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
@@ -1235,6 +1235,90 @@ Resolved all three verification gaps and edge cases identified during the PG-010
 
 **Next Task:**  
 `PG-011` — Implement Spring Data JPA repositories for security challenges and abuse limits (`JpaSignupOtpChallengeRepository`, `JpaPasswordResetOtpChallengeRepository`, `JpaSignupAbuseLimitRepository`, `JpaLoginFailureStateRepository`).
+
+### [2026-10-26T00:49:00-04:00] — PG-011: Security Challenge and Abuse-Limit Spring Data JPA Repositories
+
+**Task:** PG-011 — Security Challenge and Abuse-Limit Spring Data JPA Repositories  
+**Status:** COMPLETED  
+**Start Timestamp:** 2026-10-26T00:35:00-04:00  
+**Completion Timestamp:** 2026-10-26T00:49:00-04:00  
+**Baseline Commit:** `a3b30155bc22bb70008235fc4dd4b8e094156368`  
+**Package:** `com.lordgainsborough.restaurant.persistence.jpa.repository`
+
+**Implementation Summary:**  
+Completed the final repository task of Phase 8, creating the four PostgreSQL security challenge, abuse limit, and login failure state Spring Data JPA repositories. This brings the total implemented JPA repository interfaces to **13**, covering all 17 mapped JPA entities across the relational schema.
+
+1. **`JpaSignupOtpChallengeRepository`** (extends `JpaRepository<JpaSignupOtpChallenge, String>`):
+   - Primary key: `emailKey` (`VARCHAR(64)` SHA-256 derived email hash).
+   - Core CRUD: `save`, `saveAndFlush`, `findById`, `existsById`, `deleteById`. Assigned email key preserved without mutation or re-hashing.
+   - Query methods:
+     - `findByChallengeId(String challengeId)`: returns `List<JpaSignupOtpChallenge>` because `signup_otp_challenges.challenge_id` has a standard index in V1 but is not declared UNIQUE.
+     - `findByStatus(OtpChallengeStatus status)`: filters challenges by status (`ACTIVE`, `VERIFIED`, `LOCKED`).
+     - `findByChallengeExpiresAtLessThanEqual(Instant cutoff)`: finds expired challenges relative to an explicit instant.
+     - `findByClientIdempotencyKey(String idempotencyKey)`: finds challenge records matching client dispatch idempotency keys.
+2. **`JpaPasswordResetOtpChallengeRepository`** (extends `JpaRepository<JpaPasswordResetOtpChallenge, String>`):
+   - Primary key: `emailKey` (`VARCHAR(64)`).
+   - Core CRUD: `save`, `saveAndFlush`, `findById`, `existsById`, `deleteById`.
+   - Query methods:
+     - `findByChallengeId(String challengeId)`: returns `Optional<JpaPasswordResetOtpChallenge>` strictly guaranteed by the `uq_pwd_reset_challenge_id UNIQUE (challenge_id)` constraint in Flyway V1.
+     - `findByUserId(String userId)` (parameterized JPQL query via `c.user.id`) and `findByUser_Id(String userId)` (derived traversal): look up challenges associated with a user without treating `userId` as a loose scalar.
+     - `findByStatus(PasswordResetChallengeStatus status)`: filters challenges by status (`ACTIVE`, `PROCESSING`, `LOCKED`, `CONSUMED`).
+     - `findByChallengeExpiresAtLessThanEqual(Instant cutoff)`: identifies expired password reset challenges.
+     - `findByClientIdempotencyKey(String idempotencyKey)`: looks up challenges by client idempotency token.
+   - Cascading and FK: verified that challenge deletion does not remove the user, and user deletion cascades to delete all associated password reset challenges (`ON DELETE CASCADE`).
+3. **`JpaSignupAbuseLimitRepository`** (extends `JpaRepository<JpaSignupAbuseLimit, String>`):
+   - Primary key: application-assigned String (`VARCHAR(128)`).
+   - Core CRUD: `save`, `saveAndFlush`, `findById`, `existsById`, `deleteById`.
+   - Precision: verified handling of `BIGINT` counters (`long` count) exceeding `Integer.MAX_VALUE` (tested up to 5,000,000,000L).
+   - Check constraint: verified `chk_signup_abuse_count CHECK (count >= 0)` rejects negative counts.
+   - Query methods:
+     - `findByBucketTypeAndSubjectHash(BucketType bucketType, String subjectHash)`: returns `List<JpaSignupAbuseLimit>` because the composite index `idx_abuse_limits_bucket_subject` in V1 is non-unique.
+     - `findBySubjectHash(String subjectHash)`: returns all buckets associated with a keyed subject hash.
+     - `findByExpiresAtLessThanEqual(Instant cutoff)`: locates expired rate limit window buckets.
+4. **`JpaLoginFailureStateRepository`** (extends `JpaRepository<JpaLoginFailureState, String>`):
+   - Architectural distinction: Newly created PostgreSQL repository interface. The original MongoDB implementation (`LoginRateLimiter`) used `MongoTemplate` directly rather than a `MongoRepository` interface.
+   - Primary key: application-assigned String (`VARCHAR(128)`).
+   - Core CRUD: `save`, `saveAndFlush`, `findById`, `existsById`, `deleteById`.
+   - Check constraint: verified `chk_login_failure_count CHECK (failure_count >= 0)` rejects negative counters.
+   - Query methods:
+     - `findBySubjectHash(String subjectHash)`: looks up state by keyed subject hash.
+     - `findByExpiresAtLessThanEqual(Instant cutoff)`: locates expired failure states.
+     - `findActiveBlocks(Instant now)` (custom JPQL) and `findByBlockedUntilAfterAndExpiresAtAfter(Instant now1, Instant now2)`: accurately queries actively blocked records where both `blockedUntil > now` and `expiresAt > now`, ensuring that stale expiration overrides obsolete block timestamps.
+
+**Security & Concurrency Boundaries:**
+- Concurrency logic strictly deferred: Ordinary JPA repository CRUD operations do NOT perform atomic increments or conditional state transitions. Atomic rate-limiter upserts and security state machines remain MongoDB-backed and will be transitioned in:
+  - `PG-013`: `PostgresAbuseCounterStore` (atomic SQL upsert).
+  - `PG-014`: `LoginRateLimiter` (transactional locking and cooldown migration).
+  - `PG-015`: `SignupOtpChallengePersistence` (transactional OTP persistence).
+  - `PG-016`: `PasswordResetOtpChallengePersistence` and `PasswordResetService` (transactional reset state management).
+- Sensitive Data Protection: Verified Jackson serialization hides raw digests, secret operation IDs, idempotency keys, and user password hashes from JSON output across all security entities.
+- Timestamp & Clock Caveat: Verified that `@PreUpdate` currently evaluates `Instant.now()`. Registered requirement to support injectable `Clock` during PG-015 and PG-016 without silently mutating JPA entity definitions during PG-011.
+
+**Verification Results:**
+- **Targeted Integration Test Suite:** `com.lordgainsborough.restaurant.persistence.jpa.SecurityJpaRepositoryIntegrationTest`
+  - Tests Run: **33**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 11.57s).
+- **Complete PostgreSQL 10-Suite Regression Suite:**
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest,SecurityJpaRepositoryIntegrationTest -Dtest.postgres.port=54349`
+  - Suites Executed:
+    1. `PostgresConfigurationSmokeTest`
+    2. `FlywayMigrationIntegrationTest`
+    3. `CoreJpaEntityIntegrationTest`
+    4. `OrderJpaEntityIntegrationTest`
+    5. `CartReviewReservationJpaIntegrationTest`
+    6. `SecurityChallengeJpaIntegrationTest`
+    7. `AbuseAndLoginFailureJpaIntegrationTest`
+    8. `CoreJpaRepositoryIntegrationTest`
+    9. `OperationalJpaRepositoryIntegrationTest`
+    10. `SecurityJpaRepositoryIntegrationTest`
+  - Results: **198 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 49.992s across all 10 suites).
+- **Clean Compilation:** `mvn clean test-compile` (`BUILD SUCCESS`).
+- **Profile Isolation:** Verified that default MongoDB profile initializes cleanly with zero PostgreSQL connection requirements and zero JPA repository bean registrations.
+
+**MongoDB Compatibility:**  
+Existing MongoDB models (`SignupOtpChallenge`, `PasswordResetOtpChallenge`, `SignupAbuseLimit`, `LoginFailureState`), repositories (`SignupOtpChallengeRepository`, `PasswordResetOtpChallengeRepository`, `SignupAbuseLimitRepository`), and services (`SignupOtpChallengePersistence`, `PasswordResetOtpChallengePersistence`, `MongoAbuseCounterStore`, `LoginRateLimiter`, `PasswordResetService`, `AuthController`) remain 100% untouched and operational.
+
+**Next Task:**  
+`PG-012` — Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization (`NOT STARTED`).
 
 ---
 
