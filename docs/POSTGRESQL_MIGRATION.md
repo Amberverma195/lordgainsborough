@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T00:15:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T00:58:00-04:00 (America/Toronto)  
 
 ---
 
@@ -1314,6 +1314,7 @@ Completed the final repository task of Phase 8, creating the four PostgreSQL sec
   - Results: **198 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 49.992s across all 10 suites).
 - **Clean Compilation:** `mvn clean test-compile` (`BUILD SUCCESS`).
 - **Profile Isolation:** Verified that default MongoDB profile initializes cleanly with zero PostgreSQL connection requirements and zero JPA repository bean registrations.
+  - *Verification Scope & Boundary Note:* Test 31 proves that Spring Boot auto-configuration exclusions prevent JPA repositories and datasource beans from activating when properties/beans are absent. However, it configures these exclusions directly in the test container context rather than booting the complete production application with the production properties file and live MongoDB services. Comprehensive full-application runtime verification remains required before the database cutover in Phase 15.
 
 **MongoDB Compatibility:**  
 Existing MongoDB models (`SignupOtpChallenge`, `PasswordResetOtpChallenge`, `SignupAbuseLimit`, `LoginFailureState`), repositories (`SignupOtpChallengeRepository`, `PasswordResetOtpChallengeRepository`, `SignupAbuseLimitRepository`), and services (`SignupOtpChallengePersistence`, `PasswordResetOtpChallengePersistence`, `MongoAbuseCounterStore`, `LoginRateLimiter`, `PasswordResetService`, `AuthController`) remain 100% untouched and operational.
