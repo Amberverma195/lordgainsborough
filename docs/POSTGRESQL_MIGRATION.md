@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T23:23:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T00:15:00-04:00 (America/Toronto)  
 
 ---
 
@@ -357,7 +357,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 25/25 security integration tests passed |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `COMPLETED` | 2026-10-25T22:51:00-04:00 | 2026-10-25T22:56:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED (all 17 entities); 25/25 integration tests passed; full 7-suite regression passed (109/109 tests) |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
-| `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `NOT STARTED` | — | — | Repository query method tests |
+| `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 30/30 repository integration tests passed; full 9-suite regression passed (164/164 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `NOT STARTED` | — | — | Repository query tests |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `NOT STARTED` | — | — | `DataInitializerTest` pass |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
@@ -1057,6 +1057,147 @@ Implement Spring Data JPA repositories in `com.lordgainsborough.restaurant.persi
 
 **Next Task:**
 `PG-010` — Implement Spring Data JPA repositories for operational domain models (`JpaCustomerOrderRepository`, `JpaCartRepository`, `JpaOrderReviewRepository`, `JpaReservationRepository`).
+
+---
+
+### [2026-10-25T23:55:00-04:00] — Test Infrastructure Hardening: Safe Disposable DB Isolation & Repository Verification
+
+**Task ID:** `TEST-INFRA-HARDENING-PREFLIGHT-A-B`  
+**Phase:** Phase 8 Preflight Hardening  
+**Status:** `COMPLETED`  
+**Timestamp:** 2026-10-25T23:55:00-04:00 (`America/Toronto`)  
+**Commit Baseline:** `9a80ccf` → Commit `142e413`  
+
+**Objective:**  
+Address code review findings prior to PG-010:
+1. **Preflight A:** Eliminate unconditional `DELETE FROM ...` table-wide deletions in `CoreJpaEntityIntegrationTest` and `CoreJpaRepositoryIntegrationTest`. Replace with uniquely provisioned disposable databases, loopback connection safeguards, and per-test synthetic fixtures.
+2. **Preflight B:** Strengthen wildcard escaping tests (literal `%` and `_`) and verify default MongoDB startup profile isolation without requiring PostgreSQL. Document deferred first-match behavior on duplicate menu item names.
+
+**Implementation Details:**
+1. **Safe Disposable Database Isolation:**
+   - Modified `CoreJpaEntityIntegrationTest.java` and `CoreJpaRepositoryIntegrationTest.java` to provision dynamically generated disposable test databases (`core_jpa_test_<uuid>`, `core_jpa_repo_test_<uuid>`).
+   - Implemented `assertSafeTestEnvironment(port, dbName)`:
+     - Validates loopback execution (`127.0.0.1`).
+     - Enforces expected test prefix and alphanumeric identifier pattern.
+     - Strictly forbids operation against system, production, or shared database names (`postgres`, `template0`, `template1`, `public`, `lordgainsborough`, `restaurant`).
+   - Implemented `dropDisposableDatabaseSafely(port, dbName)`:
+     - Terminates active connections via `pg_terminate_backend(pid)` before executing safe `DROP DATABASE IF EXISTS`.
+     - Ensures clean teardown without leaving orphaned databases or leaking connection pools.
+   - Removed all table-wide `DELETE` statements (`DELETE FROM menu_items`, `DELETE FROM categories`, etc.).
+2. **Wildcard Search Verification:**
+   - Expanded `test12_sqlWildcardsHandledSafely_withoutUnintendedExpansion` in `CoreJpaRepositoryIntegrationTest.java`.
+   - Verified that both literal `%` (`Percent%User`) and literal `_` (`Under_Score_User`) are matched as literal characters rather than SQL wildcards.
+   - Asserted that decoy/unrelated records (`PercentXUser`, `UnderAScoreBUser`, `Percent User`) are strictly excluded from results.
+3. **Default MongoDB Profile Isolation:**
+   - Upgraded `test25_defaultMongoProfile_doesNotActivateJpaRepositories` in `CoreJpaRepositoryIntegrationTest.java` using Spring Boot's `ApplicationContextRunner`.
+   - Verified that running with `spring.profiles.active=default` does not activate any JPA repository beans, does not require a PostgreSQL connection, and honors relational auto-configuration exclusions.
+4. **Duplicate Menu Name Documentation:**
+   - Added explicit Javadoc on `JpaMenuItemRepository.findFirstByNameIgnoreCase(String)` documenting deferred first-match behavior on non-unique names and recommending `findFirstByNameIgnoreCaseOrderByIdAsc(String)` for stable, deterministic ordering.
+
+**Verification:**
+- Executed `run_preflight_tests.ps1`:
+  - `CoreJpaEntityIntegrationTest` executed twice consecutively against disposable PostgreSQL 17: both runs passed 7/7 tests with 0 failures.
+  - `CoreJpaRepositoryIntegrationTest` executed twice consecutively against disposable PostgreSQL 17: both runs passed 25/25 tests with 0 failures.
+- Clean compilation: `mvn clean test-compile` succeeded.
+
+---
+
+### [2026-10-26T00:15:00-04:00] — PG-010: Operational Spring Data JPA Repositories (Orders, Carts, Reviews, Reservations)
+
+**Task ID:** `PG-010`  
+**Phase:** Phase 8: Data Access Layer & JPA Repositories  
+**Status:** `COMPLETED`  
+**Start Timestamp:** 2026-10-25T23:57:00-04:00  
+**Completion Timestamp:** 2026-10-26T00:15:00-04:00 (`America/Toronto`)  
+**Commit Baseline:** `142e413`  
+
+**Objective:**  
+Implement Spring Data JPA repositories in `com.lordgainsborough.restaurant.persistence.jpa.repository` for the 4 operational domain entities mapped in Phase 6:
+1. `JpaCustomerOrderRepository` (`JpaCustomerOrder`, `String`)
+2. `JpaCartRepository` (`JpaCart`, `String`)
+3. `JpaOrderReviewRepository` (`JpaOrderReview`, `String`)
+4. `JpaReservationRepository` (`JpaReservation`, `String`)
+
+**Implementation Details:**
+1. **`JpaCustomerOrderRepository`:**
+   - Extends `JpaRepository<JpaCustomerOrder, String>`.
+   - `findByPickupDateOrderByCreatedAtDesc(String pickupDate)`: Lists orders for kitchen pickup scheduling ordered by creation time descending.
+   - `findByCustomerEmailOrderByCreatedAtDesc(String customerEmail)`: Exact case customer order lookup.
+   - `findByCustomerEmailIgnoreCaseOrderByCreatedAtDesc(String customerEmail)`: Case-insensitive email lookup supporting customer profile and order history views.
+   - `findByCustomerPhoneOrderByCreatedAtDesc(String customerPhone)`: Phone lookup for customer lookup and SMS notifications.
+   - `countByCustomerEmailIgnoreCase(String customerEmail)`: Aggregates order count by customer email.
+   - `countByCustomerPhone(String customerPhone)`: Aggregates order count by customer phone.
+   - `countByCustomerEmailIgnoreCaseAndStatus(String customerEmail, String status)`: Counts specific status orders (e.g. `NO_SHOW`) by email.
+   - `countByCustomerPhoneAndStatus(String customerPhone, String status)`: Counts specific status orders (e.g. `NO_SHOW`) by phone.
+   - `findWithItemsById(String id)` & `findWithMessagesById(String id)`: Targeted `@EntityGraph` query methods preventing N+1 queries when line items or chat messages are consumed detached.
+   - Supports guest orders without requiring registered user joins. Excludes `trackingTokenHash` from JSON serialization.
+2. **`JpaCartRepository`:**
+   - Extends `JpaRepository<JpaCart, String>`.
+   - `findByUserId(String userId)`: Explicit parameterized JPQL (`c.user.id = :userId`) traversing the `@OneToOne` association to `JpaUser`.
+   - `findByUser_Id(String userId)`: Native Spring Data nested property traversal.
+   - `deleteByUserId(String userId)`: `@Modifying(clearAutomatically = true, flushAutomatically = true) @Transactional @Query("DELETE FROM JpaCart c WHERE c.user.id = :userId")`.
+   - `deleteByUser_Id(String userId)`: Spring Data derived delete method.
+   - Verified cascade semantics: Cart deletion cascades to delete all child `cart_items` rows (`fk_cart_items_cart ON DELETE CASCADE`), while the referenced `users` row is completely preserved.
+   - Preserves one-cart-per-user constraint (`uq_carts_user_id`), list item order via `@OrderColumn(name = "item_index")`, and 7-day TTL expiration semantics.
+3. **`JpaOrderReviewRepository`:**
+   - Extends `JpaRepository<JpaOrderReview, String>`.
+   - `findByOrderIdOrderByCreatedAtDesc(String orderId)`: Explicit JPQL (`r.order.id = :orderId ORDER BY r.createdAt DESC`).
+   - `findByOrder_IdOrderByCreatedAtDesc(String orderId)`: Nested property traversal alternative.
+   - `existsByOrderId(String orderId)`: Efficient boolean existence query (`SELECT CASE WHEN COUNT(r) > 0 THEN TRUE ELSE FALSE END FROM JpaOrderReview r WHERE r.order.id = :orderId`).
+   - `existsByOrder_Id(String orderId)`: Derived existence check.
+   - Respects unique constraint `uq_order_reviews_order_id` (at most one review per order).
+   - Deleting a review removes child `order_review_items` rows via cascade while preserving the referenced `customer_orders` row.
+4. **`JpaReservationRepository`:**
+   - Extends `JpaRepository<JpaReservation, String>`.
+   - Standard CRUD operations (`save`, `findById`, `findAll`, `deleteById`).
+   - Supplementary finder queries: `findByDateOrderByTimeAsc(String date)`, `findByEmailIgnoreCaseOrderByCreatedAtDesc(String email)`, `findByStatus(String status)`.
+   - Guest reservations supported without mandatory user reference.
+   - Preserves exact date/time string values without time-zone distortion. Enforces check constraint `chk_reservations_party_size (party_size > 0)`.
+
+**Verification:**
+- Created integration test suite `OperationalJpaRepositoryIntegrationTest.java` (30 tests) executed against disposable PostgreSQL 17.11 initialized via Flyway V1:
+  1. Req 1: All 4 repository proxies initialize in isolated Spring context.
+  2. Req 2: No MongoDB repository is registered as a JPA repository.
+  3. Req 3: All 17 JPA entities validate against Flyway V1 relational schema (`ddl-auto=validate`).
+  4. Req 4: Customer order saved with ordered line items and messages.
+  5. Req 5: Find orders by pickup date in `createdAt` descending order.
+  6. Req 6: Find orders by exact customer email.
+  7. Req 7: Find orders by case-insensitive customer email.
+  8. Req 8: Find orders by phone.
+  9. Req 9: Count orders by case-insensitive email.
+  10. Req 10: Count orders by phone.
+  11. Req 11: Count orders by email and status.
+  12. Req 12: Count orders by phone and status.
+  13. Req 13: Missing orders produce empty results and zero counts.
+  14. Req 14: Order children persist and reload correctly through repository save (tested with targeted `@EntityGraph` and persistence session).
+  15. Req 15: Find cart by associated user ID.
+  16. Req 16: User without cart returns `Optional.empty()`.
+  17. Req 17: One-cart-per-user uniqueness constraint is enforced by PostgreSQL.
+  18. Req 18: Delete cart by associated user ID.
+  19. Req 19: Cart deletion removes all child cart items.
+  20. Req 20: Cart deletion does not remove user.
+  21. Req 21: Cart item list order survives repository round-trip.
+  22. Req 22: Cart `updatedAt` persists and item modifications refresh it through approved helpers (`touch()`, `isExpired()`).
+  23. Req 23: Review lookup by order ID works.
+  24. Req 24: Review existence query works.
+  25. Req 25: Review deletion removes child review items but preserves underlying customer order.
+  26. Req 26: One-review-per-order constraint is enforced.
+  27. Req 27: Guest reservation CRUD works.
+  28. Req 28: Reservation date/time strings round-trip exactly.
+  29. Req 29: Invalid reservation party size (`<= 0`) is rejected by PostgreSQL check constraint.
+  30. Req 30: No repository bean name collisions and default MongoDB profile isolates JPA repositories.
+- **Targeted Integration Test Outcome:** 30 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 8.609s).
+- **Three-Suite Targeted Run:** `CoreJpaEntityIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest` (62 tests run, 0 failures, 0 errors, 0 skipped).
+- **Complete PostgreSQL 9-Suite Regression Suite:**
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest -Dtest.postgres.port=54349`
+  - Results: **164 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 37.465s across all 9 suites).
+- **Clean Compilation:** `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 125 source files compiled cleanly).
+
+**MongoDB Compatibility:**
+- Fully preserved: `CustomerOrderRepository`, `CartRepository`, `OrderReviewRepository`, `ReservationRepository`, operational controllers, and services remain completely untouched and operational.
+
+**Next Task:**
+`PG-011` — Implement Spring Data JPA repositories for security challenges and abuse limits (`JpaSignupOtpChallengeRepository`, `JpaPasswordResetOtpChallengeRepository`, `JpaSignupAbuseLimitRepository`, `JpaLoginFailureStateRepository`).
 
 ---
 
