@@ -1853,6 +1853,22 @@ Executed **PG-015 Post-Implementation Security Hardening**, addressing five arch
   - Full 15-suite regression: 392 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
 
 **Next Task:**  
+`PG-015-HARDENING-DB-LIFECYCLE` — Failed-Database-Creation Ownership Guardrail Test (`COMPLETED`).
+
+---
+
+### [2026-10-26T06:30:00-04:00] PG-015-HARDENING-DB-LIFECYCLE: Failed-Database-Creation Ownership Guardrail Test
+
+**Overview & Objective:**
+Added explicit failed-database-creation ownership test coverage in `FlywayMigrationIntegrationTest` (`test6_disposableDatabaseSession_failedCreationDoesNotGrantOwnership`) prior to `PG-016` implementation. Verified that failed database provisioning (both offline guardrail rejection and live PostgreSQL duplicate database collisions) never transitions `createdAndOwned` to true, and that subsequent teardown (`drop()`) remains a strict safe NO-OP refusing to terminate or drop unowned/pre-existing databases. Standardized `isCreatedAndOwned()` and `getDbName()` accessors across disposable database sessions.
+
+**Verification Results:**
+- `FlywayMigrationIntegrationTest`: 6 tests run (2 run offline, 4 skipped without PostgreSQL port), 0 failures, 0 errors.
+- `SignupOtpChallengePersistenceTest`: 20 tests run, 0 failures, 0 errors.
+- `SignupOtpChallengeVerificationTest`: 12 tests run, 0 failures, 0 errors.
+- Test suite compilation: `BUILD SUCCESS`.
+
+**Next Task:**  
 `PG-016` — Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management (`NOT STARTED`).
 
 ---

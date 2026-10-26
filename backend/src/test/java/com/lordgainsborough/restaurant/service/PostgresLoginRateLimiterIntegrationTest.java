@@ -156,6 +156,14 @@ public class PostgresLoginRateLimiterIntegrationTest {
                 System.err.println("Warning: Failed to drop test db " + dbName + ": " + e.getMessage());
             }
         }
+
+        boolean isCreatedAndOwned() {
+            return createdAndOwned;
+        }
+
+        String getDbName() {
+            return dbName;
+        }
     }
 
     @BeforeAll

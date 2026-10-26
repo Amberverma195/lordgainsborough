@@ -472,4 +472,68 @@ public class FlywayMigrationIntegrationTest {
             }
         }
     }
+
+    @Test
+    @Order(6)
+    @DisplayName("Disposable database session: Failed database creation does not grant ownership and refuses teardown")
+    void test6_disposableDatabaseSession_failedCreationDoesNotGrantOwnership() throws Exception {
+        // 1. Offline guardrail failure: attempting to provision with illegal naming or environment must fail and never grant ownership
+        DisposableDatabaseSession illegalSession = new DisposableDatabaseSession("5432", "postgres");
+        assertThat(illegalSession.isCreatedAndOwned()).isFalse();
+        assertThatThrownBy(illegalSession::provision).isInstanceOf(AssertionError.class);
+        assertThat(illegalSession.isCreatedAndOwned()).isFalse();
+        illegalSession.drop(); // Safe NO-OP after failed creation
+        assertThat(illegalSession.isCreatedAndOwned()).isFalse();
+
+        // 2. Live database creation failure: provisioning over an existing database must fail and not grant ownership
+        String port = getTestPort();
+        boolean mandatory = Boolean.getBoolean("test.postgres.mandatory")
+                || "true".equalsIgnoreCase(System.getenv("CI_POSTGRES_MANDATORY"))
+                || "true".equalsIgnoreCase(System.getenv("CI"));
+        if (mandatory) {
+            assertThat(port)
+                    .withFailMessage("test.postgres.port system property is required for test6 live lifecycle verification in mandatory CI mode")
+                    .isNotBlank();
+        }
+        if (port != null && !port.isBlank()) {
+            String collisionName = TEST_DB_PREFIX + "fail_create_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+
+            // Pre-create database directly to simulate a name collision or non-owned pre-existing database
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.executeUpdate("CREATE DATABASE " + collisionName);
+            }
+
+            try {
+                DisposableDatabaseSession collisionSession = new DisposableDatabaseSession(port, collisionName);
+                assertThat(collisionSession.isCreatedAndOwned()).isFalse();
+
+                // Attempting to provision over an already existing database must throw an Exception
+                assertThatThrownBy(collisionSession::provision).isInstanceOf(Exception.class);
+
+                // Ownership MUST NOT be granted on failed database creation
+                assertThat(collisionSession.isCreatedAndOwned()).isFalse();
+
+                // Calling drop() after failed provision must still NO-OP and refuse to drop unowned database
+                collisionSession.drop();
+                assertThat(collisionSession.isCreatedAndOwned()).isFalse();
+
+                // Prove database was NOT deleted
+                try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                     Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + collisionName + "'")) {
+                    assertThat(rs.next()).isTrue();
+                }
+            } finally {
+                // Cleanup pre-created collision database
+                try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                     Statement stmt = conn.createStatement()) {
+                    stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + collisionName + "' AND pid <> pg_backend_pid()");
+                    stmt.executeUpdate("DROP DATABASE IF EXISTS " + collisionName + " WITH (FORCE)");
+                }
+            }
+        }
+    }
 }
+
