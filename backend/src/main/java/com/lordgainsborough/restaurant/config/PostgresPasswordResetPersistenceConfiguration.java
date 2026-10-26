@@ -54,14 +54,17 @@ public class PostgresPasswordResetPersistenceConfiguration {
 
     @EventListener(ContextRefreshedEvent.class)
     public void validateCoordinatedActivation(ContextRefreshedEvent event) {
-        if (!postgresUserAuthEnabled && !allowIsolatedTest) {
+        if (!allowIsolatedTest) {
             ApplicationContext context = event.getApplicationContext();
             if (context.containsBean("authController")
                     || context.getBeanNamesForType(AuthController.class).length > 0) {
-                throw new IllegalStateException(
-                        "Unsupported mixed-backend activation: 'app.security.postgres-password-reset.enabled=true' cannot be activated " +
-                        "while AuthController authenticates through MongoDB. Coordinated PostgreSQL user authentication (PG-022) " +
-                        "must be enabled via 'app.security.postgres-user-auth.enabled=true' before activating PostgreSQL password reset in live auth flow.");
+                AuthController authController = context.getBean(AuthController.class);
+                if (authController.isUsingMongoUserPersistence() || !authController.hasPostgresUserAuthentication()) {
+                    throw new IllegalStateException(
+                            "Unsupported mixed-backend activation: 'app.security.postgres-password-reset.enabled=true' cannot be activated " +
+                            "while AuthController user persistence is backed by MongoDB UserRepository. Coordinated PostgreSQL user authentication (PG-022) " +
+                            "must supply a working PostgreSQL user persistence implementation before activating PostgreSQL password reset in live auth flow.");
+                }
             }
         }
     }

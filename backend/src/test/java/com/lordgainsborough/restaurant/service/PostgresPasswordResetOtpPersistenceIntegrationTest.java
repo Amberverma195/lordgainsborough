@@ -1109,7 +1109,8 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         public AuthController authController(
                 UserRepository userRepository,
                 PasswordResetService passwordResetService,
-                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled) {
+                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
+                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
             return new AuthController(
                     mock(EmailSenderService.class),
                     userRepository,
@@ -1124,7 +1125,8 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                     mock(LoginRateLimiter.class),
                     passwordResetService,
                     mock(AuthSecurityObservability.class),
-                    postgresUserAuthEnabled
+                    postgresUserAuthEnabled,
+                    allowIsolatedTest
             );
         }
 
@@ -1274,8 +1276,8 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @Test
     @Order(33)
-    @DisplayName("33. Startup guard passes when coordinated PostgreSQL user authentication is enabled")
-    void test33_startupGuardPassesWithCoordinatedUserAuth() {
+    @DisplayName("33. Startup guard rejects mixed-backend activation even when postgres-user-auth is enabled while MongoDB UserRepository is still injected")
+    void test33_startupGuardRejectsMixedBackendEvenWithPostgresUserAuthFlagEnabled() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
                         MixedAuthControllerSpringContextConfig.class,
@@ -1287,6 +1289,32 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                         "spring.profiles.active=postgres-migration",
                         "app.security.postgres-password-reset.enabled=true",
                         "app.security.postgres-user-auth.enabled=true"
+                )
+                .withSystemProperties("test.postgres.port=" + testPort)
+                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(org.springframework.core.NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("Unsupported mixed-backend activation");
+                });
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("34. Startup guard permits isolated test configuration when explicitly opted-in via allow-isolated-test")
+    void test34_startupGuardPermitsIsolatedTestOptIn() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(
+                        MixedAuthControllerSpringContextConfig.class,
+                        PostgresPasswordResetPersistenceConfiguration.class,
+                        MongoPasswordResetOtpChallengeStore.class,
+                        PasswordResetOtpChallengePersistence.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-password-reset.enabled=true",
+                        "app.security.postgres-password-reset.allow-isolated-test=true"
                 )
                 .withSystemProperties("test.postgres.port=" + testPort)
                 .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
@@ -1356,6 +1384,28 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         assertThatThrownBy(() -> authController.resetPassword("k-reset", resetReq, mock(HttpServletRequest.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("PostgreSQL password reset path is isolated");
+
+        // Even with postgresUserAuthEnabled=true, if UserRepository is still MongoDB, endpoints reject invocation
+        AuthController authControllerWithFlag = new AuthController(
+                mock(EmailSenderService.class),
+                mock(UserRepository.class),
+                mock(CustomerOrderRepository.class),
+                mock(OrderReviewRepository.class),
+                mock(JwtUtil.class),
+                mock(OtpService.class),
+                mock(SignupOtpChallengeService.class),
+                mock(SignupAbuseLimiter.class),
+                mock(ClientIpResolver.class),
+                mock(SignupOtpObservability.class),
+                mock(LoginRateLimiter.class),
+                service,
+                mock(AuthSecurityObservability.class),
+                true
+        );
+
+        assertThatThrownBy(() -> authControllerWithFlag.sendPasswordResetOtp("k-send-flag", sendReq, mock(HttpServletRequest.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("PostgreSQL password reset path is isolated");
     }
 
     // =========================================================================
@@ -1422,19 +1472,25 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-null-challenge-exp", TEST_USER_ID, rawCode, clock.instant());
         persistence.getStore().tryInsert(ch);
 
-        // Clear challenge_expires_at in database
-        jdbcTemplate.update("UPDATE password_reset_otp_challenges SET challenge_expires_at = NULL WHERE email_key = ?", emailKey);
+        // Temporarily allow NULL in column to simulate missing/corrupted challenge_expires_at
+        try {
+            jdbcTemplate.execute("ALTER TABLE password_reset_otp_challenges ALTER COLUMN challenge_expires_at DROP NOT NULL");
+            jdbcTemplate.update("UPDATE password_reset_otp_challenges SET challenge_expires_at = NULL WHERE email_key = ?", emailKey);
 
-        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
-                emailKey, "ch-null-challenge-exp", ch.getCodeDigest(), "op-null-ch-exp", NEW_PASSWORD, clock.instant());
+            PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                    emailKey, "ch-null-challenge-exp", ch.getCodeDigest(), "op-null-ch-exp", NEW_PASSWORD, clock.instant());
 
-        assertFalse(result.isSuccess());
-        assertEquals(PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED, result.status());
-        assertEquals("Challenge expiration timestamp is missing", result.failureReason());
+            assertFalse(result.isSuccess());
+            assertEquals(PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED, result.status());
+            assertEquals("Challenge expiration timestamp is missing", result.failureReason());
 
-        // User password remains OLD_PASSWORD
-        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
-        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+            // User password remains OLD_PASSWORD
+            String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+            assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+        } finally {
+            jdbcTemplate.execute("DELETE FROM password_reset_otp_challenges WHERE email_key = '" + emailKey + "'");
+            jdbcTemplate.execute("ALTER TABLE password_reset_otp_challenges ALTER COLUMN challenge_expires_at SET NOT NULL");
+        }
     }
 
     @Test

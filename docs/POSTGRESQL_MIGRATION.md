@@ -363,7 +363,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T03:26:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; simplified arithmetic increment without redundant CASE; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; independent fallback `transactionManager` bean; real Logback appender log verification; 40/40 tests passed; full 13-suite regression passed |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `COMPLETED` | 2026-10-26T03:30:00-04:00 | 2026-10-26T03:42:00-04:00 | Extracted `LoginFailureStateStore` SPI; implemented `PostgresLoginFailureStateStore` with atomic upsert + `SELECT ... FOR UPDATE` row-level locking; fail-closed `Integer.MAX_VALUE` overflow guard; exact millisecond active cooldown boundaries; targeted `clearFailures`; 38/38 new tests; 14-suite regression passed (318/318 tests) |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T05:35:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; hardened with 5-finding resolution (atomic locking, deprecated unguarded overloads, fail-closed resend cooldown, Flyway disposable DB lifecycle with CI skip/fail controls, JPA timestamp integrity); 63/63 integration tests passed; full regression passed |
-| `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T06:54:12-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 30/30 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` |
+| `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T17:53:00-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 48/48 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` executed against live disposable PostgreSQL; full 16-suite PostgreSQL regression passed (438/438 tests, 0 skipped); MongoDB unit & support tests passed (11/11) |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `NOT STARTED` | — | — | `OrderControllerTest` pass |
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `NOT STARTED` | — | — | Cart API endpoint tests |
 | `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `NOT STARTED` | — | — | KDS order and status tests |
@@ -1942,6 +1942,38 @@ Following external preflight review, implemented 5 critical hardenings across Po
 **Verification Evidence:**
 - `.\mvnw.cmd test "-Dtest=MongoPasswordResetOtpChallengeStoreUnitTest,PostgresPasswordResetOtpPersistenceIntegrationTest,PasswordResetSupportServicesTest,PasswordResetMongoTest"`
   Output: 74 tests executed, 0 failures, 0 errors, 57 skipped (`BUILD SUCCESS`).
+
+### [2026-10-26T17:38:00-04:00] Mixed-Backend Structural Enforcement & Isolation Guard Hardening
+
+Addressed review finding regarding configuration flag bypass in the mixed-backend guard:
+1. **Implementation-Level Validation:** Replaced superficial boolean flag check (`postgresUserAuthEnabled`) with actual persistence introspection (`isUsingMongoUserPersistence()`, `!hasPostgresUserAuthentication()`) in `AuthController` and `PostgresPasswordResetPersistenceConfiguration`.
+2. **Strict Isolation Until PG-022:** Because `AuthController` injects the MongoDB `UserRepository` and delegates to the MongoDB user overload of `PasswordResetService` (which rejects PostgreSQL reset store), setting `app.security.postgres-user-auth.enabled=true` without actual PostgreSQL user authentication implementation will now be rejected at startup.
+3. **Dedicated Test Opt-in:** Added `app.security.postgres-password-reset.allow-isolated-test:false` flag to allow isolated test fixtures while keeping production startup strictly fail-closed.
+4. **Regression Verification:** Added `test33_startupGuardRejectsMixedBackendEvenWithPostgresUserAuthFlagEnabled` and `test34_startupGuardPermitsIsolatedTestOptIn`, verifying that starting a context with both flags enabled while MongoDB user authentication is injected fails with `IllegalStateException("Unsupported mixed-backend activation...")`.
+
+**Verification Evidence:**
+- `.\mvnw.cmd test "-Dtest=PostgresPasswordResetOtpPersistenceIntegrationTest#test33_startupGuardRejectsMixedBackendEvenWithPostgresUserAuthFlagEnabled,PostgresPasswordResetOtpPersistenceIntegrationTest#test34_startupGuardPermitsIsolatedTestOptIn,PostgresPasswordResetOtpPersistenceIntegrationTest#test36_authControllerEndpointsRejectMixedBackendInvocation"`
+  Output: 3 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
+
+### [2026-10-26T17:53:00-04:00] Real PostgreSQL Database Verification & 16-Suite Regression Validation
+
+Executed mandatory verification of the full 48-test `PostgresPasswordResetOtpPersistenceIntegrationTest` suite and the full 16-suite PostgreSQL regression against a live disposable PostgreSQL database (`PostgreSQL 17.11` on port 54353) with `test.postgres.mandatory=true`:
+
+1. **Resolution of Real Database Schema Discrepancies:**
+   - **Unique Constraint vs Primary Key Conflict (`test05`):** Updated `PostgresPasswordResetOtpChallengeStore.tryInsert()` to use `INSERT ... ON CONFLICT (email_key) DO NOTHING` without catching general `DuplicateKeyException`. A duplicate primary key (`email_key`) returns `false` (0 rows inserted), while an attempt to insert a duplicate `challenge_id` across distinct emails correctly violates `CONSTRAINT uq_pwd_reset_challenge_id UNIQUE (challenge_id)` and throws `DataIntegrityViolationException`.
+   - **Schema-Compliant Precondition Testing (`test39`):** Because Flyway V1 defines `challenge_expires_at TIMESTAMP WITH TIME ZONE NOT NULL`, attempting to update this column directly to `NULL` failed with a database constraint violation. Updated `test39` with a safe try/finally block dropping and restoring `NOT NULL` on the disposable database to isolate and verify the application-level fail-closed null expiration check.
+   - **Smoke Test Database Provisioning:** Ensured `testdb` exists in the local PostgreSQL instance for `PostgresConfigurationSmokeTest.testHikariDataSource_liveConnectivityIfAvailable`.
+
+2. **Verification Execution Results:**
+   - **PostgreSQL Password Reset Suite (48 tests):**
+     `.\mvnw.cmd test "-Dtest=PostgresPasswordResetOtpPersistenceIntegrationTest" "-Dtest.postgres.port=54353" "-Dtest.postgres.mandatory=true"`
+     **Result:** 48 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 44.39s).
+   - **MongoDB Password Reset Unit & Support Suites (11 tests):**
+     `.\mvnw.cmd test "-Dtest=MongoPasswordResetOtpChallengeStoreUnitTest,PasswordResetSupportServicesTest"`
+     **Result:** 11 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
+   - **Full 16-Suite PostgreSQL Regression (438 tests):**
+     `.\mvnw.cmd test "-Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest,SecurityJpaRepositoryIntegrationTest,PostgresCatalogInitializerIntegrationTest,PostgresCatalogStartupActivationIntegrationTest,PostgresAbuseCounterStoreIntegrationTest,PostgresLoginRateLimiterIntegrationTest,PostgresSignupOtpChallengePersistenceIntegrationTest,PostgresPasswordResetOtpPersistenceIntegrationTest" "-Dtest.postgres.port=54353" "-Dtest.postgres.mandatory=true"`
+     **Result:** 438 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 2m 38s).
 
 **Next Task:**  
 `PG-017` — Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing (`NOT STARTED`).

@@ -82,6 +82,7 @@ public class AuthController {
     private final PasswordResetService passwordResetService;
     private final AuthSecurityObservability authSecurityObservability;
     private final boolean postgresUserAuthEnabled;
+    private final boolean allowIsolatedTest;
 
     @Autowired
     public AuthController(
@@ -98,7 +99,8 @@ public class AuthController {
             LoginRateLimiter loginRateLimiter,
             PasswordResetService passwordResetService,
             AuthSecurityObservability authSecurityObservability,
-            @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled) {
+            @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
+            @Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
         this.emailSenderService = emailSenderService;
         this.userRepository = userRepository;
         this.orderRepository = orderRepository;
@@ -113,6 +115,40 @@ public class AuthController {
         this.passwordResetService = passwordResetService;
         this.authSecurityObservability = authSecurityObservability;
         this.postgresUserAuthEnabled = postgresUserAuthEnabled;
+        this.allowIsolatedTest = allowIsolatedTest;
+    }
+
+    public AuthController(
+            EmailSenderService emailSenderService,
+            UserRepository userRepository,
+            CustomerOrderRepository orderRepository,
+            OrderReviewRepository reviewRepository,
+            JwtUtil jwtUtil,
+            OtpService otpService,
+            SignupOtpChallengeService signupOtpChallengeService,
+            SignupAbuseLimiter signupAbuseLimiter,
+            ClientIpResolver clientIpResolver,
+            SignupOtpObservability signupOtpObservability,
+            LoginRateLimiter loginRateLimiter,
+            PasswordResetService passwordResetService,
+            AuthSecurityObservability authSecurityObservability,
+            boolean postgresUserAuthEnabled) {
+        this(
+                emailSenderService,
+                userRepository,
+                orderRepository,
+                reviewRepository,
+                jwtUtil,
+                otpService,
+                signupOtpChallengeService,
+                signupAbuseLimiter,
+                clientIpResolver,
+                signupOtpObservability,
+                loginRateLimiter,
+                passwordResetService,
+                authSecurityObservability,
+                postgresUserAuthEnabled,
+                false);
     }
 
     public AuthController(
@@ -143,16 +179,30 @@ public class AuthController {
                 loginRateLimiter,
                 passwordResetService,
                 authSecurityObservability,
+                false,
                 false);
+    }
+
+    public boolean isUsingMongoUserPersistence() {
+        return userRepository != null;
+    }
+
+    public boolean hasPostgresUserAuthentication() {
+        // Coordinated PostgreSQL user authentication (PG-022) must supply a working
+        // PostgreSQL user persistence implementation. Until PG-022 adapts AuthController,
+        // user authentication is strictly MongoDB-backed.
+        return false;
     }
 
     @PostConstruct
     public void validateAuthenticationBackendCoherence() {
-        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
-            throw new IllegalStateException(
-                    "Unsupported mixed-backend activation: PostgreSQL password reset storage is enabled (app.security.postgres-password-reset.enabled=true), " +
-                    "but AuthController authenticates through MongoDB UserRepository. Coordinated PostgreSQL user authentication (PG-022) " +
-                    "must be enabled via app.security.postgres-user-auth.enabled=true before activating PostgreSQL password reset in AuthController.");
+        if (!allowIsolatedTest && passwordResetService != null && passwordResetService.isPostgresStore()) {
+            if (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication()) {
+                throw new IllegalStateException(
+                        "Unsupported mixed-backend activation: PostgreSQL password reset storage is enabled (app.security.postgres-password-reset.enabled=true), " +
+                        "but AuthController user persistence is backed by MongoDB UserRepository. Coordinated PostgreSQL user authentication (PG-022) " +
+                        "must supply a working PostgreSQL user persistence implementation before activating PostgreSQL password reset in AuthController.");
+            }
         }
     }
 
@@ -324,7 +374,8 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody SendOtpRequest request,
             HttpServletRequest httpRequest) {
-        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore()
+                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
         }
@@ -350,7 +401,8 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody PasswordResetResendRequest request,
             HttpServletRequest httpRequest) {
-        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore()
+                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
         }
@@ -374,7 +426,8 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ResetPasswordRequest request,
             HttpServletRequest httpRequest) {
-        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore()
+                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
         }

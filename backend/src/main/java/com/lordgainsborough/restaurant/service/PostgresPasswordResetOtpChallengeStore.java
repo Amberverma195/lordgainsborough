@@ -194,35 +194,32 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
                     send_status, send_lease_until, reset_operation_id, password_updated,
                     consumed_at, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (email_key) DO NOTHING
                 """;
-            try {
-                int rows = jdbcTemplate.update(
-                        sql,
-                        challenge.getEmailKey(),
-                        challenge.getChallengeId(),
-                        challenge.getUserId(),
-                        challenge.getPurpose() != null ? challenge.getPurpose().name() : PasswordResetOtpChallenge.Purpose.PASSWORD_RESET.name(),
-                        challenge.getStatus() != null ? challenge.getStatus().name() : PasswordResetChallengeStatus.ACTIVE.name(),
-                        challenge.getCodeDigest(),
-                        toTimestamp(challenge.getCodeExpiresAt()),
-                        toTimestamp(challenge.getChallengeExpiresAt()),
-                        toTimestamp(challenge.getNextResendAt()),
-                        challenge.getResendCount(),
-                        challenge.getFailedVerificationAttempts(),
-                        challenge.getClientIdempotencyKey(),
-                        challenge.getSendOperationId(),
-                        challenge.getSendStatus() != null ? challenge.getSendStatus().name() : null,
-                        toTimestamp(challenge.getSendLeaseUntil()),
-                        challenge.getResetOperationId(),
-                        challenge.isPasswordUpdated(),
-                        toTimestamp(challenge.getConsumedAt()),
-                        toTimestamp(challenge.getCreatedAt()),
-                        toTimestamp(challenge.getUpdatedAt())
-                );
-                return rows > 0;
-            } catch (DuplicateKeyException ex) {
-                return false;
-            }
+            int rows = jdbcTemplate.update(
+                    sql,
+                    challenge.getEmailKey(),
+                    challenge.getChallengeId(),
+                    challenge.getUserId(),
+                    challenge.getPurpose() != null ? challenge.getPurpose().name() : PasswordResetOtpChallenge.Purpose.PASSWORD_RESET.name(),
+                    challenge.getStatus() != null ? challenge.getStatus().name() : PasswordResetChallengeStatus.ACTIVE.name(),
+                    challenge.getCodeDigest(),
+                    toTimestamp(challenge.getCodeExpiresAt()),
+                    toTimestamp(challenge.getChallengeExpiresAt()),
+                    toTimestamp(challenge.getNextResendAt()),
+                    challenge.getResendCount(),
+                    challenge.getFailedVerificationAttempts(),
+                    challenge.getClientIdempotencyKey(),
+                    challenge.getSendOperationId(),
+                    challenge.getSendStatus() != null ? challenge.getSendStatus().name() : null,
+                    toTimestamp(challenge.getSendLeaseUntil()),
+                    challenge.getResetOperationId(),
+                    challenge.isPasswordUpdated(),
+                    toTimestamp(challenge.getConsumedAt()),
+                    toTimestamp(challenge.getCreatedAt()),
+                    toTimestamp(challenge.getUpdatedAt())
+            );
+            return rows > 0;
         });
         return Boolean.TRUE.equals(result);
     }
