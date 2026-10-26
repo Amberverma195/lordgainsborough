@@ -12,9 +12,11 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.mockito.Mockito;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
@@ -867,6 +869,76 @@ public class PostgresAbuseCounterStoreIntegrationTest {
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx).hasSingleBean(PostgresAbuseCounterStore.class);
+                });
+    }
+
+    static class TestAbuseConsumer {
+        private final AbuseCounterStore store;
+
+        TestAbuseConsumer(AbuseCounterStore store) {
+            this.store = store;
+        }
+
+        AbuseCounterStore getStore() {
+            return store;
+        }
+    }
+
+    @Test
+    @Order(37)
+    @DisplayName("Req 37: Combined context with both Mongo and Postgres stores resolves unambiguously to Postgres @Primary")
+    void test37_combinedContextWithBothStoresResolvesUnambiguouslyToPostgres() {
+        MongoTemplate mockMongoTemplate = Mockito.mock(MongoTemplate.class);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongoTemplate)
+                .withUserConfiguration(MongoAbuseCounterStore.class, TestAbuseConsumer.class)
+                .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-abuse-store.enabled=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+
+                    // Both implementations exist simultaneously in the same Spring context
+                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
+                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
+
+                    // Unqualified injection resolves explicitly and unambiguously to Postgres (@Primary)
+                    assertThat(ctx.getBean(AbuseCounterStore.class))
+                            .isInstanceOf(PostgresAbuseCounterStore.class);
+                    assertThat(ctx.getBean(TestAbuseConsumer.class).getStore())
+                            .isInstanceOf(PostgresAbuseCounterStore.class);
+
+                    // Named qualifier lookups work for both implementations
+                    assertThat(ctx.getBean("mongoAbuseCounterStore", AbuseCounterStore.class))
+                            .isInstanceOf(MongoAbuseCounterStore.class);
+                    assertThat(ctx.getBean("postgresAbuseCounterStore", AbuseCounterStore.class))
+                            .isInstanceOf(PostgresAbuseCounterStore.class);
+                });
+    }
+
+    @Test
+    @Order(38)
+    @DisplayName("Req 38: Default context with MongoAbuseCounterStore resolves unambiguously to Mongo")
+    void test38_defaultContextWithMongoStoreResolvesToMongo() {
+        MongoTemplate mockMongoTemplate = Mockito.mock(MongoTemplate.class);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongoTemplate)
+                .withUserConfiguration(MongoAbuseCounterStore.class, TestAbuseConsumer.class)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+
+                    // Postgres store is not loaded under default settings
+                    assertThat(ctx).doesNotHaveBean(PostgresAbuseCounterStore.class);
+                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
+
+                    // Unqualified injection resolves strictly to MongoAbuseCounterStore
+                    assertThat(ctx.getBean(AbuseCounterStore.class))
+                            .isInstanceOf(MongoAbuseCounterStore.class);
+                    assertThat(ctx.getBean(TestAbuseConsumer.class).getStore())
+                            .isInstanceOf(MongoAbuseCounterStore.class);
                 });
     }
 

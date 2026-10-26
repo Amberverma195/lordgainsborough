@@ -4,6 +4,7 @@ import com.lordgainsborough.restaurant.service.PostgresAbuseCounterStore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 
 import javax.sql.DataSource;
@@ -16,13 +17,19 @@ import javax.sql.DataSource;
  * this configuration is never loaded, ensuring {@code MongoAbuseCounterStore} remains
  * the sole active bean.
  * </p>
+ * <p>
+ * When enabled alongside {@code MongoAbuseCounterStore}, this bean is designated as
+ * {@link Primary}, resolving unqualified {@code AbuseCounterStore} injection points
+ * unambiguously to the PostgreSQL store while allowing both implementations to coexist.
+ * </p>
  */
 @Configuration(proxyBeanMethods = false)
 @Profile({"postgres-migration", "test"})
 @ConditionalOnProperty(name = "app.security.postgres-abuse-store.enabled", havingValue = "true", matchIfMissing = false)
 public class PostgresAbuseCounterStoreConfiguration {
 
-    @Bean
+    @Bean(name = {"postgresAbuseCounterStore", "abuseCounterStore"})
+    @Primary
     public PostgresAbuseCounterStore postgresAbuseCounterStore(DataSource dataSource) {
         return new PostgresAbuseCounterStore(dataSource);
     }

@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T03:10:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T03:13:00-04:00 (America/Toronto)  
 
 ---
 
@@ -360,7 +360,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
-| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundary semantics; production-safe `clear()`; 36/36 tests passed; full 13-suite regression passed (276/276 tests) |
+| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundaries; production-safe `clear()`; explicit backend selection via `@Primary`; 38/38 tests; full 13-suite regression passed (276/276 tests) |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
@@ -1564,6 +1564,18 @@ Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `Post
 - **MongoDB Initializer Regression:**
   - `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.875s).
 - **Combined Repository Total:** **292 tests run, 0 failures, 0 errors, 0 skipped**.
+
+---
+
+### [2026-10-26T03:13:00-04:00] PG-013 Spring Context Resolution: Explicit AbuseCounterStore Backend Selection & Coexistence
+
+**Overview & Code Review Finding Addressed:**
+- **Finding:** `MongoAbuseCounterStore` was an unconditional `@Component`. When `PostgresAbuseCounterStoreConfiguration` was enabled, Spring registered two implementations of `AbuseCounterStore`. Because existing consumers (`SignupAbuseLimiter`, `PasswordResetAbuseLimiter`, `LoginRateLimiter`) inject `AbuseCounterStore` without a qualifier, a combined application context resulted in ambiguous autowiring (`NoUniqueBeanDefinitionException`).
+- **Resolution:**
+  1. **Explicit Component Naming:** Annotated `MongoAbuseCounterStore` with `@Component("mongoAbuseCounterStore")`.
+  2. **Explicit Primary Backend Selection:** Designated `postgresAbuseCounterStore` as `@Primary` and aliased with `@Bean(name = {"postgresAbuseCounterStore", "abuseCounterStore"})` in `PostgresAbuseCounterStoreConfiguration`. When opt-in PostgreSQL is activated, unqualified injection of `AbuseCounterStore` resolves explicitly and unambiguously to `PostgresAbuseCounterStore`.
+  3. **Preserved Default MongoDB Behavior:** When `app.security.postgres-abuse-store.enabled` is missing or false (default runtime), `PostgresAbuseCounterStoreConfiguration` does not load, leaving `MongoAbuseCounterStore` as the sole active bean.
+  4. **Combined Context Integration Tests:** Added `test37_combinedContextWithBothStoresResolvesUnambiguouslyToPostgres` and `test38_defaultContextWithMongoStoreResolvesToMongo` in `PostgresAbuseCounterStoreIntegrationTest` demonstrating that both stores coexist simultaneously in the same Spring context, unqualified injection resolves to `@Primary` PostgreSQL, named qualifiers resolve both implementations, and default context resolves to MongoDB.
 
 **Next Task:**  
 `PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).

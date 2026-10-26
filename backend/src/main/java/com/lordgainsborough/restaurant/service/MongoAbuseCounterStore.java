@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 
-@Component
+@Component("mongoAbuseCounterStore")
 public class MongoAbuseCounterStore implements AbuseCounterStore {
 
     private final MongoTemplate mongoTemplate;
