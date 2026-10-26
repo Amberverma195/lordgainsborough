@@ -157,6 +157,18 @@ public class JpaCart {
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 
+    /**
+     * Returns the list of cart items.
+     * <p>
+     * <b>Recommendation:</b> Direct mutations to this list (such as {@code getItems().add(...)}
+     * or {@code Collections.swap(getItems(), ...)}) bypass the {@link #touch()} mechanism
+     * and will not automatically update {@code carts.updated_at}.
+     * Callers should use dedicated helper methods ({@link #addItem(JpaCartItem)},
+     * {@link #removeItem(JpaCartItem)}, {@link #reorderItems(int, int)}, or {@link #setItems(List)})
+     * or explicitly invoke {@link #touch()} when modifying cart items to guarantee the 7-day
+     * expiration countdown is refreshed.
+     * </p>
+     */
     public List<JpaCartItem> getItems() { return items; }
     public void setItems(List<JpaCartItem> items) {
         if (this.items == items) {

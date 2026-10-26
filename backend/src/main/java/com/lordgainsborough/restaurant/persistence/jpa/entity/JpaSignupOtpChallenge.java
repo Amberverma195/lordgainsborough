@@ -115,7 +115,7 @@ public class JpaSignupOtpChallenge {
     }
 
     public boolean isChallengeExpired(Instant now) {
-        return challengeExpiresAt != null && !now.isBefore(challengeExpiresAt);
+        return challengeExpiresAt == null || !now.isBefore(challengeExpiresAt);
     }
 
     public boolean isChallengeExpired() {

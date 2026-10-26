@@ -1195,6 +1195,15 @@ public class SecurityChallengeJpaIntegrationTest {
         assertThat(reset.isCodeExpired(boundary)).isTrue();
         assertThat(reset.isResendAllowed(boundary)).isTrue();
         assertThat(reset.isSendLeaseActive(boundary)).isFalse();
+
+        // Fail-closed security semantics: missing (null) expiry is treated as expired
+        signup.setChallengeExpiresAt(null);
+        assertThat(signup.isChallengeExpired(before)).isTrue();
+        assertThat(signup.isChallengeExpired()).isTrue();
+
+        reset.setChallengeExpiresAt(null);
+        assertThat(reset.isChallengeExpired(before)).isTrue();
+        assertThat(reset.isChallengeExpired()).isTrue();
     }
 
     @Test
