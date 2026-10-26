@@ -46,6 +46,15 @@ public interface JpaMenuItemRepository extends JpaRepository<JpaMenuItem, String
      */
     Optional<JpaMenuItem> findFirstByNameIgnoreCaseOrderByIdAsc(String name);
 
+    /**
+     * Finds all menu items matching the specified name ignoring casing.
+     * Used by catalog synchronization to detect ambiguous duplicate matches safely.
+     *
+     * @param name menu item name to match case-insensitively
+     * @return list of all matching menu items
+     */
+    List<JpaMenuItem> findAllByNameIgnoreCase(String name);
+
     List<JpaMenuItem> findByAvailableTrue();
 
     List<JpaMenuItem> findByIsMostLovedTrue();

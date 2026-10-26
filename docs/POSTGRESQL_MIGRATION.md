@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T01:05:40-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T01:21:00-04:00 (America/Toronto)  
 
 ---
 
@@ -359,7 +359,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 30/30 repository integration tests passed; full 9-suite regression passed (164/164 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 33/33 security repository integration tests passed; full 10-suite regression passed (198/198 tests) |
-| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `NOT STARTED` | — | — | `DataInitializerTest` pass |
+| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T01:21:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 34/34 PostgreSQL seeding tests passed; full 11-suite regression passed (233/233 tests) |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
@@ -1338,6 +1338,54 @@ During post-implementation review of `SecurityJpaRepositoryIntegrationTest`, an 
 - **Targeted Integration Test Suite:** `com.lordgainsborough.restaurant.persistence.jpa.SecurityJpaRepositoryIntegrationTest`
   - Tests Run: **34**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 9.487s).
 - **Status:** PG-011 test infrastructure safety correction verified. Ready to proceed to PG-012.
+
+---
+
+### [2026-10-26T01:21:00-04:00] PG-012: PostgreSQL Catalog Initialization and Transactional Seeding
+
+**Overview & Objective:**  
+Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronization** while keeping the original MongoDB `DataInitializer` intact and operational. Extracted a shared single-source-of-truth catalog definition (`CatalogSeedSpecifications`), implemented transactional opt-in PostgreSQL catalog synchronization (`PostgresCatalogSynchronizationService`), and configured conditional activation (`PostgresCatalogInitializerConfiguration`) protected against concurrent application startup via PostgreSQL transaction-scoped advisory locks.
+
+**Design & Architectural Details:**
+1. **Single Source of Truth (`CatalogSeedSpecifications`):**
+   - Extracted immutable category and menu item specifications into `com.lordgainsborough.restaurant.config.CatalogSeedSpecifications`.
+   - Preserves all 14 categories with exact names and `displayOrder` values (Appetizers, Pizzas, Salads, Sandwiches, Homemade Burgers, Classics, Pasta, Panzerotti, Kids Menu, Beverages, Hot Sandwiches, Sides, Gainsborough Melts, A Taste of Greece).
+   - Preserves all 119 menu item specifications, including 3 independently orderable pizza sizes (Personal 10", Medium 12", Large 14" with distinct prices), aliases (`Garlic Bread and Cheese` → `Cheesy Garlic Bread`), legacy items, and operational descriptions.
+   - Refactored MongoDB `DataInitializer.java` to delegate to `CatalogSeedSpecifications.categories()` and `CatalogSeedSpecifications.menuCatalog()` while preserving its exact public/package API and MongoDB repository constructor.
+2. **Transactional Synchronization Service (`PostgresCatalogSynchronizationService`):**
+   - Annotated with Spring `@Transactional`.
+   - **Advisory Lock Concurrency Control:** Executes `SELECT pg_advisory_xact_lock(5498725841443472718)` at transaction start. Holds until transaction commit or rollback, safely serializing concurrent multi-instance application startups without deadlock or duplicate key exceptions.
+   - **Idempotency Check:** Checks `JpaCatalogMigrationRepository.existsById("2026-08-lord-gains-menu")`. If already present, skips synchronization entirely and returns `false`.
+   - **Category Synchronization:** Upserts 14 categories by exact name, updates `description` and `displayOrder`, while strictly preserving preexisting database IDs.
+   - **Menu Item Synchronization:**
+     - Checks canonical name case-insensitively, followed by alias lookups.
+     - Ambiguity detection: `findAllByNameIgnoreCase(name)` ensures that if multiple case-insensitive records match, synchronization fails safely with an explicit diagnostic rather than corrupting data.
+     - Preserves operational fields on existing items (`id`, `image`, `available`, `isMostLoved`).
+     - Inserts new items with UUID-style string IDs, default `available = true`, `isMostLoved = false`.
+     - Monetary precision: converts prices via `BigDecimal.valueOf(price).setScale(2, RoundingMode.UNNECESSARY)` to avoid IEEE-754 floating point artifacts.
+   - **Migration Marker:** Commits `JpaCatalogMigration("2026-08-lord-gains-menu", Instant.now())` in the same transaction upon completion.
+3. **Controlled Conditional Activation (`PostgresCatalogInitializerConfiguration`):**
+   - Strictly opt-in: requires `app.catalog.postgres-seed.enabled=true`. Default is `false`.
+   - Gated by `@Profile({"postgres-migration", "test"})` and `@ConditionalOnBean({JpaCategoryRepository.class, JpaMenuItemRepository.class, JpaCatalogMigrationRepository.class})`.
+   - Will NOT run in standard MongoDB runtime or default profiles.
+4. **Safety & Non-Destructive Boundaries:**
+   - No `deleteAll()` or destructive deletions; administrative menu items or categories created outside the seed specification remain untouched.
+   - Stores settings, orders, users, reviews, carts, and challenges remain 100% untouched.
+
+**Verification Results:**
+- **MongoDB Initializer Regression:**
+  - `com.lordgainsborough.restaurant.config.DataInitializerTest`
+  - Result: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 0.882s).
+- **PostgreSQL Catalog Initializer Integration Suite:**
+  - `com.lordgainsborough.restaurant.config.PostgresCatalogInitializerIntegrationTest`
+  - Coverage: 34 tests exercising service initialization, profile/property gating, Flyway V1 schema validation, 14 categories sync, 119 menu items sync, 3 pizza sizes, canonical/alias matching, operational field preservation (`available=false`, `isMostLoved=true`, custom image), `BigDecimal` scale 2 verification, idempotency on repeated run, rollback on category/menu/marker failure, ambiguity detection, and concurrent execution under multi-transaction advisory locking.
+  - Result: **34 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 16.83s).
+- **Complete PostgreSQL Regression Baseline (11 test suites):**
+  - Suites: `PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`, `SecurityChallengeJpaIntegrationTest`, `AbuseAndLoginFailureJpaIntegrationTest`, `CoreJpaRepositoryIntegrationTest`, `OperationalJpaRepositoryIntegrationTest`, `SecurityJpaRepositoryIntegrationTest`, `PostgresCatalogInitializerIntegrationTest`.
+  - Total Tests Run: **233**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 50.815s).
+
+**Next Task:**  
+`PG-013` — Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries (`NOT STARTED`).
 
 ---
 
