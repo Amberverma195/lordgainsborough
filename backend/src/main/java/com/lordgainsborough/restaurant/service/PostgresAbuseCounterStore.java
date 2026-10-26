@@ -48,11 +48,7 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
             INSERT INTO signup_abuse_limits (id, bucket_type, subject_hash, count, window_start, expires_at)
             VALUES (?, ?, ?, 1, ?, ?)
             ON CONFLICT (id) DO UPDATE
-            SET count = CASE
-                WHEN signup_abuse_limits.count >= 9223372036854775807 THEN
-                    signup_abuse_limits.count + 1
-                ELSE signup_abuse_limits.count + 1
-            END
+            SET count = signup_abuse_limits.count + 1
             WHERE signup_abuse_limits.bucket_type = EXCLUDED.bucket_type
               AND signup_abuse_limits.subject_hash = EXCLUDED.subject_hash
               AND signup_abuse_limits.window_start = EXCLUDED.window_start

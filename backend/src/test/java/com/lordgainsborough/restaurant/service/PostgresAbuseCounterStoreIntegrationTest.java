@@ -12,12 +12,20 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.mockito.Mockito;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -546,15 +554,38 @@ public class PostgresAbuseCounterStoreIntegrationTest {
     @Order(25)
     @DisplayName("Req 25: Sensitive IDs or subject hashes are not leaked in application logs")
     void test25_noSecretIdsOrSubjectHashesLogged() {
-        // Validation that sensitive IDs or hashes are not embedded in exception messages
-        Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-        Instant exp = ws.plusSeconds(300);
-        String secretId = "secret-keyed-token-9988776655";
-        store.incrementAndGet(secretId, BucketType.INITIAL_SEND_IP, "secret-hash-value-12345", ws, exp);
+        Logger logger = (Logger) LoggerFactory.getLogger(PostgresAbuseCounterStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
 
-        assertThatThrownBy(() -> store.incrementAndGet(secretId, BucketType.TOTAL_SEND_IP, "secret-hash-value-12345", ws, exp))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Conflicting metadata for existing abuse limit record");
+        try {
+            Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+            Instant exp = ws.plusSeconds(300);
+            String secretId = "secret-keyed-token-9988776655";
+            String secretHash = "secret-hash-value-12345";
+            store.incrementAndGet(secretId, BucketType.INITIAL_SEND_IP, secretHash, ws, exp);
+
+            assertThatThrownBy(() -> store.incrementAndGet(secretId, BucketType.TOTAL_SEND_IP, secretHash, ws, exp))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Conflicting metadata for existing abuse limit record");
+
+            // Verify that warning was indeed emitted by the logger
+            List<ILoggingEvent> events = appender.list;
+            assertThat(events).isNotEmpty();
+            assertThat(events.stream().anyMatch(e -> e.getFormattedMessage().contains("Conflicting metadata rejected")))
+                    .isTrue();
+
+            // Verify that no emitted log event leaks secretId or secretHash
+            for (ILoggingEvent event : events) {
+                assertThat(event.getFormattedMessage())
+                        .doesNotContain(secretId)
+                        .doesNotContain(secretHash);
+            }
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     // =========================================================================
@@ -959,6 +990,40 @@ public class PostgresAbuseCounterStoreIntegrationTest {
                             .isInstanceOf(MongoAbuseCounterStore.class);
                     assertThat(ctx.getBean(TestAbuseConsumer.class).getStore())
                             .isInstanceOf(MongoAbuseCounterStore.class);
+                });
+    }
+
+    @Test
+    @Order(39)
+    @DisplayName("Req 39: Spring transactional proxy operates with independent fallback transactionManager and coexisting Mongo")
+    void test39_springTransactionalProxyWithIndependentTransactionManagerWorks() {
+        MongoDatabaseFactory mockMongoDbFactory = Mockito.mock(MongoDatabaseFactory.class);
+        MongoTransactionManager mockMongoTxManager = new MongoTransactionManager(mockMongoDbFactory);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
+                .withBean("mongoTransactionManager", PlatformTransactionManager.class, () -> mockMongoTxManager)
+                .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-abuse-store.enabled=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasBean("transactionManager");
+                    assertThat(ctx).hasBean("mongoTransactionManager");
+                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
+
+                    AbuseCounterStore proxyStore = ctx.getBean(AbuseCounterStore.class);
+                    // Verify proxy is created and transaction interception works
+                    assertThat(AopUtils.isAopProxy(proxyStore)).isTrue();
+
+                    String proxyTestId = "proxy-tx-test-" + UUID.randomUUID();
+                    Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+                    Instant exp = ws.plusSeconds(300);
+
+                    long count = proxyStore.incrementAndGet(proxyTestId, BucketType.INITIAL_SEND_IP, "hash-proxy-tx", ws, exp);
+                    assertThat(count).isEqualTo(1L);
+
+                    long fetched = proxyStore.getCount(proxyTestId, Instant.now());
+                    assertThat(fetched).isEqualTo(1L);
                 });
     }
 

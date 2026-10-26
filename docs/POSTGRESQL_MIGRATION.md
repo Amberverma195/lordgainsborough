@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T03:18:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T03:26:00-04:00 (America/Toronto)  
 
 ---
 
@@ -360,7 +360,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
-| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; 39/39 tests; full 13-suite regression passed (276/276 tests) |
+| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T03:26:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; simplified arithmetic increment without redundant CASE; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; independent fallback `transactionManager` bean; real Logback appender log verification; 40/40 tests passed; full 13-suite regression passed |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
@@ -1592,6 +1592,30 @@ Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `Post
   3. **Updated Verification Tests:**
      - Updated `test33` in `PostgresAbuseCounterStoreIntegrationTest` asserting that setting `-Dapp.postgres.abuse-store.allow-clear=true` does not enable `allowClear` and `clear()` fails with `UnsupportedOperationException`.
      - Added `test34b` asserting that even with `allowClear = true`, calling `clear()` against a protected database (e.g. `postgres`) throws `SecurityException: Refusing to execute clear() on protected database: postgres`.
+
+---
+
+### [2026-10-26T03:26:00-04:00] PG-013 Verification & Maintainability Hardening: Independent Fallback TransactionManager, SQL Simplification, and Emitted Log Capture
+
+**Overview & Code Review Finding 4 Addressed:**
+- **Finding 4 (Transaction manager and log tests need strengthening):**
+  1. `PostgresAbuseCounterStore` explicitly requests `@Transactional(transactionManager = "transactionManager")`, but integration tests mostly constructed the store directly without exercising Spring transactional proxies. The JPA manager fallback added in PG-012 was conditional on catalog-seeding configuration (`app.catalog.postgres-seed.enabled=true`), so it was not proof the counter store works independently.
+  2. The privacy logging test (`test25`) checked an exception message rather than capturing emitted logs.
+  3. The SQL increment statement's overflow `CASE` expression had identical branches (`WHEN count >= 9223372036854775807 THEN count + 1 ELSE count + 1`), making the `CASE` structure redundant.
+- **Resolution:**
+  1. **Independent Fallback TransactionManager Bean:**
+     - Added `@EnableTransactionManagement(proxyTargetClass = true)` to `PostgresAbuseCounterStoreConfiguration`.
+     - Added `@Bean(name = "transactionManager") @ConditionalOnMissingBean(name = "transactionManager") PlatformTransactionManager transactionManager(ObjectProvider<EntityManagerFactory> emfProvider, DataSource dataSource)` in `PostgresAbuseCounterStoreConfiguration`.
+     - When JPA `EntityManagerFactory` is present, it returns `JpaTransactionManager`; otherwise, it returns `DataSourceTransactionManager`. This guarantees Spring transactional proxies and `@Transactional(transactionManager = "transactionManager")` function independently of whether catalog seeding is active.
+  2. **Simplified SQL Atomic Increment:**
+     - Removed redundant `CASE` expression from `SQL_INCREMENT` in `PostgresAbuseCounterStore.java`, reducing to `SET count = signup_abuse_limits.count + 1`.
+     - PostgreSQL integer arithmetic naturally raises `ERROR: bigint out of range` on `Long.MAX_VALUE`, cleanly caught by `isOverflowException` and translated to `ArithmeticException`.
+  3. **Emitted Log Event Capture via Logback Appender:**
+     - Updated `test25_noSecretIdsOrSubjectHashesLogged` in `PostgresAbuseCounterStoreIntegrationTest` to attach a `ListAppender<ILoggingEvent>` to the `PostgresAbuseCounterStore` logger.
+     - Confirmed that a warning log is actively emitted on metadata conflict, and verified that neither the sensitive counter ID (`secretId`) nor the hashed subject (`secretHash`) is contained in any emitted log event message.
+  4. **Spring Transactional Proxy & Independent TransactionManager Verification:**
+     - Added `test39_springTransactionalProxyWithIndependentTransactionManagerWorks` in `PostgresAbuseCounterStoreIntegrationTest`.
+     - Verifies Spring context creation with independent fallback `transactionManager` alongside `MongoTransactionManager`, confirms `AopUtils.isAopProxy(proxyStore) == true`, and executes transactional `incrementAndGet` and `getCount` through the proxy.
 
 **Next Task:**  
 `PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).
