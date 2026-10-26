@@ -17,6 +17,8 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -30,11 +32,38 @@ import java.util.Optional;
 @Component("mongoPasswordResetOtpChallengeStore")
 public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChallengeStore {
 
+    @FunctionalInterface
+    public interface TransactionFailureHook {
+        void execute(TransactionStatus status, String identifier);
+    }
+
     private final PasswordResetOtpChallengeRepository repository;
     private final MongoTemplate mongoTemplate;
     private final PasswordResetProperties properties;
     private final UserRepository userRepository;
-    private final MongoTransactionManager transactionManager;
+    private final PlatformTransactionManager transactionManager;
+
+    private volatile TransactionFailureHook failureInjectorBeforeUserUpdate;
+    private volatile TransactionFailureHook failureInjectorBeforeChallengeFinalize;
+    private volatile boolean simulateFinalizeConsumedFailure;
+
+    public void setFailureInjectorBeforeUserUpdate(TransactionFailureHook failureInjectorBeforeUserUpdate) {
+        this.failureInjectorBeforeUserUpdate = failureInjectorBeforeUserUpdate;
+    }
+
+    public void setFailureInjectorBeforeChallengeFinalize(TransactionFailureHook failureInjectorBeforeChallengeFinalize) {
+        this.failureInjectorBeforeChallengeFinalize = failureInjectorBeforeChallengeFinalize;
+    }
+
+    public void setSimulateFinalizeConsumedFailure(boolean simulateFinalizeConsumedFailure) {
+        this.simulateFinalizeConsumedFailure = simulateFinalizeConsumedFailure;
+    }
+
+    public void resetFailureInjectors() {
+        this.failureInjectorBeforeUserUpdate = null;
+        this.failureInjectorBeforeChallengeFinalize = null;
+        this.simulateFinalizeConsumedFailure = false;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public MongoPasswordResetOtpChallengeStore(
@@ -56,6 +85,15 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
             PasswordResetProperties properties,
             UserRepository userRepository,
             MongoTransactionManager transactionManager) {
+        this(repository, mongoTemplate, properties, userRepository, (PlatformTransactionManager) transactionManager);
+    }
+
+    public MongoPasswordResetOtpChallengeStore(
+            PasswordResetOtpChallengeRepository repository,
+            MongoTemplate mongoTemplate,
+            PasswordResetProperties properties,
+            UserRepository userRepository,
+            PlatformTransactionManager transactionManager) {
         this.repository = Objects.requireNonNull(repository, "repository is required");
         this.mongoTemplate = Objects.requireNonNull(mongoTemplate, "mongoTemplate is required");
         this.properties = Objects.requireNonNull(properties, "properties is required");
@@ -67,7 +105,11 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
             PasswordResetOtpChallengeRepository repository,
             MongoTemplate mongoTemplate,
             PasswordResetProperties properties) {
-        this(repository, mongoTemplate, properties, (UserRepository) null, (MongoTransactionManager) null);
+        this(repository, mongoTemplate, properties, (UserRepository) null, (PlatformTransactionManager) null);
+    }
+
+    public PlatformTransactionManager getTransactionManager() {
+        return transactionManager;
     }
 
     @Override
@@ -350,13 +392,24 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
                 ? new TransactionTemplate(transactionManager)
                 : null;
         if (tx != null) {
-            return tx.execute(status -> doReset(emailKey, challengeId, expectedDigest, resetOperationId, rawPassword, now));
-        } else {
-            return doReset(emailKey, challengeId, expectedDigest, resetOperationId, rawPassword, now);
+            try {
+                return tx.execute(status -> doReset(status, emailKey, challengeId, expectedDigest, resetOperationId, rawPassword, now));
+            } catch (Exception ex) {
+                return PasswordResetExecutionResult.failure(
+                        PasswordResetExecutionResult.Status.TRANSACTION_FAILED,
+                        ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+            }
         }
+        if (properties != null && properties.isRequireTransaction()) {
+            throw new IllegalStateException(
+                    "Transactional execution is required by configuration (app.auth.password-reset.require-transaction=true), " +
+                    "but no transaction manager is configured for MongoDB password reset.");
+        }
+        return doReset(null, emailKey, challengeId, expectedDigest, resetOperationId, rawPassword, now);
     }
 
     private PasswordResetExecutionResult doReset(
+            TransactionStatus status,
             String emailKey,
             String challengeId,
             String expectedDigest,
@@ -365,14 +418,37 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
             Instant now) {
         Optional<PasswordResetOtpChallenge> currentOpt = find(emailKey, challengeId);
         if (currentOpt.isEmpty()) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
             return PasswordResetExecutionResult.failure(
                     PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge not found");
         }
         PasswordResetOtpChallenge challenge = currentOpt.get();
 
+        if (challenge.getPurpose() != PasswordResetOtpChallenge.Purpose.PASSWORD_RESET) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Invalid challenge purpose: " + challenge.getPurpose());
+        }
+
+        if (challenge.getChallengeExpiresAt() == null || !now.isBefore(challenge.getChallengeExpiresAt())) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED,
+                    challenge.getChallengeExpiresAt() == null ? "Challenge expiration timestamp is missing" : "Challenge expired");
+        }
+
         if (challenge.getStatus() == PasswordResetChallengeStatus.CONSUMED) {
             if (resetOperationId.equals(challenge.getResetOperationId()) && challenge.isPasswordUpdated()) {
                 return PasswordResetExecutionResult.alreadyCompleted(challenge);
+            }
+            if (status != null) {
+                status.setRollbackOnly();
             }
             return PasswordResetExecutionResult.failure(
                     PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge already consumed by different operation");
@@ -380,16 +456,39 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
 
         if (challenge.getStatus() == PasswordResetChallengeStatus.PROCESSING) {
             if (!resetOperationId.equals(challenge.getResetOperationId())) {
+                if (status != null) {
+                    status.setRollbackOnly();
+                }
                 return PasswordResetExecutionResult.failure(
                         PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge concurrently claimed by different operation");
             }
             // Resume mutation
-            return applyUserPasswordAndFinalize(challenge, resetOperationId, rawPassword, now);
+            return applyUserPasswordAndFinalize(status, challenge, resetOperationId, rawPassword, now);
         }
 
         if (challenge.getStatus() != PasswordResetChallengeStatus.ACTIVE) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
             return PasswordResetExecutionResult.failure(
                     PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge not active");
+        }
+
+        if (challenge.getCodeExpiresAt() == null || !now.isBefore(challenge.getCodeExpiresAt())) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.CODE_EXPIRED,
+                    challenge.getCodeExpiresAt() == null ? "Code expiration timestamp is missing" : "Code expired");
+        }
+
+        if (expectedDigest == null || expectedDigest.isBlank() || challenge.getCodeDigest() == null || !expectedDigest.equals(challenge.getCodeDigest())) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Code digest mismatch");
         }
 
         // Claim challenge
@@ -399,25 +498,33 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
             PasswordResetOtpChallenge latest = find(emailKey, challengeId).orElse(challenge);
             if (latest.getStatus() == PasswordResetChallengeStatus.PROCESSING
                     && resetOperationId.equals(latest.getResetOperationId())) {
-                return applyUserPasswordAndFinalize(latest, resetOperationId, rawPassword, now);
+                return applyUserPasswordAndFinalize(status, latest, resetOperationId, rawPassword, now);
             }
             if (latest.getStatus() == PasswordResetChallengeStatus.CONSUMED
                     && resetOperationId.equals(latest.getResetOperationId())
                     && latest.isPasswordUpdated()) {
                 return PasswordResetExecutionResult.alreadyCompleted(latest);
             }
+            if (status != null) {
+                status.setRollbackOnly();
+            }
             return PasswordResetExecutionResult.failure(
                     PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Claim failed");
         }
 
-        return applyUserPasswordAndFinalize(claimed.get(), resetOperationId, rawPassword, now);
+        return applyUserPasswordAndFinalize(status, claimed.get(), resetOperationId, rawPassword, now);
     }
 
     private PasswordResetExecutionResult applyUserPasswordAndFinalize(
+            TransactionStatus status,
             PasswordResetOtpChallenge challenge,
             String resetOperationId,
             String rawPassword,
             Instant now) {
+        if (failureInjectorBeforeUserUpdate != null) {
+            failureInjectorBeforeUserUpdate.execute(status, challenge.getUserId());
+        }
+
         String passwordHash = PasswordUtil.hashPassword(rawPassword);
 
         Query query = Query.query(Criteria.where("_id").is(challenge.getUserId())
@@ -437,20 +544,42 @@ public class MongoPasswordResetOtpChallengeStore implements PasswordResetOtpChal
                     ? userRepository.findById(challenge.getUserId()).orElse(null)
                     : mongoTemplate.findById(challenge.getUserId(), User.class);
             if (existing == null || !resetOperationId.equals(existing.getLastPasswordResetOperationId())) {
+                if (status != null) {
+                    status.setRollbackOnly();
+                }
                 return PasswordResetExecutionResult.failure(
                         PasswordResetExecutionResult.Status.USER_UPDATE_FAILED, "User not found or update failed");
             }
         }
 
-        Optional<PasswordResetOtpChallenge> finalized = finalizeConsumed(
-                challenge.getEmailKey(),
-                challenge.getChallengeId(),
-                resetOperationId,
-                now);
+        if (failureInjectorBeforeChallengeFinalize != null) {
+            failureInjectorBeforeChallengeFinalize.execute(status, challenge.getChallengeId());
+        }
+
+        Optional<PasswordResetOtpChallenge> finalized;
+        if (simulateFinalizeConsumedFailure) {
+            finalized = Optional.empty();
+        } else {
+            finalized = finalizeConsumed(
+                    challenge.getEmailKey(),
+                    challenge.getChallengeId(),
+                    resetOperationId,
+                    now);
+        }
+
         if (finalized.isEmpty()) {
+            if (status != null) {
+                status.setRollbackOnly();
+            }
             return PasswordResetExecutionResult.failure(
                     PasswordResetExecutionResult.Status.TRANSACTION_FAILED, "Finalize consumed failed");
         }
+
+        if (status != null && status.isRollbackOnly()) {
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.TRANSACTION_FAILED, "Transaction marked rollback-only");
+        }
+
         return PasswordResetExecutionResult.success(finalized.get());
     }
 

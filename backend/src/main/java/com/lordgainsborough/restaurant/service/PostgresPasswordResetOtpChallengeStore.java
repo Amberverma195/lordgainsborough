@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -27,11 +28,32 @@ import java.util.Optional;
  */
 public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpChallengeStore {
 
+    @FunctionalInterface
+    public interface TransactionFailureHook {
+        void execute(TransactionStatus status, String identifier);
+    }
+
     private final DataSource dataSource;
     private final PlatformTransactionManager transactionManager;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
     private final PasswordResetProperties properties;
+
+    private volatile TransactionFailureHook failureInjectorBeforeUserUpdate;
+    private volatile TransactionFailureHook failureInjectorBeforeChallengeFinalize;
+
+    public void setFailureInjectorBeforeUserUpdate(TransactionFailureHook failureInjectorBeforeUserUpdate) {
+        this.failureInjectorBeforeUserUpdate = failureInjectorBeforeUserUpdate;
+    }
+
+    public void setFailureInjectorBeforeChallengeFinalize(TransactionFailureHook failureInjectorBeforeChallengeFinalize) {
+        this.failureInjectorBeforeChallengeFinalize = failureInjectorBeforeChallengeFinalize;
+    }
+
+    public void resetFailureInjectors() {
+        this.failureInjectorBeforeUserUpdate = null;
+        this.failureInjectorBeforeChallengeFinalize = null;
+    }
 
     private static final RowMapper<PasswordResetOtpChallenge> ROW_MAPPER = (rs, rowNum) -> {
         PasswordResetOtpChallenge ch = new PasswordResetOtpChallenge();
@@ -40,7 +62,11 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
         ch.setUserId(rs.getString("user_id"));
 
         String purposeStr = rs.getString("purpose");
-        ch.setPurpose(purposeStr != null ? PasswordResetOtpChallenge.Purpose.valueOf(purposeStr) : null);
+        try {
+            ch.setPurpose(purposeStr != null ? PasswordResetOtpChallenge.Purpose.valueOf(purposeStr) : null);
+        } catch (IllegalArgumentException ex) {
+            ch.setPurpose(null);
+        }
 
         String statusStr = rs.getString("status");
         ch.setStatus(statusStr != null ? PasswordResetChallengeStatus.valueOf(statusStr) : null);
@@ -568,157 +594,198 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
         Objects.requireNonNull(rawPassword, "rawPassword is required");
         Objects.requireNonNull(now, "now is required");
 
-        return transactionTemplate.execute(status -> {
-            // 1. Acquire row lock on the challenge row to ensure strict serializability and concurrency control
-            String selectSql = """
-                SELECT email_key, challenge_id, user_id, purpose, status, code_digest,
-                       code_expires_at, challenge_expires_at, next_resend_at, resend_count,
-                       failed_verification_attempts, client_idempotency_key, send_operation_id,
-                       send_status, send_lease_until, reset_operation_id, password_updated,
-                       consumed_at, created_at, updated_at
-                FROM password_reset_otp_challenges
-                WHERE email_key = ?
-                FOR UPDATE
-                """;
-            List<PasswordResetOtpChallenge> rows = jdbcTemplate.query(selectSql, ROW_MAPPER, emailKey);
-            if (rows.isEmpty()) {
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge not found for emailKey: " + emailKey);
-            }
-            PasswordResetOtpChallenge challenge = rows.get(0);
-
-            if (!challengeId.equals(challenge.getChallengeId())) {
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge ID mismatch");
-            }
-
-            // 2. Validate challenge state
-            if (challenge.getStatus() == PasswordResetChallengeStatus.CONSUMED) {
-                if (resetOperationId.equals(challenge.getResetOperationId()) && challenge.isPasswordUpdated()) {
-                    return PasswordResetExecutionResult.alreadyCompleted(challenge);
-                }
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge already consumed by different operation");
-            }
-
-            if (challenge.getStatus() == PasswordResetChallengeStatus.LOCKED) {
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.CHALLENGE_LOCKED, "Challenge is locked");
-            }
-
-            if (challenge.getChallengeExpiresAt() != null && !now.isBefore(challenge.getChallengeExpiresAt())) {
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED, "Challenge expired");
-            }
-
-            if (challenge.getStatus() == PasswordResetChallengeStatus.PROCESSING) {
-                if (!resetOperationId.equals(challenge.getResetOperationId())) {
-                    return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge in progress by different operation");
-                }
-                // Valid resume with same resetOperationId
-            } else if (challenge.getStatus() == PasswordResetChallengeStatus.ACTIVE) {
-                if (challenge.getCodeExpiresAt() != null && !now.isBefore(challenge.getCodeExpiresAt())) {
-                    return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.CODE_EXPIRED, "Code expired");
-                }
-                if (challenge.getFailedVerificationAttempts() >= properties.getMaxVerificationFailures()) {
-                    return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.CHALLENGE_LOCKED, "Max verification failures reached");
-                }
-                if (expectedDigest != null && !expectedDigest.equals(challenge.getCodeDigest())) {
-                    return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Code digest mismatch");
-                }
-
-                // Transition challenge to PROCESSING
-                String claimSql = """
-                    UPDATE password_reset_otp_challenges
-                    SET status = 'PROCESSING',
-                        reset_operation_id = ?,
-                        updated_at = ?
-                    WHERE email_key = ? AND challenge_id = ? AND status = 'ACTIVE'
+        try {
+            return transactionTemplate.execute(status -> {
+                // 1. Acquire row lock on the challenge row to ensure strict serializability and concurrency control
+                String selectSql = """
+                    SELECT email_key, challenge_id, user_id, purpose, status, code_digest,
+                           code_expires_at, challenge_expires_at, next_resend_at, resend_count,
+                           failed_verification_attempts, client_idempotency_key, send_operation_id,
+                           send_status, send_lease_until, reset_operation_id, password_updated,
+                           consumed_at, created_at, updated_at
+                    FROM password_reset_otp_challenges
+                    WHERE email_key = ?
+                    FOR UPDATE
                     """;
-                int claimed = jdbcTemplate.update(claimSql, resetOperationId, toTimestamp(now), emailKey, challengeId);
-                if (claimed == 0) {
+                List<PasswordResetOtpChallenge> rows = jdbcTemplate.query(selectSql, ROW_MAPPER, emailKey);
+                if (rows.isEmpty()) {
                     status.setRollbackOnly();
                     return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Concurrent claim conflict");
+                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge not found for emailKey: " + emailKey);
                 }
-            } else {
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Unexpected challenge status: " + challenge.getStatus());
-            }
+                PasswordResetOtpChallenge challenge = rows.get(0);
 
-            // 3. Update user password, token_version, password_changed_at, and last_password_reset_operation_id
-            String passwordHash = PasswordUtil.hashPassword(rawPassword);
-            String updateUserSql = """
-                UPDATE users
-                SET password = ?,
-                    token_version = token_version + 1,
-                    password_changed_at = ?,
-                    last_password_reset_operation_id = ?
-                WHERE id = ?
-                  AND (last_password_reset_operation_id IS NULL OR last_password_reset_operation_id <> ?)
-                """;
-            int userUpdated = jdbcTemplate.update(
-                    updateUserSql,
-                    passwordHash,
-                    toTimestamp(now),
-                    resetOperationId,
-                    challenge.getUserId(),
-                    resetOperationId);
-
-            if (userUpdated == 0) {
-                // Check if user exists and already has this resetOperationId (idempotent replay)
-                String verifyUserSql = "SELECT last_password_reset_operation_id FROM users WHERE id = ?";
-                List<String> lastOps = jdbcTemplate.query(verifyUserSql, (rs, rowNum) -> rs.getString(1), challenge.getUserId());
-                if (lastOps.isEmpty()) {
+                if (!challengeId.equals(challenge.getChallengeId())) {
                     status.setRollbackOnly();
                     return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.USER_NOT_FOUND, "Associated user record not found: " + challenge.getUserId());
+                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge ID mismatch");
                 }
-                if (!resetOperationId.equals(lastOps.get(0))) {
+
+                // 2. Validate challenge preconditions (fail-closed)
+                if (challenge.getPurpose() != PasswordResetOtpChallenge.Purpose.PASSWORD_RESET) {
                     status.setRollbackOnly();
                     return PasswordResetExecutionResult.failure(
-                            PasswordResetExecutionResult.Status.USER_UPDATE_FAILED, "Failed to update user password");
+                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE,
+                            "Invalid challenge purpose: " + challenge.getPurpose());
                 }
-            }
 
-            // 4. Finalize challenge to CONSUMED
-            String finalizeSql = """
-                UPDATE password_reset_otp_challenges
-                SET status = 'CONSUMED',
-                    password_updated = TRUE,
-                    consumed_at = ?,
-                    code_digest = NULL,
-                    updated_at = ?
-                WHERE email_key = ?
-                  AND challenge_id = ?
-                  AND status = 'PROCESSING'
-                  AND reset_operation_id = ?
-                RETURNING email_key, challenge_id, user_id, purpose, status, code_digest,
-                          code_expires_at, challenge_expires_at, next_resend_at, resend_count,
-                          failed_verification_attempts, client_idempotency_key, send_operation_id,
-                          send_status, send_lease_until, reset_operation_id, password_updated,
-                          consumed_at, created_at, updated_at
-                """;
-            List<PasswordResetOtpChallenge> finalizedRows = jdbcTemplate.query(
-                    finalizeSql,
-                    ROW_MAPPER,
-                    toTimestamp(now),
-                    toTimestamp(now),
-                    emailKey,
-                    challengeId,
-                    resetOperationId);
+                if (challenge.getChallengeExpiresAt() == null || !now.isBefore(challenge.getChallengeExpiresAt())) {
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED,
+                            challenge.getChallengeExpiresAt() == null ? "Challenge expiration timestamp is missing" : "Challenge expired");
+                }
 
-            if (finalizedRows.isEmpty()) {
-                status.setRollbackOnly();
-                return PasswordResetExecutionResult.failure(
-                        PasswordResetExecutionResult.Status.TRANSACTION_FAILED, "Failed to finalize challenge consumption");
-            }
+                // 3. Validate challenge state
+                if (challenge.getStatus() == PasswordResetChallengeStatus.CONSUMED) {
+                    if (resetOperationId.equals(challenge.getResetOperationId()) && challenge.isPasswordUpdated()) {
+                        return PasswordResetExecutionResult.alreadyCompleted(challenge);
+                    }
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge already consumed by different operation");
+                }
 
-            return PasswordResetExecutionResult.success(finalizedRows.get(0));
-        });
+                if (challenge.getStatus() == PasswordResetChallengeStatus.LOCKED) {
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.CHALLENGE_LOCKED, "Challenge is locked");
+                }
+
+                if (challenge.getStatus() == PasswordResetChallengeStatus.PROCESSING) {
+                    if (!resetOperationId.equals(challenge.getResetOperationId())) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Challenge in progress by different operation");
+                    }
+                    // Valid resume with same resetOperationId
+                } else if (challenge.getStatus() == PasswordResetChallengeStatus.ACTIVE) {
+                    if (challenge.getCodeExpiresAt() == null || !now.isBefore(challenge.getCodeExpiresAt())) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.CODE_EXPIRED,
+                                challenge.getCodeExpiresAt() == null ? "Code expiration timestamp is missing" : "Code expired");
+                    }
+                    if (challenge.getFailedVerificationAttempts() >= properties.getMaxVerificationFailures()) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.CHALLENGE_LOCKED, "Max verification failures reached");
+                    }
+                    if (expectedDigest == null || expectedDigest.isBlank() || challenge.getCodeDigest() == null || !expectedDigest.equals(challenge.getCodeDigest())) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Code digest mismatch");
+                    }
+
+                    // Transition challenge to PROCESSING
+                    String claimSql = """
+                        UPDATE password_reset_otp_challenges
+                        SET status = 'PROCESSING',
+                            reset_operation_id = ?,
+                            updated_at = ?
+                        WHERE email_key = ? AND challenge_id = ? AND status = 'ACTIVE'
+                        """;
+                    int claimed = jdbcTemplate.update(claimSql, resetOperationId, toTimestamp(now), emailKey, challengeId);
+                    if (claimed == 0) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Concurrent claim conflict");
+                    }
+                } else {
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Unexpected challenge status: " + challenge.getStatus());
+                }
+
+                // Test failure injection hook before user update
+                if (failureInjectorBeforeUserUpdate != null) {
+                    failureInjectorBeforeUserUpdate.execute(status, challenge.getUserId());
+                }
+
+                // 3. Update user password, token_version, password_changed_at, and last_password_reset_operation_id
+                String passwordHash = PasswordUtil.hashPassword(rawPassword);
+                String updateUserSql = """
+                    UPDATE users
+                    SET password = ?,
+                        token_version = token_version + 1,
+                        password_changed_at = ?,
+                        last_password_reset_operation_id = ?
+                    WHERE id = ?
+                      AND (last_password_reset_operation_id IS NULL OR last_password_reset_operation_id <> ?)
+                    """;
+                int userUpdated = jdbcTemplate.update(
+                        updateUserSql,
+                        passwordHash,
+                        toTimestamp(now),
+                        resetOperationId,
+                        challenge.getUserId(),
+                        resetOperationId);
+
+                if (userUpdated == 0) {
+                    // Check if user exists and already has this resetOperationId (idempotent replay)
+                    String verifyUserSql = "SELECT last_password_reset_operation_id FROM users WHERE id = ?";
+                    List<String> lastOps = jdbcTemplate.query(verifyUserSql, (rs, rowNum) -> rs.getString(1), challenge.getUserId());
+                    if (lastOps.isEmpty()) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.USER_NOT_FOUND, "Associated user record not found: " + challenge.getUserId());
+                    }
+                    if (!resetOperationId.equals(lastOps.get(0))) {
+                        status.setRollbackOnly();
+                        return PasswordResetExecutionResult.failure(
+                                PasswordResetExecutionResult.Status.USER_UPDATE_FAILED, "Failed to update user password");
+                    }
+                }
+
+                // Test failure injection hook before challenge finalization
+                if (failureInjectorBeforeChallengeFinalize != null) {
+                    failureInjectorBeforeChallengeFinalize.execute(status, challengeId);
+                }
+
+                // 4. Finalize challenge to CONSUMED
+                String finalizeSql = """
+                    UPDATE password_reset_otp_challenges
+                    SET status = 'CONSUMED',
+                        password_updated = TRUE,
+                        consumed_at = ?,
+                        code_digest = NULL,
+                        updated_at = ?
+                    WHERE email_key = ?
+                      AND challenge_id = ?
+                      AND status = 'PROCESSING'
+                      AND reset_operation_id = ?
+                    RETURNING email_key, challenge_id, user_id, purpose, status, code_digest,
+                              code_expires_at, challenge_expires_at, next_resend_at, resend_count,
+                              failed_verification_attempts, client_idempotency_key, send_operation_id,
+                              send_status, send_lease_until, reset_operation_id, password_updated,
+                              consumed_at, created_at, updated_at
+                    """;
+                List<PasswordResetOtpChallenge> finalizedRows = jdbcTemplate.query(
+                        finalizeSql,
+                        ROW_MAPPER,
+                        toTimestamp(now),
+                        toTimestamp(now),
+                        emailKey,
+                        challengeId,
+                        resetOperationId);
+
+                if (finalizedRows.isEmpty()) {
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.TRANSACTION_FAILED, "Failed to finalize challenge consumption");
+                }
+
+                if (status.isRollbackOnly()) {
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.TRANSACTION_FAILED, "Transaction marked rollback-only");
+                }
+
+                return PasswordResetExecutionResult.success(finalizedRows.get(0));
+            });
+        } catch (Exception ex) {
+            return PasswordResetExecutionResult.failure(
+                    PasswordResetExecutionResult.Status.TRANSACTION_FAILED,
+                    ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+        }
     }
 }

@@ -21,6 +21,7 @@ public class PasswordResetProperties {
     private int globalEmailOperations = 100;
     private Duration globalEmailWindow = Duration.ofMinutes(1);
     private Duration sendLease = Duration.ofMinutes(1);
+    private boolean requireTransaction = false;
 
     public Duration getResendCooldown() { return resendCooldown; }
     public void setResendCooldown(Duration value) { this.resendCooldown = value; }
@@ -50,4 +51,6 @@ public class PasswordResetProperties {
     public void setGlobalEmailWindow(Duration value) { this.globalEmailWindow = value; }
     public Duration getSendLease() { return sendLease; }
     public void setSendLease(Duration value) { this.sendLease = value; }
+    public boolean isRequireTransaction() { return requireTransaction; }
+    public void setRequireTransaction(boolean requireTransaction) { this.requireTransaction = requireTransaction; }
 }

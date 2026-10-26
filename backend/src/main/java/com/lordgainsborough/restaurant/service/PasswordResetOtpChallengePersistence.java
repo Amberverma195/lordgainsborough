@@ -56,6 +56,10 @@ public class PasswordResetOtpChallengePersistence {
         return store;
     }
 
+    public boolean isPostgresStore() {
+        return store instanceof PostgresPasswordResetOtpChallengeStore;
+    }
+
     public Instant now() {
         return clock.instant();
     }

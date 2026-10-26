@@ -135,11 +135,20 @@ public class PasswordResetService {
         this.transactionTemplate = null;
     }
 
+    public boolean isPostgresStore() {
+        return persistence != null && persistence.isPostgresStore();
+    }
+
     public Result requestInitial(
             String normalizedEmail,
             Optional<User> user,
             String clientIp,
             String idempotencyKey) {
+        if (isPostgresStore()) {
+            throw new IllegalStateException(
+                    "Unsupported mixed-backend call: cannot initiate PostgreSQL password reset challenge using MongoDB User. " +
+                    "Use requestInitialForJpaUser or coordinated PostgreSQL user authentication (PG-022).");
+        }
         return requestInitial(
                 normalizedEmail,
                 user.map(User::getId).orElse(null),

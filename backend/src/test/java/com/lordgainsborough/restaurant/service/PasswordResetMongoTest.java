@@ -47,18 +47,27 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+
 import static com.mongodb.client.model.Filters.eq;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 class PasswordResetMongoTest {
 
     private static final Instant NOW = Instant.parse("2026-07-13T14:00:00Z");
@@ -492,6 +501,235 @@ class PasswordResetMongoTest {
         PasswordResetOtpChallenge consumed = loadChallenge(EMAIL);
         assertEquals(PasswordResetChallengeStatus.CONSUMED, consumed.getStatus());
         assertTrue(consumed.isPasswordUpdated());
+    }
+
+    @Test
+    void deliberatelyFailedFinalizationAfterUserUpdateMarksRollbackOnlyAndReturnsTransactionFailed() {
+        User user = saveUser("user-tx-finalize-fail", "finalize.fail@example.com");
+        PasswordResetService.Result initial = initial(user, "init-finalize-fail");
+        String code = mailFor("finalize.fail@example.com").code();
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("finalize.fail@example.com");
+        String digest = challenge.getCodeDigest();
+
+        PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+        SimpleTransactionStatus txStatus = spy(new SimpleTransactionStatus());
+        when(txManager.getTransaction(any())).thenReturn(txStatus);
+
+        MongoPasswordResetOtpChallengeStore transactionalStore =
+                new MongoPasswordResetOtpChallengeStore(
+                        challengeRepository,
+                        mongoTemplate,
+                        properties,
+                        userRepository,
+                        txManager);
+        transactionalStore.setSimulateFinalizeConsumedFailure(true);
+
+        PasswordResetExecutionResult result = transactionalStore.executePasswordResetTransaction(
+                challenge.getEmailKey(),
+                handle,
+                digest,
+                "tx-op-finalize-fail",
+                NEW_PASSWORD,
+                NOW);
+
+        assertEquals(PasswordResetExecutionResult.Status.TRANSACTION_FAILED, result.status());
+        assertEquals("Finalize consumed failed", result.failureReason());
+        verify(txStatus).setRollbackOnly();
+        assertTrue(txStatus.isRollbackOnly());
+
+        // Challenge was not finalized to CONSUMED
+        PasswordResetOtpChallenge stored = loadChallenge("finalize.fail@example.com");
+        assertNotEquals(PasswordResetChallengeStatus.CONSUMED, stored.getStatus());
+        assertFalse(stored.isPasswordUpdated());
+    }
+
+    @Test
+    void executePasswordResetTransactionThrowsWhenAtomicityRequiredWithoutTransactionManager() {
+        PasswordResetProperties strictProps = new PasswordResetProperties();
+        strictProps.setRequireTransaction(true);
+
+        MongoPasswordResetOtpChallengeStore strictStore =
+                new MongoPasswordResetOtpChallengeStore(challengeRepository, mongoTemplate, strictProps);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                strictStore.executePasswordResetTransaction(
+                        "dummyEmailKey",
+                        "dummyChallengeId",
+                        "dummyDigest",
+                        "dummyOpId",
+                        NEW_PASSWORD,
+                        NOW));
+
+        assertTrue(ex.getMessage().contains("app.auth.password-reset.require-transaction=true"));
+    }
+
+    @Test
+    void executePasswordResetTransactionFallsBackNontransactionallyWhenAtomicityNotRequired() {
+        User user = saveUser("user-fallback-nontx", "nontx.fallback@example.com");
+        PasswordResetService.Result initial = initial(user, "init-nontx-fallback");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("nontx.fallback@example.com");
+
+        MongoPasswordResetOtpChallengeStore nontransactionalStore =
+                new MongoPasswordResetOtpChallengeStore(challengeRepository, mongoTemplate, properties);
+
+        PasswordResetExecutionResult result = nontransactionalStore.executePasswordResetTransaction(
+                challenge.getEmailKey(),
+                handle,
+                challenge.getCodeDigest(),
+                "nontx-op-success",
+                NEW_PASSWORD,
+                NOW);
+
+        assertTrue(result.isSuccess());
+        assertEquals(PasswordResetChallengeStatus.CONSUMED, result.challenge().getStatus());
+        assertTrue(result.challenge().isPasswordUpdated());
+    }
+
+    @Test
+    void failureHookBeforeFinalizeMarksRollbackOnlyAndFails() {
+        User user = saveUser("user-hook-fail", "hook.fail@example.com");
+        PasswordResetService.Result initial = initial(user, "init-hook-fail");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("hook.fail@example.com");
+
+        PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+        SimpleTransactionStatus txStatus = spy(new SimpleTransactionStatus());
+        when(txManager.getTransaction(any())).thenReturn(txStatus);
+
+        MongoPasswordResetOtpChallengeStore storeWithHook =
+                new MongoPasswordResetOtpChallengeStore(
+                        challengeRepository,
+                        mongoTemplate,
+                        properties,
+                        userRepository,
+                        txManager);
+        storeWithHook.setFailureInjectorBeforeChallengeFinalize((status, id) -> status.setRollbackOnly());
+
+        PasswordResetExecutionResult result = storeWithHook.executePasswordResetTransaction(
+                challenge.getEmailKey(),
+                handle,
+                challenge.getCodeDigest(),
+                "hook-op-fail",
+                NEW_PASSWORD,
+                NOW);
+
+        assertEquals(PasswordResetExecutionResult.Status.TRANSACTION_FAILED, result.status());
+        verify(txStatus).setRollbackOnly();
+        assertTrue(txStatus.isRollbackOnly());
+    }
+
+    @Test
+    void executePasswordResetTransactionRejectsNullExpectedDigestFailClosed() {
+        User user = saveUser("user-mongo-null-digest", "mongo.null.digest@example.com");
+        PasswordResetService.Result initial = initial(user, "init-mongo-null-digest");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("mongo.null.digest@example.com");
+
+        MongoPasswordResetOtpChallengeStore store =
+                new MongoPasswordResetOtpChallengeStore(challengeRepository, mongoTemplate, properties);
+
+        PasswordResetExecutionResult result = store.executePasswordResetTransaction(
+                challenge.getEmailKey(), handle, null, "op-null-digest", NEW_PASSWORD, NOW);
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, result.status());
+    }
+
+    @Test
+    void executePasswordResetTransactionRejectsNullExpirationTimestampsFailClosed() {
+        User user = saveUser("user-mongo-null-exp", "mongo.null.exp@example.com");
+        PasswordResetService.Result initial = initial(user, "init-mongo-null-exp");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("mongo.null.exp@example.com");
+
+        // Null challengeExpiresAt
+        challenge.setChallengeExpiresAt(null);
+        challengeRepository.save(challenge);
+
+        MongoPasswordResetOtpChallengeStore store =
+                new MongoPasswordResetOtpChallengeStore(challengeRepository, mongoTemplate, properties);
+
+        PasswordResetExecutionResult resultChExp = store.executePasswordResetTransaction(
+                challenge.getEmailKey(), handle, challenge.getCodeDigest(), "op-null-ch-exp", NEW_PASSWORD, NOW);
+        assertFalse(resultChExp.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED, resultChExp.status());
+
+        // Restore challengeExpiresAt, but null codeExpiresAt
+        challenge.setChallengeExpiresAt(NOW.plus(Duration.ofMinutes(30)));
+        challenge.setCodeExpiresAt(null);
+        challengeRepository.save(challenge);
+
+        PasswordResetExecutionResult resultCodeExp = store.executePasswordResetTransaction(
+                challenge.getEmailKey(), handle, challenge.getCodeDigest(), "op-null-code-exp", NEW_PASSWORD, NOW);
+        assertFalse(resultCodeExp.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.CODE_EXPIRED, resultCodeExp.status());
+    }
+
+    @Test
+    void executePasswordResetTransactionRejectsInvalidPurposeFailClosed() {
+        User user = saveUser("user-mongo-null-purpose", "mongo.null.purpose@example.com");
+        PasswordResetService.Result initial = initial(user, "init-mongo-null-purpose");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("mongo.null.purpose@example.com");
+
+        challenge.setPurpose(null);
+        challengeRepository.save(challenge);
+
+        MongoPasswordResetOtpChallengeStore store =
+                new MongoPasswordResetOtpChallengeStore(challengeRepository, mongoTemplate, properties);
+
+        PasswordResetExecutionResult result = store.executePasswordResetTransaction(
+                challenge.getEmailKey(), handle, challenge.getCodeDigest(), "op-null-purpose", NEW_PASSWORD, NOW);
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, result.status());
+    }
+
+    @Test
+    void realMongoTransactionalCompletionCommitsPasswordAndConsumesChallenge() {
+        User user = saveUser("user-mongo-tx-commit", "mongo.tx.commit@example.com");
+        PasswordResetService.Result initial = initial(user, "init-mongo-tx-commit");
+        String handle = initial.body().getChallengeId();
+        PasswordResetOtpChallenge challenge = loadChallenge("mongo.tx.commit@example.com");
+
+        PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+        SimpleTransactionStatus txStatus = spy(new SimpleTransactionStatus());
+        when(txManager.getTransaction(any())).thenReturn(txStatus);
+
+        MongoPasswordResetOtpChallengeStore transactionalStore =
+                new MongoPasswordResetOtpChallengeStore(
+                        challengeRepository,
+                        mongoTemplate,
+                        properties,
+                        userRepository,
+                        txManager);
+
+        PasswordResetExecutionResult result = transactionalStore.executePasswordResetTransaction(
+                challenge.getEmailKey(),
+                handle,
+                challenge.getCodeDigest(),
+                "op-mongo-tx-success",
+                NEW_PASSWORD,
+                NOW);
+
+        assertTrue(result.isSuccess());
+        verify(txStatus, never()).setRollbackOnly();
+        verify(txManager).commit(txStatus);
+
+        // Verify MongoDB user document was updated
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertEquals(1L, updated.getTokenVersion());
+        assertNotNull(updated.getPasswordChangedAt());
+        assertEquals("op-mongo-tx-success", updated.getLastPasswordResetOperationId());
+        assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, updated.getPassword()));
+
+        // Verify MongoDB challenge document is CONSUMED
+        PasswordResetOtpChallenge consumed = loadChallenge("mongo.tx.commit@example.com");
+        assertEquals(PasswordResetChallengeStatus.CONSUMED, consumed.getStatus());
+        assertTrue(consumed.isPasswordUpdated());
+        assertNotNull(consumed.getConsumedAt());
+        assertNull(consumed.getCodeDigest());
     }
 
     private PasswordResetService serviceFor(int index) {

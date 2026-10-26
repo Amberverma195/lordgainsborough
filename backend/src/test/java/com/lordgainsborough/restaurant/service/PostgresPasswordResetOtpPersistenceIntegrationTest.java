@@ -13,8 +13,18 @@ import com.lordgainsborough.restaurant.model.PasswordResetOtpChallenge;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser;
 import com.lordgainsborough.restaurant.repository.PasswordResetOtpChallengeRepository;
 import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.controller.AuthController;
+import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
+import com.lordgainsborough.restaurant.dto.SendOtpRequest;
+import com.lordgainsborough.restaurant.model.User;
+import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
+import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
+import com.lordgainsborough.restaurant.security.ClientIpResolver;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.servlet.http.HttpServletRequest;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.JwtUtil;
+import org.springframework.orm.jpa.JpaTransactionManager;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -68,6 +78,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -299,6 +310,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @BeforeEach
     void resetClockAndData() {
+        if (store != null) {
+            store.resetFailureInjectors();
+        }
         if (!postgresAvailable) return;
         clock.set(FIXED_NOW);
         jdbcTemplate.update("DELETE FROM password_reset_otp_challenges");
@@ -890,7 +904,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @Test
     @Order(23)
-    @DisplayName("23. Transaction rollback on user failure: challenge is NOT consumed if user missing")
+    @DisplayName("23. Transaction rollback on user update failure: password and challenge remain unchanged")
     void test23_transactionRollbackOnUserFailure() {
         requirePostgres();
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
@@ -898,25 +912,86 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-rollback", TEST_USER_ID, rawCode, clock.instant());
         persistence.getStore().tryInsert(ch);
 
-        // Delete user before transaction to trigger failure
-        jdbcTemplate.update("DELETE FROM users WHERE id = ?", TEST_USER_ID);
+        // Inject simulated user-update failure during the transaction without deleting parent user
+        store.setFailureInjectorBeforeUserUpdate((status, userId) -> {
+            throw new RuntimeException("Simulated user update failure during transaction");
+        });
 
-        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
-                emailKey, "ch-rollback", ch.getCodeDigest(), "reset-op-fail", NEW_PASSWORD, clock.instant());
+        try {
+            PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                    emailKey, "ch-rollback", ch.getCodeDigest(), "reset-op-fail", NEW_PASSWORD, clock.instant());
 
-        assertFalse(result.isSuccess());
-        assertEquals(PasswordResetExecutionResult.Status.USER_NOT_FOUND, result.status());
+            assertFalse(result.isSuccess());
+            assertEquals(PasswordResetExecutionResult.Status.TRANSACTION_FAILED, result.status());
 
-        // Rollback ensures challenge was NOT left in CONSUMED or corrupted state
-        PasswordResetOtpChallenge challengeAfter = persistence.findByEmailKey(emailKey).orElseThrow();
-        assertEquals(PasswordResetChallengeStatus.ACTIVE, challengeAfter.getStatus());
-        assertFalse(challengeAfter.isPasswordUpdated());
+            // Rollback ensures user password and token_version were NOT modified
+            String userSql = "SELECT password, token_version, password_changed_at, last_password_reset_operation_id FROM users WHERE id = ?";
+            jdbcTemplate.query(userSql, rs -> {
+                assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, rs.getString("password")));
+                assertFalse(PasswordUtil.checkPassword(NEW_PASSWORD, rs.getString("password")));
+                assertEquals(0L, rs.getLong("token_version"));
+                assertNull(rs.getTimestamp("password_changed_at"));
+                assertNull(rs.getString("last_password_reset_operation_id"));
+            }, TEST_USER_ID);
+
+            // Rollback ensures challenge was NOT left in CONSUMED or corrupted state (remains ACTIVE)
+            PasswordResetOtpChallenge challengeAfter = persistence.findByEmailKey(emailKey).orElseThrow();
+            assertEquals(PasswordResetChallengeStatus.ACTIVE, challengeAfter.getStatus());
+            assertFalse(challengeAfter.isPasswordUpdated());
+            assertNull(challengeAfter.getConsumedAt());
+            assertNotNull(challengeAfter.getCodeDigest());
+        } finally {
+            store.resetFailureInjectors();
+        }
     }
 
     @Test
     @Order(24)
-    @DisplayName("24. Concurrent complete calls: exactly one updates password and increments version")
-    void test24_concurrentCompleteCallsExactlyOneWins() throws Exception {
+    @DisplayName("24. Transaction rollback on challenge finalization failure: user update rolls back")
+    void test24_transactionRollbackOnChallengeFinalizationFailure() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-finalize-fail", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Inject simulated challenge finalization failure after user update has already executed
+        store.setFailureInjectorBeforeChallengeFinalize((status, challengeId) -> {
+            throw new RuntimeException("Simulated challenge finalization persistence failure");
+        });
+
+        try {
+            PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                    emailKey, "ch-finalize-fail", ch.getCodeDigest(), "reset-op-finalize-fail", NEW_PASSWORD, clock.instant());
+
+            assertFalse(result.isSuccess());
+            assertEquals(PasswordResetExecutionResult.Status.TRANSACTION_FAILED, result.status());
+
+            // Rollback ensures user update was undone: password unchanged, token_version not incremented
+            String userSql = "SELECT password, token_version, password_changed_at, last_password_reset_operation_id FROM users WHERE id = ?";
+            jdbcTemplate.query(userSql, rs -> {
+                assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, rs.getString("password")));
+                assertFalse(PasswordUtil.checkPassword(NEW_PASSWORD, rs.getString("password")));
+                assertEquals(0L, rs.getLong("token_version"));
+                assertNull(rs.getTimestamp("password_changed_at"));
+                assertNull(rs.getString("last_password_reset_operation_id"));
+            }, TEST_USER_ID);
+
+            // Rollback ensures challenge consumption was NOT committed (remains ACTIVE, not CONSUMED)
+            PasswordResetOtpChallenge challengeAfter = persistence.findByEmailKey(emailKey).orElseThrow();
+            assertEquals(PasswordResetChallengeStatus.ACTIVE, challengeAfter.getStatus());
+            assertFalse(challengeAfter.isPasswordUpdated());
+            assertNull(challengeAfter.getConsumedAt());
+            assertNotNull(challengeAfter.getCodeDigest());
+        } finally {
+            store.resetFailureInjectors();
+        }
+    }
+
+    @Test
+    @Order(25)
+    @DisplayName("25. Concurrent complete calls: exactly one updates password and increments version")
+    void test25_concurrentCompleteCallsExactlyOneWins() throws Exception {
         requirePostgres();
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
         String rawCode = "123456";
@@ -955,9 +1030,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(25)
-    @DisplayName("25. Successful reset revokes prior JWT through token_version mismatch")
-    void test25_resetRevokesPriorJwtThroughTokenVersion() {
+    @Order(26)
+    @DisplayName("26. Successful reset revokes prior JWT through token_version mismatch")
+    void test26_resetRevokesPriorJwtThroughTokenVersion() {
         requirePostgres();
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
         String rawCode = "123456";
@@ -1028,10 +1103,54 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         }
     }
 
+    @Configuration
+    static class MixedAuthControllerSpringContextConfig extends MinimalSpringContextConfig {
+        @Bean
+        public AuthController authController(
+                UserRepository userRepository,
+                PasswordResetService passwordResetService,
+                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled) {
+            return new AuthController(
+                    mock(EmailSenderService.class),
+                    userRepository,
+                    mock(CustomerOrderRepository.class),
+                    mock(OrderReviewRepository.class),
+                    mock(JwtUtil.class),
+                    mock(OtpService.class),
+                    mock(SignupOtpChallengeService.class),
+                    mock(SignupAbuseLimiter.class),
+                    mock(ClientIpResolver.class),
+                    mock(SignupOtpObservability.class),
+                    mock(LoginRateLimiter.class),
+                    passwordResetService,
+                    mock(AuthSecurityObservability.class),
+                    postgresUserAuthEnabled
+            );
+        }
+
+        @Bean
+        public PasswordResetService passwordResetService(
+                PasswordResetOtpChallengePersistence persistence,
+                PasswordResetProperties properties,
+                AbuseIpHasher hasher) {
+            return new PasswordResetService(
+                    persistence,
+                    mock(PasswordResetAbuseLimiter.class),
+                    mock(PasswordResetPublicHandleService.class),
+                    properties,
+                    null,
+                    null,
+                    mock(EmailSenderService.class),
+                    hasher,
+                    mock(AuthSecurityObservability.class)
+            );
+        }
+    }
+
     @Test
-    @Order(26)
-    @DisplayName("26. Spring DI selects PostgresPasswordResetOtpChallengeStore when opted-in")
-    void test26_springContextDISelectsPostgresWhenOptedIn() {
+    @Order(27)
+    @DisplayName("27. Spring DI selects PostgresPasswordResetOtpChallengeStore when opted-in")
+    void test27_springContextDISelectsPostgresWhenOptedIn() {
         requirePostgres();
         new ApplicationContextRunner()
                 .withUserConfiguration(
@@ -1052,9 +1171,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(27)
-    @DisplayName("27. Spring DI selects MongoPasswordResetOtpChallengeStore by default")
-    void test27_springContextDISelectsMongoByDefault() {
+    @Order(28)
+    @DisplayName("28. Spring DI selects MongoPasswordResetOtpChallengeStore by default")
+    void test28_springContextDISelectsMongoByDefault() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
@@ -1072,9 +1191,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(28)
-    @DisplayName("28. Spring transactional proxy verification for PostgresPasswordResetOtpChallengeStore")
-    void test28_springTransactionalProxyVerified() {
+    @Order(29)
+    @DisplayName("29. Spring transactional proxy verification for PostgresPasswordResetOtpChallengeStore")
+    void test29_springTransactionalProxyVerified() {
         requirePostgres();
         new ApplicationContextRunner()
                 .withUserConfiguration(
@@ -1092,9 +1211,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(29)
-    @DisplayName("29. Sensitive data protection in logs: no plaintext OTP, raw password, or digests emitted")
-    void test29_sensitiveDataProtectionInLogs() {
+    @Order(30)
+    @DisplayName("30. Sensitive data protection in logs: no plaintext OTP, raw password, or digests emitted")
+    void test30_sensitiveDataProtectionInLogs() {
         Logger serviceLogger = (Logger) LoggerFactory.getLogger(PasswordResetService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
@@ -1114,12 +1233,535 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(30)
-    @DisplayName("30. SQL parameter binding prevents injection attacks")
-    void test30_sqlParameterBindingProtectsAgainstInjection() {
+    @Order(31)
+    @DisplayName("31. SQL parameter binding prevents injection attacks")
+    void test31_sqlParameterBindingProtectsAgainstInjection() {
         requirePostgres();
         String injectionKey = "' OR '1'='1' --";
         Optional<PasswordResetOtpChallenge> found = persistence.findByEmailKey(injectionKey);
         assertTrue(found.isEmpty());
+    }
+
+    // =========================================================================
+    // GROUP 9: Startup Guard & Mixed-Backend Isolation
+    // =========================================================================
+
+    @Test
+    @Order(32)
+    @DisplayName("32. Startup guard throws IllegalStateException when AuthController is loaded with uncoordinated Postgres reset storage")
+    void test32_startupGuardRejectsMixedBackendActivation() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(
+                        MixedAuthControllerSpringContextConfig.class,
+                        PostgresPasswordResetPersistenceConfiguration.class,
+                        MongoPasswordResetOtpChallengeStore.class,
+                        PasswordResetOtpChallengePersistence.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-password-reset.enabled=true",
+                        "app.security.postgres-user-auth.enabled=false"
+                )
+                .withSystemProperties("test.postgres.port=" + testPort)
+                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(org.springframework.core.NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("Unsupported mixed-backend activation");
+                });
+    }
+
+    @Test
+    @Order(33)
+    @DisplayName("33. Startup guard passes when coordinated PostgreSQL user authentication is enabled")
+    void test33_startupGuardPassesWithCoordinatedUserAuth() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(
+                        MixedAuthControllerSpringContextConfig.class,
+                        PostgresPasswordResetPersistenceConfiguration.class,
+                        MongoPasswordResetOtpChallengeStore.class,
+                        PasswordResetOtpChallengePersistence.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-password-reset.enabled=true",
+                        "app.security.postgres-user-auth.enabled=true"
+                )
+                .withSystemProperties("test.postgres.port=" + testPort)
+                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                });
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("34. PasswordResetService rejects requestInitial with MongoDB User when backed by PostgreSQL")
+    void test34_passwordResetServiceRejectsMongoUserWhenPostgresStoreActive() {
+        requirePostgres();
+        User mongoUser = new User();
+        mongoUser.setId("mongo-user-123");
+        mongoUser.setEmail(TEST_USER_EMAIL);
+
+        assertThatThrownBy(() -> service.requestInitial(TEST_USER_EMAIL, Optional.of(mongoUser), "127.0.0.1", "k-mixed"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unsupported mixed-backend call");
+    }
+
+    @Test
+    @Order(35)
+    @DisplayName("35. PasswordResetService accepts requestInitialForJpaUser when backed by PostgreSQL")
+    void test35_passwordResetServiceAcceptsJpaUserWhenPostgresStoreActive() {
+        requirePostgres();
+        JpaUser jpaUser = new JpaUser(TEST_USER_ID, "Test Member", TEST_USER_EMAIL, null, "MEMBER");
+
+        PasswordResetService.Result result = service.requestInitialForJpaUser(
+                TEST_USER_EMAIL, Optional.of(jpaUser), "127.0.0.1", "k-jpa-success");
+        assertEquals(HttpStatus.ACCEPTED, result.status());
+    }
+
+    @Test
+    @Order(36)
+    @DisplayName("36. AuthController endpoints reject mixed-backend invocation when reset storage is PostgreSQL")
+    void test36_authControllerEndpointsRejectMixedBackendInvocation() {
+        AuthController authController = new AuthController(
+                mock(EmailSenderService.class),
+                mock(UserRepository.class),
+                mock(CustomerOrderRepository.class),
+                mock(OrderReviewRepository.class),
+                mock(JwtUtil.class),
+                mock(OtpService.class),
+                mock(SignupOtpChallengeService.class),
+                mock(SignupAbuseLimiter.class),
+                mock(ClientIpResolver.class),
+                mock(SignupOtpObservability.class),
+                mock(LoginRateLimiter.class),
+                service,
+                mock(AuthSecurityObservability.class),
+                false
+        );
+
+        SendOtpRequest sendReq = new SendOtpRequest();
+        sendReq.setEmail(TEST_USER_EMAIL);
+        assertThatThrownBy(() -> authController.sendPasswordResetOtp("k-send", sendReq, mock(HttpServletRequest.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("PostgreSQL password reset path is isolated");
+
+        ResetPasswordRequest resetReq = new ResetPasswordRequest();
+        resetReq.setEmail(TEST_USER_EMAIL);
+        resetReq.setChallengeId("ch-test");
+        resetReq.setOtp("123456");
+        resetReq.setPassword(NEW_PASSWORD);
+        assertThatThrownBy(() -> authController.resetPassword("k-reset", resetReq, mock(HttpServletRequest.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("PostgreSQL password reset path is isolated");
+    }
+
+    // =========================================================================
+    // GROUP 11: Fail-Closed Preconditions & Storage-Layer Validation
+    // =========================================================================
+
+    @Test
+    @Order(37)
+    @DisplayName("37. executePasswordResetTransaction rejects null expectedDigest on ACTIVE challenge fail-closed")
+    void test37_executePasswordResetTransactionRejectsNullExpectedDigest() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-null-digest", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                emailKey, "ch-null-digest", null, "op-null-digest", NEW_PASSWORD, clock.instant());
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, result.status());
+
+        // Password unchanged
+        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+
+        // Challenge unchanged (remains ACTIVE)
+        PasswordResetOtpChallenge storedCh = persistence.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(PasswordResetChallengeStatus.ACTIVE, storedCh.getStatus());
+        assertFalse(storedCh.isPasswordUpdated());
+    }
+
+    @Test
+    @Order(38)
+    @DisplayName("38. executePasswordResetTransaction rejects ACTIVE challenge with null code_digest")
+    void test38_executePasswordResetTransactionRejectsNullCodeDigestOnChallenge() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-null-db-digest", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Manually update challenge in DB to have null code_digest
+        jdbcTemplate.update("UPDATE password_reset_otp_challenges SET code_digest = NULL WHERE email_key = ?", emailKey);
+
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                emailKey, "ch-null-db-digest", persistence.digestCode(rawCode), "op-null-db-digest", NEW_PASSWORD, clock.instant());
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, result.status());
+
+        // User password remains OLD_PASSWORD
+        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+    }
+
+    @Test
+    @Order(39)
+    @DisplayName("39. executePasswordResetTransaction rejects challenge with null challenge_expires_at fail-closed")
+    void test39_executePasswordResetTransactionRejectsNullChallengeExpiresAt() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-null-challenge-exp", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Clear challenge_expires_at in database
+        jdbcTemplate.update("UPDATE password_reset_otp_challenges SET challenge_expires_at = NULL WHERE email_key = ?", emailKey);
+
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                emailKey, "ch-null-challenge-exp", ch.getCodeDigest(), "op-null-ch-exp", NEW_PASSWORD, clock.instant());
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED, result.status());
+        assertEquals("Challenge expiration timestamp is missing", result.failureReason());
+
+        // User password remains OLD_PASSWORD
+        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+    }
+
+    @Test
+    @Order(40)
+    @DisplayName("40. executePasswordResetTransaction rejects ACTIVE challenge with null code_expires_at fail-closed")
+    void test40_executePasswordResetTransactionRejectsNullCodeExpiresAt() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-null-code-exp", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Clear code_expires_at in database
+        jdbcTemplate.update("UPDATE password_reset_otp_challenges SET code_expires_at = NULL WHERE email_key = ?", emailKey);
+
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                emailKey, "ch-null-code-exp", ch.getCodeDigest(), "op-null-code-exp", NEW_PASSWORD, clock.instant());
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.CODE_EXPIRED, result.status());
+        assertEquals("Code expiration timestamp is missing", result.failureReason());
+
+        // User password remains OLD_PASSWORD
+        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+    }
+
+    @Test
+    @Order(41)
+    @DisplayName("41. executePasswordResetTransaction rejects challenge with invalid purpose inside transaction")
+    void test41_executePasswordResetTransactionRejectsInvalidPurpose() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-invalid-purpose", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Modify purpose in database to a non-PASSWORD_RESET value
+        jdbcTemplate.update("UPDATE password_reset_otp_challenges SET purpose = 'SIGNUP' WHERE email_key = ?", emailKey);
+
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                emailKey, "ch-invalid-purpose", ch.getCodeDigest(), "op-invalid-purpose", NEW_PASSWORD, clock.instant());
+
+        assertFalse(result.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, result.status());
+
+        // User password remains OLD_PASSWORD
+        String storedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedHash));
+    }
+
+    // =========================================================================
+    // GROUP 12: Concurrency Races, E2E Complete, JWT Invalidation & Production JPA Transaction Manager
+    // =========================================================================
+
+    @Test
+    @Order(42)
+    @DisplayName("42. Concurrent resend vs complete race: strictly consistent outcome, no partial state")
+    void test42_concurrentResendVersusCompleteRace() throws Exception {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-resend-comp-race", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Advance clock past resend cooldown
+        clock.advance(Duration.ofSeconds(35));
+        Instant now = clock.instant();
+
+        String oldDigest = ch.getCodeDigest();
+        String newDigest = persistence.digestCode("654321");
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CyclicBarrier barrier = new CyclicBarrier(2);
+
+        Future<Optional<PasswordResetOtpChallenge>> resendFuture = executor.submit(() -> {
+            barrier.await();
+            return persistence.tryReserveResend(emailKey, "ch-resend-comp-race", newDigest, "idemp-resend-race", "send-op-race", now);
+        });
+
+        Future<PasswordResetExecutionResult> completeFuture = executor.submit(() -> {
+            barrier.await();
+            return persistence.executePasswordResetTransaction(emailKey, "ch-resend-comp-race", oldDigest, "reset-op-race", NEW_PASSWORD, now);
+        });
+
+        Optional<PasswordResetOtpChallenge> resendResult = resendFuture.get(10, TimeUnit.SECONDS);
+        PasswordResetExecutionResult completeResult = completeFuture.get(10, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        PasswordResetOtpChallenge stored = persistence.findByEmailKey(emailKey).orElseThrow();
+        if (completeResult.isSuccess()) {
+            // Complete won: challenge is CONSUMED, password updated
+            assertEquals(PasswordResetChallengeStatus.CONSUMED, stored.getStatus());
+            assertTrue(stored.isPasswordUpdated());
+            String storedPassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+            assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, storedPassword));
+            // Resend must have failed
+            assertTrue(resendResult.isEmpty());
+        } else {
+            // Resend won: digest was rotated, complete with oldDigest failed
+            assertTrue(resendResult.isPresent());
+            assertEquals(PasswordResetChallengeStatus.ACTIVE, stored.getStatus());
+            assertEquals(newDigest, stored.getCodeDigest());
+            assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, completeResult.status());
+            String storedPassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+            assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedPassword));
+        }
+    }
+
+    @Test
+    @Order(43)
+    @DisplayName("43. Concurrent replace-expired vs complete race: strictly consistent outcome")
+    void test43_concurrentReplaceExpiredVersusCompleteRace() throws Exception {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge oldCh = buildChallenge(emailKey, "ch-old-comp-race", TEST_USER_ID, rawCode, clock.instant());
+        // Set challenge to be expired so replacement is eligible
+        oldCh.setChallengeExpiresAt(clock.instant().minusSeconds(1));
+        persistence.getStore().tryInsert(oldCh);
+
+        PasswordResetOtpChallenge newCh = buildChallenge(emailKey, "ch-fresh-comp-race", TEST_USER_ID, "654321", clock.instant());
+
+        Instant now = clock.instant();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CyclicBarrier barrier = new CyclicBarrier(2);
+
+        Future<Optional<PasswordResetOtpChallenge>> replaceFuture = executor.submit(() -> {
+            barrier.await();
+            return persistence.tryCreateOrReplaceExpired(newCh, now);
+        });
+
+        Future<PasswordResetExecutionResult> completeFuture = executor.submit(() -> {
+            barrier.await();
+            return persistence.executePasswordResetTransaction(emailKey, "ch-old-comp-race", oldCh.getCodeDigest(), "reset-op-replace-race", NEW_PASSWORD, now);
+        });
+
+        Optional<PasswordResetOtpChallenge> replaceResult = replaceFuture.get(10, TimeUnit.SECONDS);
+        PasswordResetExecutionResult completeResult = completeFuture.get(10, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        // Old challenge was expired, so complete must fail with CHALLENGE_EXPIRED or INVALID_CHALLENGE if replaced
+        assertFalse(completeResult.isSuccess());
+        assertTrue(replaceResult.isPresent());
+
+        // Password remains unchanged
+        String storedPassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedPassword));
+    }
+
+    @Test
+    @Order(44)
+    @DisplayName("44. Forced challenge-finalization failure after user update rolls back password mutation and increments")
+    void test44_forcedChallengeFinalizationFailureRollsBackUserPasswordUpdate() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "123456";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-forced-fin-fail", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        // Inject hook right before finalization to force transaction rollback-only
+        store.setFailureInjectorBeforeChallengeFinalize((status, challengeId) -> {
+            status.setRollbackOnly();
+        });
+
+        try {
+            PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
+                    emailKey, "ch-forced-fin-fail", ch.getCodeDigest(), "op-forced-fin-fail", NEW_PASSWORD, clock.instant());
+
+            assertFalse(result.isSuccess());
+            assertEquals(PasswordResetExecutionResult.Status.TRANSACTION_FAILED, result.status());
+
+            // Verify user in PostgreSQL: password unchanged, token_version remains 0
+            String userSql = "SELECT password, token_version, password_changed_at, last_password_reset_operation_id FROM users WHERE id = ?";
+            jdbcTemplate.query(userSql, rs -> {
+                assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, rs.getString("password")));
+                assertFalse(PasswordUtil.checkPassword(NEW_PASSWORD, rs.getString("password")));
+                assertEquals(0L, rs.getLong("token_version"));
+                assertNull(rs.getTimestamp("password_changed_at"));
+                assertNull(rs.getString("last_password_reset_operation_id"));
+            }, TEST_USER_ID);
+
+            // Verify challenge row in PostgreSQL: remains ACTIVE, not CONSUMED, code_digest intact
+            PasswordResetOtpChallenge stored = persistence.findByEmailKey(emailKey).orElseThrow();
+            assertEquals(PasswordResetChallengeStatus.ACTIVE, stored.getStatus());
+            assertFalse(stored.isPasswordUpdated());
+            assertNotNull(stored.getCodeDigest());
+        } finally {
+            store.resetFailureInjectors();
+        }
+    }
+
+    private String publicHandleFor(PasswordResetOtpChallenge ch) {
+        return handleService.issue(new PasswordResetPublicHandleService.Handle(
+                ch.getChallengeId(),
+                ch.getEmailKey(),
+                ch.getNextResendAt(),
+                ch.getChallengeExpiresAt(),
+                ch.getResendCount()));
+    }
+
+    @Test
+    @Order(45)
+    @DisplayName("45. Full PasswordResetService.complete() success through actual PostgreSQL persistence")
+    void test45_fullPasswordResetServiceCompleteSuccessThroughPostgres() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "987123";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-full-service", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+
+        String handle = publicHandleFor(ch);
+
+        PasswordResetService.Result result = service.complete(
+                TEST_USER_EMAIL,
+                handle,
+                rawCode,
+                NEW_PASSWORD,
+                "198.51.100.25",
+                "full-service-comp-idemp"
+        );
+
+        assertEquals(HttpStatus.OK, result.status());
+        assertEquals("PASSWORD_RESET_COMPLETED", result.body().getCode());
+
+        // Verify PostgreSQL users table
+        String userSql = "SELECT password, token_version, password_changed_at, last_password_reset_operation_id FROM users WHERE id = ?";
+        jdbcTemplate.query(userSql, rs -> {
+            assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, rs.getString("password")));
+            assertEquals(1L, rs.getLong("token_version"));
+            assertNotNull(rs.getTimestamp("password_changed_at"));
+            assertNotNull(rs.getString("last_password_reset_operation_id"));
+        }, TEST_USER_ID);
+
+        // Verify PostgreSQL challenges table
+        PasswordResetOtpChallenge stored = persistence.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(PasswordResetChallengeStatus.CONSUMED, stored.getStatus());
+        assertTrue(stored.isPasswordUpdated());
+        assertNotNull(stored.getConsumedAt());
+        assertNull(stored.getCodeDigest());
+
+        // Replay with same completion key is idempotent
+        PasswordResetService.Result replay = service.complete(
+                TEST_USER_EMAIL,
+                handle,
+                rawCode,
+                NEW_PASSWORD,
+                "198.51.100.25",
+                "full-service-comp-idemp"
+        );
+        assertEquals(HttpStatus.OK, replay.status());
+        assertEquals("PASSWORD_RESET_COMPLETED", replay.body().getCode());
+        Long finalVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, TEST_USER_ID);
+        assertEquals(1L, finalVersion);
+    }
+
+    @Test
+    @Order(46)
+    @DisplayName("46. End-to-end JWT authentication behavior: active token rejected after reset, new token accepted")
+    void test46_endToEndJwtAuthenticationBehaviorAfterReset() {
+        requirePostgres();
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        String rawCode = "543210";
+        PasswordResetOtpChallenge ch = buildChallenge(emailKey, "ch-jwt-e2e", TEST_USER_ID, rawCode, clock.instant());
+        persistence.getStore().tryInsert(ch);
+        String handle = publicHandleFor(ch);
+
+        // User initial state: tokenVersion = 0
+        String initialJwt = jwtUtil.generateToken(TEST_USER_ID, TEST_USER_EMAIL, 0L);
+        assertTrue(jwtUtil.validateToken(initialJwt));
+        assertEquals(0L, jwtUtil.getTokenVersionFromToken(initialJwt));
+
+        // Prior to reset, authentication with OLD_PASSWORD succeeds
+        String currentPasswordHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, currentPasswordHash));
+
+        // Execute reset
+        PasswordResetService.Result result = service.complete(
+                TEST_USER_EMAIL, handle, rawCode, NEW_PASSWORD, "192.168.1.50", "jwt-e2e-idemp");
+        assertEquals(HttpStatus.OK, result.status());
+
+        // Post-reset authentication check: OLD password fails, NEW password succeeds
+        String updatedPasswordHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertFalse(PasswordUtil.checkPassword(OLD_PASSWORD, updatedPasswordHash));
+        assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, updatedPasswordHash));
+
+        // Token version incremented to 1
+        Long updatedVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, TEST_USER_ID);
+        assertEquals(1L, updatedVersion);
+
+        // Authentication evaluation: Old JWT tokenVersion (0) no longer matches updated user tokenVersion (1)
+        Long oldTokenVersionFromJwt = jwtUtil.getTokenVersionFromToken(initialJwt);
+        assertNotEquals(updatedVersion, oldTokenVersionFromJwt);
+
+        // New JWT issued with new tokenVersion (1) is valid and matches
+        String newJwt = jwtUtil.generateToken(TEST_USER_ID, TEST_USER_EMAIL, updatedVersion);
+        assertTrue(jwtUtil.validateToken(newJwt));
+        assertEquals(updatedVersion, jwtUtil.getTokenVersionFromToken(newJwt));
+    }
+
+    @Test
+    @Order(47)
+    @DisplayName("47. Production-style JpaTransactionManager configuration selection and integration")
+    void test47_productionStyleJpaTransactionManagerSelectionAndResetExecution() {
+        requirePostgres();
+        EntityManagerFactory mockEmf = mock(EntityManagerFactory.class);
+        new ApplicationContextRunner()
+                .withUserConfiguration(
+                        MinimalSpringContextConfig.class,
+                        PostgresPasswordResetPersistenceConfiguration.class,
+                        PasswordResetOtpChallengePersistence.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-password-reset.enabled=true"
+                )
+                .withBean(EntityManagerFactory.class, () -> mockEmf)
+                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    PlatformTransactionManager txManager = context.getBean("transactionManager", PlatformTransactionManager.class);
+                    assertNotNull(txManager);
+                    assertThat(txManager).isInstanceOf(JpaTransactionManager.class);
+
+                    PostgresPasswordResetOtpChallengeStore storeBean = (PostgresPasswordResetOtpChallengeStore)
+                            context.getBean("postgresPasswordResetOtpChallengeStore", PasswordResetOtpChallengeStore.class);
+                    assertThat(storeBean.getTransactionManager()).isSameAs(txManager);
+                });
     }
 }

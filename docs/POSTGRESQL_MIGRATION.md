@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T06:54:12-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T17:19:00-04:00 (America/Toronto)  
 
 ---
 
@@ -1929,6 +1929,19 @@ Implemented real PostgreSQL password-reset OTP persistence and single-transactio
   - `FlywayMigrationIntegrationTest`: 6 tests run (2 unit/offline passed, 4 skipped without port), 0 failures, 0 errors.
   - `PasswordResetSupportServicesTest`: 3 tests run, 0 failures, 0 errors.
   - Total: 71 tests run, 0 failures, 0 errors, 31 skipped (`BUILD SUCCESS`).
+
+### [2026-10-26T17:19:00-04:00] Post-PG-016 Hardening: Rollback Integrity, Fail-Closed Security & Extended Integration Coverage
+
+Following external preflight review, implemented 5 critical hardenings across PostgreSQL and MongoDB password reset stores:
+1. **Schema-Compliant Rollback Testing:** Corrected `test23_transactionRollbackOnUserFailure` to inject controlled failure during user update without deleting the parent user (which previously triggered `fk_pwd_reset_user` `ON DELETE CASCADE`). Added dedicated post-update challenge finalization rollback test (`test44_transactionRollbackOnChallengeFinalizeFailure`).
+2. **Mixed-Backend Startup Guard:** Implemented explicit startup validation in `PostgresPasswordResetPersistenceConfiguration` and `AuthController` rejecting unsupported mixed-backend states (`app.security.postgres-password-reset.enabled=true` with live MongoDB `UserRepository` authentication in `AuthController` before coordinated `app.security.postgres-user-auth.enabled=true` in PG-022).
+3. **MongoDB Rollback-Only Enforcement:** Updated `MongoPasswordResetOtpChallengeStore.executePasswordResetTransaction()` to explicitly invoke `status.setRollbackOnly()` on all failure branches (including empty `finalizeConsumed()`), preventing partial commit anomalies. Introduced `app.auth.password-reset.require-transaction` property.
+4. **Storage-Layer Fail-Closed Preconditions:** Enforced independent fail-closed validation on both PostgreSQL and MongoDB transaction stores, rejecting null digests, null expiration timestamps, and non-`PASSWORD_RESET` purposes.
+5. **Comprehensive Integration Suite Expansion:** Expanded `PostgresPasswordResetOtpPersistenceIntegrationTest` from 30 to 47 tests (covering resend-vs-complete races, replacement races, forced finalization failure, full service completion, JWT invalidation with token version increment, and Spring DI `JpaTransactionManager` selection) and created `MongoPasswordResetOtpChallengeStoreUnitTest` (8 tests).
+
+**Verification Evidence:**
+- `.\mvnw.cmd test "-Dtest=MongoPasswordResetOtpChallengeStoreUnitTest,PostgresPasswordResetOtpPersistenceIntegrationTest,PasswordResetSupportServicesTest,PasswordResetMongoTest"`
+  Output: 74 tests executed, 0 failures, 0 errors, 57 skipped (`BUILD SUCCESS`).
 
 **Next Task:**  
 `PG-017` — Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing (`NOT STARTED`).

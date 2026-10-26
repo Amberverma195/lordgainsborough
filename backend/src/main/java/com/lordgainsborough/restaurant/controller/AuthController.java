@@ -32,6 +32,9 @@ import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
+import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +81,39 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final PasswordResetService passwordResetService;
     private final AuthSecurityObservability authSecurityObservability;
+    private final boolean postgresUserAuthEnabled;
+
+    @Autowired
+    public AuthController(
+            EmailSenderService emailSenderService,
+            UserRepository userRepository,
+            CustomerOrderRepository orderRepository,
+            OrderReviewRepository reviewRepository,
+            JwtUtil jwtUtil,
+            OtpService otpService,
+            SignupOtpChallengeService signupOtpChallengeService,
+            SignupAbuseLimiter signupAbuseLimiter,
+            ClientIpResolver clientIpResolver,
+            SignupOtpObservability signupOtpObservability,
+            LoginRateLimiter loginRateLimiter,
+            PasswordResetService passwordResetService,
+            AuthSecurityObservability authSecurityObservability,
+            @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled) {
+        this.emailSenderService = emailSenderService;
+        this.userRepository = userRepository;
+        this.orderRepository = orderRepository;
+        this.reviewRepository = reviewRepository;
+        this.jwtUtil = jwtUtil;
+        this.otpService = otpService;
+        this.signupOtpChallengeService = signupOtpChallengeService;
+        this.signupAbuseLimiter = signupAbuseLimiter;
+        this.clientIpResolver = clientIpResolver;
+        this.signupOtpObservability = signupOtpObservability;
+        this.loginRateLimiter = loginRateLimiter;
+        this.passwordResetService = passwordResetService;
+        this.authSecurityObservability = authSecurityObservability;
+        this.postgresUserAuthEnabled = postgresUserAuthEnabled;
+    }
 
     public AuthController(
             EmailSenderService emailSenderService,
@@ -93,19 +129,31 @@ public class AuthController {
             LoginRateLimiter loginRateLimiter,
             PasswordResetService passwordResetService,
             AuthSecurityObservability authSecurityObservability) {
-        this.emailSenderService = emailSenderService;
-        this.userRepository = userRepository;
-        this.orderRepository = orderRepository;
-        this.reviewRepository = reviewRepository;
-        this.jwtUtil = jwtUtil;
-        this.otpService = otpService;
-        this.signupOtpChallengeService = signupOtpChallengeService;
-        this.signupAbuseLimiter = signupAbuseLimiter;
-        this.clientIpResolver = clientIpResolver;
-        this.signupOtpObservability = signupOtpObservability;
-        this.loginRateLimiter = loginRateLimiter;
-        this.passwordResetService = passwordResetService;
-        this.authSecurityObservability = authSecurityObservability;
+        this(
+                emailSenderService,
+                userRepository,
+                orderRepository,
+                reviewRepository,
+                jwtUtil,
+                otpService,
+                signupOtpChallengeService,
+                signupAbuseLimiter,
+                clientIpResolver,
+                signupOtpObservability,
+                loginRateLimiter,
+                passwordResetService,
+                authSecurityObservability,
+                false);
+    }
+
+    @PostConstruct
+    public void validateAuthenticationBackendCoherence() {
+        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+            throw new IllegalStateException(
+                    "Unsupported mixed-backend activation: PostgreSQL password reset storage is enabled (app.security.postgres-password-reset.enabled=true), " +
+                    "but AuthController authenticates through MongoDB UserRepository. Coordinated PostgreSQL user authentication (PG-022) " +
+                    "must be enabled via app.security.postgres-user-auth.enabled=true before activating PostgreSQL password reset in AuthController.");
+        }
     }
 
     @PostMapping("/signup")
@@ -276,6 +324,10 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody SendOtpRequest request,
             HttpServletRequest httpRequest) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+            throw new IllegalStateException(
+                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+        }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(
@@ -298,6 +350,10 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody PasswordResetResendRequest request,
             HttpServletRequest httpRequest) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+            throw new IllegalStateException(
+                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+        }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(
@@ -318,6 +374,10 @@ public class AuthController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ResetPasswordRequest request,
             HttpServletRequest httpRequest) {
+        if (passwordResetService != null && passwordResetService.isPostgresStore() && !postgresUserAuthEnabled) {
+            throw new IllegalStateException(
+                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+        }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(

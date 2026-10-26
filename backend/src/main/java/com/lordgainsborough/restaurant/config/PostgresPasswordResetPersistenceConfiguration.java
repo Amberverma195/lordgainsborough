@@ -1,16 +1,21 @@
 package com.lordgainsborough.restaurant.config;
 
+import com.lordgainsborough.restaurant.controller.AuthController;
 import com.lordgainsborough.restaurant.service.PasswordResetOtpChallengeStore;
 import com.lordgainsborough.restaurant.service.PostgresPasswordResetOtpChallengeStore;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,6 +41,30 @@ import javax.sql.DataSource;
 @Profile({"postgres-migration", "test"})
 @ConditionalOnProperty(name = "app.security.postgres-password-reset.enabled", havingValue = "true", matchIfMissing = false)
 public class PostgresPasswordResetPersistenceConfiguration {
+
+    private final boolean postgresUserAuthEnabled;
+    private final boolean allowIsolatedTest;
+
+    public PostgresPasswordResetPersistenceConfiguration(
+            @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
+            @Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
+        this.postgresUserAuthEnabled = postgresUserAuthEnabled;
+        this.allowIsolatedTest = allowIsolatedTest;
+    }
+
+    @EventListener(ContextRefreshedEvent.class)
+    public void validateCoordinatedActivation(ContextRefreshedEvent event) {
+        if (!postgresUserAuthEnabled && !allowIsolatedTest) {
+            ApplicationContext context = event.getApplicationContext();
+            if (context.containsBean("authController")
+                    || context.getBeanNamesForType(AuthController.class).length > 0) {
+                throw new IllegalStateException(
+                        "Unsupported mixed-backend activation: 'app.security.postgres-password-reset.enabled=true' cannot be activated " +
+                        "while AuthController authenticates through MongoDB. Coordinated PostgreSQL user authentication (PG-022) " +
+                        "must be enabled via 'app.security.postgres-user-auth.enabled=true' before activating PostgreSQL password reset in live auth flow.");
+            }
+        }
+    }
 
     @Bean(name = "postgresPasswordResetOtpChallengeStore")
     @Primary
