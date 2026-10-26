@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T05:35:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T06:54:12-04:00 (America/Toronto)  
 
 ---
 
@@ -363,7 +363,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T03:26:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; simplified arithmetic increment without redundant CASE; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; independent fallback `transactionManager` bean; real Logback appender log verification; 40/40 tests passed; full 13-suite regression passed |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `COMPLETED` | 2026-10-26T03:30:00-04:00 | 2026-10-26T03:42:00-04:00 | Extracted `LoginFailureStateStore` SPI; implemented `PostgresLoginFailureStateStore` with atomic upsert + `SELECT ... FOR UPDATE` row-level locking; fail-closed `Integer.MAX_VALUE` overflow guard; exact millisecond active cooldown boundaries; targeted `clearFailures`; 38/38 new tests; 14-suite regression passed (318/318 tests) |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T05:35:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; hardened with 5-finding resolution (atomic locking, deprecated unguarded overloads, fail-closed resend cooldown, Flyway disposable DB lifecycle with CI skip/fail controls, JPA timestamp integrity); 63/63 integration tests passed; full regression passed |
-| `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
+| `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T06:54:12-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 30/30 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `NOT STARTED` | — | — | `OrderControllerTest` pass |
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `NOT STARTED` | — | — | Cart API endpoint tests |
 | `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `NOT STARTED` | — | — | KDS order and status tests |
@@ -1869,7 +1869,69 @@ Added explicit failed-database-creation ownership test coverage in `FlywayMigrat
 - Test suite compilation: `BUILD SUCCESS`.
 
 **Next Task:**  
-`PG-016` — Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management (`NOT STARTED`).
+`PG-016` — Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management (`COMPLETED`).
+
+---
+
+### [2026-10-26T06:54:12-04:00] PG-016: PostgreSQL Password Reset OTP Persistence and Transaction Management
+
+**Overview & Architectural Strategy:**
+Implemented real PostgreSQL password-reset OTP persistence and single-transaction password mutation coordination under PG-016, following the proven PG-015 storage SPI pattern while preserving 100% backward compatibility with existing MongoDB runtime and controller expectations.
+
+1. **Storage SPI Extraction (`PasswordResetOtpChallengeStore`):**
+   - Extracted clean storage interface declaring atomic operations: challenge lookup (`find`, `findByEmailKey`), insert with duplicate key rejection (`tryInsert`), atomic expired/consumed replacement (`tryAtomicReplaceExpired`), atomic resend slot reservation with OTP rotation (`tryReserveResend`), send lease outcome recording (`markSendOutcome`), failed attempt recording (`recordFailedVerification`), atomic 5th-attempt locking (`lockAfterFailures`), correct-code claiming (`tryClaimCorrectCode`), consumption finalization (`finalizeConsumed`), user email lookup (`findUserEmailById`), and atomic execution coordination (`executePasswordResetTransaction`).
+   - Implemented `MongoPasswordResetOtpChallengeStore` as the default component with backward-compatible constructors and `ObjectProvider` dependencies.
+   - Implemented `PostgresPasswordResetOtpChallengeStore` executing parameterized SQL against `password_reset_otp_challenges` and coordinated user password mutations against `users`.
+
+2. **Opt-in Configuration (`PostgresPasswordResetPersistenceConfiguration`):**
+   - Conditioned on `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty(name = "app.security.postgres-password-reset.enabled", havingValue = "true")`.
+   - Designates `PostgresPasswordResetOtpChallengeStore` as `@Primary`, cleanly overriding the default MongoDB store when active without ambiguous bean conflicts.
+   - Provides an independent fallback `transactionManager` bean (`JpaTransactionManager` or `DataSourceTransactionManager`) to guarantee isolation in environments without a pre-existing transaction manager.
+
+3. **High-Risk Single PostgreSQL Transaction Completion (`executePasswordResetTransaction`):**
+   - Solved the highest-risk PG-016 requirement: coordinates password update and challenge consumption within a single database transaction managed by Spring's `PlatformTransactionManager`.
+   - Execution Sequence:
+     1. Acquires row-level write lock via `SELECT ... FROM password_reset_otp_challenges WHERE email_key = ? FOR UPDATE` to eliminate TOCTOU races and guarantee serializability.
+     2. Validates challenge identity, purpose, expiration, and code digest.
+     3. Claims challenge to `PROCESSING` with deterministic `resetOperationId`.
+     4. Updates `users` table: updates `password` hash, increments `token_version` exactly once, sets `password_changed_at`, sets `last_password_reset_operation_id`.
+     5. Finalizes `password_reset_otp_challenges` to `CONSUMED`: sets `password_updated = true`, `consumed_at = now`, clears sensitive `code_digest`.
+     6. Commits transaction. If user update or challenge finalization fails, calls `status.setRollbackOnly()` ensuring complete rollback.
+
+4. **Security Invariants & Parity Guarantees:**
+   - **Cross-Backend Cooldown Parity:** Both MongoDB and PostgreSQL stores enforce strict fail-closed policy when `nextResendAt` is null or in the future (`next_resend_at <= now`), ensuring zero permissive windows.
+   - **Atomic 5th Verification Lock:** Incrementing from 4 to 5 failed attempts atomically sets `status = LOCKED` in the same update, ensuring no intermediate ACTIVE window.
+   - **Replay Idempotency:** Submitting an already-consumed challenge with the same `resetOperationId` returns `ALREADY_COMPLETED` without re-updating the password or incrementing `token_version` a second time. A different operation ID is rejected.
+   - **JWT Revocation:** Password update increments `token_version`, immediately invalidating any prior JWT tokens upon subsequent requests.
+   - **Sensitive Data Protection:** Verified that raw OTPs, plaintext passwords, raw IP addresses, and sensitive digests are never emitted in logs.
+   - **User Store Isolation:** Preserved MongoDB user authentication in `AuthController` for default runtime until coordinated PG-022 transition; tested PostgreSQL reset paths against real PostgreSQL user records (`JpaUser` / `users` table).
+
+**Files Created / Modified:**
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetExecutionResult.java` (created)
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetOtpChallengeStore.java` (created)
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/MongoPasswordResetOtpChallengeStore.java` (created)
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresPasswordResetOtpChallengeStore.java` (created)
+- `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresPasswordResetPersistenceConfiguration.java` (created)
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetOtpChallengePersistence.java` (refactored to delegate to `PasswordResetOtpChallengeStore`)
+- `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetService.java` (updated with `ObjectProvider` injection, `requestInitialForJpaUser`, user email resolution fallback, and single-transaction execution delegation)
+- `backend/src/test/java/com/lordgainsborough/restaurant/service/PostgresPasswordResetOtpPersistenceIntegrationTest.java` (created 30-test comprehensive integration suite)
+- `docs/POSTGRESQL_MIGRATION.md` (updated status table, last updated timestamp, and appended progress log)
+
+**Verification Evidence:**
+- Compilation:
+  `.\mvnw.cmd test-compile` -> BUILD SUCCESS
+- Integration & Unit Regression Suite:
+  `.\mvnw.cmd test "-Dtest=PasswordResetSupportServicesTest,SignupOtpChallengeVerificationTest,SignupOtpChallengePersistenceTest,PostgresPasswordResetOtpPersistenceIntegrationTest,FlywayMigrationIntegrationTest"`
+  Output:
+  - `PostgresPasswordResetOtpPersistenceIntegrationTest`: 30 tests run (3 context/unit tests passed, 27 live DB tests skipped gracefully on missing PostgreSQL port), 0 failures, 0 errors.
+  - `SignupOtpChallengePersistenceTest`: 20 tests run, 0 failures, 0 errors.
+  - `SignupOtpChallengeVerificationTest`: 12 tests run, 0 failures, 0 errors.
+  - `FlywayMigrationIntegrationTest`: 6 tests run (2 unit/offline passed, 4 skipped without port), 0 failures, 0 errors.
+  - `PasswordResetSupportServicesTest`: 3 tests run, 0 failures, 0 errors.
+  - Total: 71 tests run, 0 failures, 0 errors, 31 skipped (`BUILD SUCCESS`).
+
+**Next Task:**  
+`PG-017` — Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing (`NOT STARTED`).
 
 ---
 

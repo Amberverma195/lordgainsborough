@@ -9,6 +9,7 @@ import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -60,6 +61,33 @@ public class PasswordResetService {
             PasswordResetAbuseLimiter abuseLimiter,
             PasswordResetPublicHandleService handleService,
             PasswordResetProperties properties,
+            ObjectProvider<UserRepository> userRepositoryProvider,
+            ObjectProvider<MongoTemplate> mongoTemplateProvider,
+            EmailSenderService emailSenderService,
+            AbuseIpHasher hasher,
+            AuthSecurityObservability observability,
+            ObjectProvider<MongoTransactionManager> transactionManagerProvider) {
+        this(
+                persistence,
+                abuseLimiter,
+                handleService,
+                properties,
+                userRepositoryProvider != null ? userRepositoryProvider.getIfAvailable() : null,
+                mongoTemplateProvider != null ? mongoTemplateProvider.getIfAvailable() : null,
+                emailSenderService,
+                hasher,
+                observability);
+        MongoTransactionManager tm = transactionManagerProvider != null ? transactionManagerProvider.getIfAvailable() : null;
+        if (tm != null) {
+            this.transactionTemplate = new TransactionTemplate(tm);
+        }
+    }
+
+    public PasswordResetService(
+            PasswordResetOtpChallengePersistence persistence,
+            PasswordResetAbuseLimiter abuseLimiter,
+            PasswordResetPublicHandleService handleService,
+            PasswordResetProperties properties,
             UserRepository userRepository,
             MongoTemplate mongoTemplate,
             EmailSenderService emailSenderService,
@@ -76,7 +104,9 @@ public class PasswordResetService {
                 emailSenderService,
                 hasher,
                 observability);
-        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        if (transactionManager != null) {
+            this.transactionTemplate = new TransactionTemplate(transactionManager);
+        }
     }
 
     /**
@@ -110,6 +140,33 @@ public class PasswordResetService {
             Optional<User> user,
             String clientIp,
             String idempotencyKey) {
+        return requestInitial(
+                normalizedEmail,
+                user.map(User::getId).orElse(null),
+                user.map(User::getEmail).orElse(null),
+                clientIp,
+                idempotencyKey);
+    }
+
+    public Result requestInitialForJpaUser(
+            String normalizedEmail,
+            Optional<com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser> user,
+            String clientIp,
+            String idempotencyKey) {
+        return requestInitial(
+                normalizedEmail,
+                user.map(com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser::getId).orElse(null),
+                user.map(com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser::getEmail).orElse(null),
+                clientIp,
+                idempotencyKey);
+    }
+
+    public Result requestInitial(
+            String normalizedEmail,
+            String userId,
+            String userEmail,
+            String clientIp,
+            String idempotencyKey) {
         Instant now = persistence.now();
         String emailKey = persistence.emailKey(normalizedEmail);
 
@@ -119,7 +176,7 @@ public class PasswordResetService {
         }
 
         Optional<PasswordResetOtpChallenge> current = persistence.findByEmailKey(emailKey);
-        if (user.isPresent() && current.isPresent()
+        if (userId != null && current.isPresent()
                 && normalizeIdempotencyKey(idempotencyKey)
                         .equals(current.get().getClientIdempotencyKey())
                 && current.get().getStatus() != PasswordResetChallengeStatus.CONSUMED
@@ -133,14 +190,14 @@ public class PasswordResetService {
             return rateLimited(challengeLimit.getAsLong(), now);
         }
 
-        if (user.isPresent() && current.isPresent()
+        if (userId != null && current.isPresent()
                 && current.get().getStatus() != PasswordResetChallengeStatus.CONSUMED
                 && current.get().getChallengeExpiresAt() != null
                 && current.get().getChallengeExpiresAt().isAfter(now)) {
             return accepted(current.get(), now);
         }
 
-        if (user.isEmpty()) {
+        if (userId == null) {
             // Match the dominant local cryptographic work of a real challenge creation.
             persistence.digestCode(generateCode());
             return acceptedShadow(emailKey, now, 0);
@@ -150,7 +207,7 @@ public class PasswordResetService {
         String operationId = UUID.randomUUID().toString();
         PasswordResetOtpChallenge challenge = newChallenge(
                 emailKey,
-                user.get().getId(),
+                userId,
                 persistence.digestCode(rawCode),
                 normalizeIdempotencyKey(idempotencyKey),
                 operationId,
@@ -163,7 +220,7 @@ public class PasswordResetService {
                     .orElseGet(() -> acceptedShadow(emailKey, now, 0));
         }
 
-        deliver(user.get().getEmail(), rawCode, reserved.get());
+        deliver(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get());
         return accepted(persistence.findByEmailKey(emailKey).orElse(reserved.get()), now);
     }
 
@@ -229,9 +286,15 @@ public class PasswordResetService {
             return denial == null ? cooldown(latest, now) : denial;
         }
 
-        User user = userRepository.findById(reserved.get().getUserId()).orElse(null);
-        if (user != null) {
-            deliver(user.getEmail(), rawCode, reserved.get());
+        String recipientEmail = null;
+        if (userRepository != null) {
+            recipientEmail = userRepository.findById(reserved.get().getUserId()).map(User::getEmail).orElse(null);
+        }
+        if (recipientEmail == null) {
+            recipientEmail = persistence.findUserEmailById(reserved.get().getUserId()).orElse(null);
+        }
+        if (recipientEmail != null) {
+            deliver(recipientEmail, rawCode, reserved.get());
         } else {
             persistence.markSendOutcome(
                     emailKey,
@@ -337,47 +400,37 @@ public class PasswordResetService {
             String operationId,
             String rawPassword,
             Instant now) {
-        String passwordHash = PasswordUtil.hashPassword(rawPassword);
-        if (transactionTemplate == null) {
-            return claimAndApplyPassword(challenge, operationId, passwordHash, now);
-        }
-        Result result = transactionTemplate.execute(status ->
-                claimAndApplyPassword(challenge, operationId, passwordHash, now));
-        return result == null ? invalidCode(now) : result;
-    }
-
-    private Result claimAndApplyPassword(
-            PasswordResetOtpChallenge challenge,
-            String operationId,
-            String passwordHash,
-            Instant now) {
-        Optional<PasswordResetOtpChallenge> claimed = persistence.tryClaimCorrectCode(
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
                 challenge.getEmailKey(),
                 challenge.getChallengeId(),
                 challenge.getCodeDigest(),
                 operationId,
+                rawPassword,
                 now);
-        if (claimed.isEmpty()) {
-            PasswordResetOtpChallenge latest = persistence.find(
-                            challenge.getEmailKey(),
-                            challenge.getChallengeId())
-                    .orElse(challenge);
-            if (latest.getStatus() == PasswordResetChallengeStatus.PROCESSING
-                    && operationId.equals(latest.getResetOperationId())) {
-                return applyPasswordAndFinalize(latest, operationId, passwordHash, now);
-            }
-            if (latest.getStatus() == PasswordResetChallengeStatus.CONSUMED
-                    && latest.isPasswordUpdated()
-                    && operationId.equals(latest.getResetOperationId())) {
-                return completed(now);
-            }
-            return invalidCode(now);
+        if (result.isSuccess()) {
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.RESET_VERIFICATION_SUCCESS);
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.PASSWORD_RESET_COMPLETED);
+            return completed(now);
         }
-        observability.record(
-                AuthSecurityObservability.Flow.PASSWORD_RESET,
-                AuthSecurityObservability.Outcome.SUCCESS,
-                AuthSecurityObservability.Reason.RESET_VERIFICATION_SUCCESS);
-        return applyPasswordAndFinalize(claimed.get(), operationId, passwordHash, now);
+        if (result.isAlreadyCompleted()) {
+            return completed(now);
+        }
+        if (result.status() == PasswordResetExecutionResult.Status.CHALLENGE_LOCKED) {
+            return locked(now);
+        }
+        if (result.status() == PasswordResetExecutionResult.Status.CODE_EXPIRED) {
+            return codeExpired(now);
+        }
+        if (result.status() == PasswordResetExecutionResult.Status.CHALLENGE_EXPIRED) {
+            return challengeExpired(now);
+        }
+        return invalidCode(now);
     }
 
     private Result executeResumeMutation(
@@ -385,48 +438,17 @@ public class PasswordResetService {
             String operationId,
             String rawPassword,
             Instant now) {
-        String passwordHash = PasswordUtil.hashPassword(rawPassword);
-        if (transactionTemplate == null) {
-            return applyPasswordAndFinalize(challenge, operationId, passwordHash, now);
-        }
-        Result result = transactionTemplate.execute(status ->
-                applyPasswordAndFinalize(challenge, operationId, passwordHash, now));
-        return result == null ? invalidCode(now) : result;
-    }
-
-    private Result applyPasswordAndFinalize(
-            PasswordResetOtpChallenge challenge,
-            String operationId,
-            String passwordHash,
-            Instant now) {
-        Query query = Query.query(Criteria.where("_id").is(challenge.getUserId())
-                .and("lastPasswordResetOperationId").ne(operationId));
-        Update update = new Update()
-                .set("password", passwordHash)
-                .inc("tokenVersion", 1L)
-                .set("passwordChangedAt", now)
-                .set("lastPasswordResetOperationId", operationId);
-        User updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                User.class);
-        if (updated == null) {
-            User existing = userRepository.findById(challenge.getUserId()).orElse(null);
-            if (existing == null || !operationId.equals(existing.getLastPasswordResetOperationId())) {
-                return invalidCode(now);
-            }
-        }
-        persistence.finalizeConsumed(
+        PasswordResetExecutionResult result = persistence.executePasswordResetTransaction(
                 challenge.getEmailKey(),
                 challenge.getChallengeId(),
+                challenge.getCodeDigest(),
                 operationId,
-                persistence.now());
-        observability.record(
-                AuthSecurityObservability.Flow.PASSWORD_RESET,
-                AuthSecurityObservability.Outcome.SUCCESS,
-                AuthSecurityObservability.Reason.PASSWORD_RESET_COMPLETED);
-        return completed(now);
+                rawPassword,
+                now);
+        if (result.isSuccess() || result.isAlreadyCompleted()) {
+            return completed(now);
+        }
+        return invalidCode(now);
     }
 
     private void deliver(String recipient, String rawCode, PasswordResetOtpChallenge challenge) {
