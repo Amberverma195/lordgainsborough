@@ -73,14 +73,20 @@ public interface SignupOtpChallengeStore {
             Instant now);
 
     /**
-     * Atomically marks an ACTIVE challenge VERIFIED for the current OTP digest.
+     * Atomically marks an ACTIVE challenge VERIFIED for the current OTP digest
+     * if the failed-attempt threshold has not been reached.
      */
     Optional<SignupOtpChallenge> tryAtomicMarkVerified(
             String emailKey, String otpDigest, Instant now);
 
     /**
      * Atomically increments failed verify attempts for an ACTIVE, unexpired challenge.
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility. Security-sensitive
+     *             operations must use {@link #tryAtomicRecordFailedVerify(String, String, String, Instant)}
+     *             to bind attempt increments to the observed challenge ID and OTP digest.
      */
+    @Deprecated
     default Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
             String emailKey, Instant now) {
         return tryAtomicRecordFailedVerify(emailKey, null, null, now);
@@ -95,7 +101,12 @@ public interface SignupOtpChallengeStore {
 
     /**
      * Atomically locks an ACTIVE challenge that has exhausted failed verify attempts.
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility. Callers should prefer
+     *             {@link #tryAtomicLockAfterMaxFailures(String, String, Instant)} to bind
+     *             the lock transition to the observed challenge ID.
      */
+    @Deprecated
     default Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, Instant now) {
         return tryAtomicLockAfterMaxFailures(emailKey, null, now);

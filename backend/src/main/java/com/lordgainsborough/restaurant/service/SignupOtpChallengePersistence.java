@@ -196,6 +196,7 @@ public class SignupOtpChallengePersistence {
     /**
      * @deprecated Prefer the overload that includes send reservation fields.
      */
+    @Deprecated
     public SignupOtpChallenge buildNewActiveChallenge(String email, String otpDigest, String challengeId) {
         return buildNewActiveChallenge(email, otpDigest, challengeId, UUID.randomUUID().toString(), null);
     }
@@ -233,6 +234,7 @@ public class SignupOtpChallengePersistence {
     /**
      * @deprecated Prefer {@link #buildNewActiveChallenge} + {@link #tryInsert} for atomic create-once semantics.
      */
+    @Deprecated
     public SignupOtpChallenge upsertNewActiveChallenge(String email, String otpDigest) {
         SignupOtpChallenge challenge = buildNewActiveChallenge(email, otpDigest, UUID.randomUUID().toString());
         return store.save(challenge);
@@ -335,7 +337,8 @@ public class SignupOtpChallengePersistence {
     }
 
     /**
-     * Atomically marks an ACTIVE challenge VERIFIED for the current OTP digest.
+     * Atomically marks an ACTIVE challenge VERIFIED for the current OTP digest
+     * if the failed-attempt threshold has not been reached.
      * Including {@code otpDigest} in the query ensures a pre-resend OTP cannot win after rotation.
      */
     public Optional<SignupOtpChallenge> tryAtomicMarkVerified(
@@ -346,7 +349,12 @@ public class SignupOtpChallengePersistence {
     /**
      * Atomically increments failed verify attempts for an ACTIVE, unexpired challenge.
      * Returns the updated document when this request claimed an attempt slot.
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility. Security-sensitive
+     *             operations must use {@link #tryAtomicRecordFailedVerify(String, String, String, Instant)}
+     *             to bind attempt increments to the observed challenge ID and OTP digest.
      */
+    @Deprecated
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(String emailKey, Instant now) {
         return store.tryAtomicRecordFailedVerify(emailKey, now);
     }
@@ -363,7 +371,12 @@ public class SignupOtpChallengePersistence {
 
     /**
      * Atomically locks an ACTIVE challenge that has exhausted failed verify attempts.
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility. Callers should prefer
+     *             {@link #tryAtomicLockAfterMaxFailures(String, String, Instant)} to bind
+     *             the lock transition to the observed challenge ID.
      */
+    @Deprecated
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(String emailKey, Instant now) {
         return store.tryAtomicLockAfterMaxFailures(emailKey, now);
     }

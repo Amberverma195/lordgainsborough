@@ -728,7 +728,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-res8", "op-8", "k-8");
         ch.setFailedVerifyAttempts(5);
         persistence.tryInsert(ch);
-        persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), clock.instant());
+        persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), ch.getChallengeId(), clock.instant());
 
         clock.advance(Duration.ofSeconds(45));
         Optional<SignupOtpChallenge> res = persistence.tryAtomicResend(ch.getEmailKey(), persistence.digestOtp("222222"), "op-8b", "k-8b", clock.instant());
@@ -1187,11 +1187,13 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("123456"), "ch-v5", "op-v5", "k-v5");
         persistence.tryInsert(ch);
 
-        Optional<SignupOtpChallenge> inc1 = persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant());
+        Optional<SignupOtpChallenge> inc1 = persistence.tryAtomicRecordFailedVerify(
+                ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), clock.instant());
         assertTrue(inc1.isPresent());
         assertEquals(1, inc1.get().getFailedVerifyAttempts());
 
-        Optional<SignupOtpChallenge> inc2 = persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant());
+        Optional<SignupOtpChallenge> inc2 = persistence.tryAtomicRecordFailedVerify(
+                ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), clock.instant());
         assertTrue(inc2.isPresent());
         assertEquals(2, inc2.get().getFailedVerifyAttempts());
     }
@@ -1205,11 +1207,13 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         persistence.tryInsert(ch);
 
         for (int i = 1; i <= 5; i++) {
-            assertTrue(persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant()).isPresent());
+            assertTrue(persistence.tryAtomicRecordFailedVerify(
+                    ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), clock.instant()).isPresent());
         }
 
         // 6th attempt returns empty
-        Optional<SignupOtpChallenge> over = persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant());
+        Optional<SignupOtpChallenge> over = persistence.tryAtomicRecordFailedVerify(
+                ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), clock.instant());
         assertTrue(over.isEmpty());
 
         SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
@@ -1225,7 +1229,8 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         ch.setFailedVerifyAttempts(5);
         persistence.tryInsert(ch);
 
-        Optional<SignupOtpChallenge> locked = persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), clock.instant());
+        Optional<SignupOtpChallenge> locked = persistence.tryAtomicLockAfterMaxFailures(
+                ch.getEmailKey(), ch.getChallengeId(), clock.instant());
         assertTrue(locked.isPresent());
         assertEquals(OtpChallengeStatus.LOCKED, locked.get().getStatus());
     }
@@ -1239,7 +1244,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp(rawOtp), "ch-v8", "op-v8", "k-v8");
         ch.setFailedVerifyAttempts(5);
         persistence.tryInsert(ch);
-        persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), clock.instant());
+        persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), ch.getChallengeId(), clock.instant());
 
         VerifyOtpResult res = service.verifyOtp(email, rawOtp);
         assertThat(res).isInstanceOf(VerifyOtpResult.Locked.class);
@@ -1262,7 +1267,8 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         for (int i = 0; i < threads; i++) {
             tasks.add(() -> {
                 barrier.await();
-                if (persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant()).isPresent()) {
+                if (persistence.tryAtomicRecordFailedVerify(
+                        ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), clock.instant()).isPresent()) {
                     increments.incrementAndGet();
                 }
                 return null;
@@ -1414,14 +1420,102 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertEquals(OtpChallengeStatus.VERIFIED, newVerified.get().getStatus());
     }
 
+    @Test
+    @Order(56)
+    @DisplayName("56. Valid OTP verification racing against fifth invalid attempt fails once locked")
+    void test56_validVerificationRacingAgainstFifthInvalidAttempt() throws Exception {
+        String email = "ver-race-fail5@example.com";
+        String rawOtp = "123456";
+        String digest = persistence.digestOtp(rawOtp);
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, digest, "ch-fail5-race", "op-f5", "k-f5");
+        ch.setFailedVerifyAttempts(4); // 4 failures already recorded
+        persistence.tryInsert(ch);
+
+        Instant now = clock.instant();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch failureUpdated = new CountDownLatch(1);
+        CountDownLatch verifyStarted = new CountDownLatch(1);
+
+        DefaultTransactionDefinition def1 = new DefaultTransactionDefinition();
+        def1.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        DefaultTransactionDefinition def2 = new DefaultTransactionDefinition();
+        def2.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        // Transaction 1: Records 5th failed attempt and holds row lock
+        Future<Optional<SignupOtpChallenge>> failFuture = executor.submit(() -> {
+            var status1 = transactionManager.getTransaction(def1);
+            try {
+                Optional<SignupOtpChallenge> failRes = persistence.tryAtomicRecordFailedVerify(
+                        ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), now);
+
+                // Signal that 5th failure has updated the row to LOCKED and holds lock
+                failureUpdated.countDown();
+
+                // Wait until tx2 (verification) has actively begun and entered wait
+                assertTrue(verifyStarted.await(5, TimeUnit.SECONDS));
+                Thread.sleep(50);
+
+                transactionManager.commit(status1);
+                return failRes;
+            } catch (Exception e) {
+                transactionManager.rollback(status1);
+                throw e;
+            }
+        });
+
+        // Transaction 2: Concurrently attempts valid OTP verification while tx1 is in-flight
+        Future<Optional<SignupOtpChallenge>> verifyFuture = executor.submit(() -> {
+            assertTrue(failureUpdated.await(5, TimeUnit.SECONDS));
+
+            var status2 = transactionManager.getTransaction(def2);
+            try {
+                verifyStarted.countDown();
+
+                // Blocks on row lock held by tx1, then re-evaluates WHERE clause
+                Optional<SignupOtpChallenge> verified = persistence.tryAtomicMarkVerified(
+                        ch.getEmailKey(), digest, now);
+
+                transactionManager.commit(status2);
+                return verified;
+            } catch (Exception e) {
+                transactionManager.rollback(status2);
+                throw e;
+            }
+        });
+
+        Optional<SignupOtpChallenge> failResult;
+        Optional<SignupOtpChallenge> verifyResult;
+        try {
+            failResult = failFuture.get(10, TimeUnit.SECONDS);
+            verifyResult = verifyFuture.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdown();
+        }
+
+        // 1. 5th failure succeeded, recorded 5 attempts and transitioned to LOCKED atomically
+        assertTrue(failResult.isPresent());
+        assertEquals(5, failResult.get().getFailedVerifyAttempts());
+        assertEquals(OtpChallengeStatus.LOCKED, failResult.get().getStatus());
+
+        // 2. Racing valid verification was rejected because attempts >= 5 and status is LOCKED
+        assertTrue(verifyResult.isEmpty());
+
+        // 3. Database state is strictly LOCKED with 5 failed attempts
+        SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(OtpChallengeStatus.LOCKED, current.getStatus());
+        assertEquals(5, current.getFailedVerifyAttempts());
+    }
+
     // =========================================================================
     // GROUP 7: Transactions, Spring DI & Security
     // =========================================================================
 
     @Test
-    @Order(56)
-    @DisplayName("56. Transactional rollback restores previous challenge state")
-    void test56_transactionalRollbackRestoresPreviousState() {
+    @Order(57)
+    @DisplayName("57. Transactional rollback restores previous challenge state")
+    void test57_transactionalRollbackRestoresPreviousState() {
         String email = "rollback@example.com";
         String digest = persistence.digestOtp("123456");
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, digest, "ch-rb", "op-rb", "k-rb");
@@ -1466,9 +1560,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(57)
-    @DisplayName("57. Spring DI selects PostgresSignupOtpChallengeStore when opted-in")
-    void test57_springContextDISelectsPostgresWhenOptedIn() {
+    @Order(58)
+    @DisplayName("58. Spring DI selects PostgresSignupOtpChallengeStore when opted-in")
+    void test58_springContextDISelectsPostgresWhenOptedIn() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
@@ -1488,9 +1582,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(58)
-    @DisplayName("58. Spring DI selects MongoSignupOtpChallengeStore by default")
-    void test58_springContextDISelectsMongoByDefault() {
+    @Order(59)
+    @DisplayName("59. Spring DI selects MongoSignupOtpChallengeStore by default")
+    void test59_springContextDISelectsMongoByDefault() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
@@ -1508,9 +1602,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(59)
-    @DisplayName("59. Spring transactional proxy verification")
-    void test59_springTransactionalProxyVerified() {
+    @Order(60)
+    @DisplayName("60. Spring transactional proxy verification")
+    void test60_springTransactionalProxyVerified() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
@@ -1527,9 +1621,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(60)
-    @DisplayName("60. Sensitive data protection in logs: no raw OTP, normalized email, or digests emitted")
-    void test60_noSensitiveDataOrRawOtpInEmittedLogs() {
+    @Order(61)
+    @DisplayName("61. Sensitive data protection in logs: no raw OTP, normalized email, or digests emitted")
+    void test61_noSensitiveDataOrRawOtpInEmittedLogs() {
         Logger storeLogger = (Logger) LoggerFactory.getLogger(SignupOtpObservability.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
@@ -1548,9 +1642,9 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(61)
-    @DisplayName("61. SQL parameter binding prevents injection attacks")
-    void test61_sqlParameterBindingProtectsAgainstInjection() {
+    @Order(62)
+    @DisplayName("62. SQL parameter binding prevents injection attacks")
+    void test62_sqlParameterBindingProtectsAgainstInjection() {
         String injectionEmail = "' OR '1'='1";
         String injectionKey = "' OR '1'='1' --";
 
@@ -1565,5 +1659,30 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         // Searching for injection string finds nothing and does NOT throw syntax error
         Optional<SignupOtpChallenge> found = persistence.findByEmailKey(injectionKey);
         assertTrue(found.isEmpty());
+    }
+
+    @Test
+    @Order(63)
+    @DisplayName("63. Deprecated legacy failed-attempt and lock overloads maintain backwards compatibility")
+    @SuppressWarnings("deprecation")
+    void test63_legacyUnguardedFailedAttemptAndLockCompatibility() {
+        String email = "legacy-compat@example.com";
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("654321"), "ch-legacy-1", "op-leg", "k-leg");
+        persistence.tryInsert(ch);
+
+        // Legacy unguarded increment delegates properly
+        Optional<SignupOtpChallenge> inc = persistence.tryAtomicRecordFailedVerify(ch.getEmailKey(), clock.instant());
+        assertTrue(inc.isPresent());
+        assertEquals(1, inc.get().getFailedVerifyAttempts());
+
+        // Fast-forward attempts to 5
+        ch.setFailedVerifyAttempts(5);
+        persistence.save(ch);
+
+        // Legacy unguarded lock delegates properly
+        Optional<SignupOtpChallenge> locked = persistence.tryAtomicLockAfterMaxFailures(ch.getEmailKey(), clock.instant());
+        assertTrue(locked.isPresent());
+        assertEquals(OtpChallengeStatus.LOCKED, locked.get().getStatus());
     }
 }

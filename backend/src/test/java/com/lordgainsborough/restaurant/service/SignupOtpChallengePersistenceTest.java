@@ -338,6 +338,9 @@ class SignupOtpChallengePersistenceTest {
         assertEquals(digest, queryDoc.get("otpDigest"));
         assertTrue(queryDoc.containsKey("challengeExpiresAt"));
         assertTrue(queryDoc.containsKey("otpExpiresAt"));
+        assertTrue(queryDoc.containsKey("failedVerifyAttempts"));
+        assertEquals(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,
+                ((org.bson.Document) queryDoc.get("failedVerifyAttempts")).get("$lt"));
 
         org.bson.Document set =
                 (org.bson.Document) updateCaptor.getValue().getUpdateObject().get("$set");
@@ -348,6 +351,8 @@ class SignupOtpChallengePersistenceTest {
     @Test
     void failedVerifyUpdateBuildsIncrementWithCapPredicate() {
         String emailKey = persistence.emailKeyFromNormalized("member@example.com");
+        String challengeId = "ch-test-123";
+        String otpDigest = persistence.digestOtp("123456");
         SignupOtpChallenge updated = baseChallenge(emailKey);
         updated.setFailedVerifyAttempts(1);
 
@@ -359,18 +364,29 @@ class SignupOtpChallengePersistenceTest {
                 .thenReturn(updated);
 
         Optional<SignupOtpChallenge> result =
-                persistence.tryAtomicRecordFailedVerify(emailKey, FIXED_NOW);
+                persistence.tryAtomicRecordFailedVerify(emailKey, challengeId, otpDigest, FIXED_NOW);
 
         assertTrue(result.isPresent());
         assertEquals(1, result.get().getFailedVerifyAttempts());
 
+        ArgumentCaptor<org.springframework.data.mongodb.core.query.Query> queryCaptor =
+                ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Query.class);
         ArgumentCaptor<org.springframework.data.mongodb.core.query.Update> updateCaptor =
                 ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Update.class);
         verify(mongoTemplate).findAndModify(
-                any(org.springframework.data.mongodb.core.query.Query.class),
+                queryCaptor.capture(),
                 updateCaptor.capture(),
                 any(org.springframework.data.mongodb.core.FindAndModifyOptions.class),
                 org.mockito.ArgumentMatchers.eq(SignupOtpChallenge.class));
+
+        org.bson.Document queryDoc = queryCaptor.getValue().getQueryObject();
+        assertEquals(emailKey, queryDoc.get("_id"));
+        assertEquals(challengeId, queryDoc.get("challengeId"));
+        assertEquals(otpDigest, queryDoc.get("otpDigest"));
+        assertEquals(OtpChallengeStatus.ACTIVE, queryDoc.get("status"));
+        assertTrue(queryDoc.containsKey("challengeExpiresAt"));
+        assertTrue(queryDoc.containsKey("otpExpiresAt"));
+        assertTrue(queryDoc.containsKey("failedVerifyAttempts"));
 
         org.bson.Document inc =
                 (org.bson.Document) updateCaptor.getValue().getUpdateObject().get("$inc");

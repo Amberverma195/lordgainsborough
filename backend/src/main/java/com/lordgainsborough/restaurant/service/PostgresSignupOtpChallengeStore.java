@@ -456,6 +456,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND status = 'ACTIVE'
                   AND challenge_expires_at > ?
                   AND otp_expires_at > ?
+                  AND failed_verify_attempts < ?
                   AND otp_digest = ?
                 RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
                           resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
@@ -468,13 +469,20 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     emailKey,
                     toTimestamp(now),
                     toTimestamp(now),
+                    SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,
                     otpDigest
             );
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility.
+     */
     @Override
+    @Deprecated
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
             String emailKey, Instant now) {
@@ -494,6 +502,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
             StringBuilder sql = new StringBuilder("""
                 UPDATE signup_otp_challenges
                 SET failed_verify_attempts = failed_verify_attempts + 1,
+                    status = CASE
+                        WHEN failed_verify_attempts + 1 >= ? THEN 'LOCKED'
+                        ELSE status
+                    END,
                     updated_at = ?
                 WHERE email_key = ?
                   AND status = 'ACTIVE'
@@ -503,6 +515,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 """);
 
             List<Object> params = new ArrayList<>();
+            params.add(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
             params.add(toTimestamp(now));
             params.add(emailKey);
             params.add(toTimestamp(now));
@@ -531,7 +544,13 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         });
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility.
+     */
     @Override
+    @Deprecated
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, Instant now) {

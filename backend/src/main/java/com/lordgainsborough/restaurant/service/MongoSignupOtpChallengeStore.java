@@ -237,6 +237,7 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
                 .and("status").is(OtpChallengeStatus.ACTIVE)
                 .and("challengeExpiresAt").gt(now)
                 .and("otpExpiresAt").gt(now)
+                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS)
                 .and("otpDigest").is(otpDigest));
 
         Update update = new Update()
@@ -251,7 +252,13 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
         return Optional.ofNullable(updated);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility.
+     */
     @Override
+    @Deprecated
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(
             String emailKey, Instant now) {
         return tryAtomicRecordFailedVerify(emailKey, null, null, now);
@@ -292,7 +299,13 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
         return Optional.ofNullable(updated);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @deprecated Retained strictly for legacy backwards compatibility.
+     */
     @Override
+    @Deprecated
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, Instant now) {
         return tryAtomicLockAfterMaxFailures(emailKey, null, now);

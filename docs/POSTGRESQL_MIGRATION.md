@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T03:42:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T05:35:00-04:00 (America/Toronto)  
 
 ---
 
@@ -362,7 +362,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T03:26:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; simplified arithmetic increment without redundant CASE; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; independent fallback `transactionManager` bean; real Logback appender log verification; 40/40 tests passed; full 13-suite regression passed |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `COMPLETED` | 2026-10-26T03:30:00-04:00 | 2026-10-26T03:42:00-04:00 | Extracted `LoginFailureStateStore` SPI; implemented `PostgresLoginFailureStateStore` with atomic upsert + `SELECT ... FOR UPDATE` row-level locking; fail-closed `Integer.MAX_VALUE` overflow guard; exact millisecond active cooldown boundaries; targeted `clearFailures`; 38/38 new tests; 14-suite regression passed (318/318 tests) |
-| `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T04:45:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; opt-in `PostgresSignupOtpPersistenceConfiguration`; 61/61 integration tests passed; full 15-suite regression passed (385/385 tests) |
+| `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T05:35:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; hardened with 5-finding resolution (atomic locking, deprecated unguarded overloads, fail-closed resend cooldown, Flyway disposable DB lifecycle with CI skip/fail controls, JPA timestamp integrity); 63/63 integration tests passed; full regression passed |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `NOT STARTED` | — | — | `OrderControllerTest` pass |
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `NOT STARTED` | — | — | Cart API endpoint tests |
@@ -1806,6 +1806,46 @@ Implemented **PG-015: PostgreSQL Signup OTP Challenge Persistence**, transitioni
   14. `PostgresLoginRateLimiterIntegrationTest`: **43** tests (+5 new tests)
   15. `PostgresSignupOtpChallengePersistenceIntegrationTest`: **61** tests (new suite)
   - **Full 15-Suite Regression Total:** **385 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 2m 00s).
+
+**Next Task:**  
+`PG-015-HARDENING` — Post-PG-015 Security Hardening and Five-Finding Resolution (`COMPLETED`).
+
+---
+
+### [2026-10-26T05:35:00-04:00] PG-015-HARDENING: Post-PG-015 Security Hardening and Five-Finding Resolution
+
+**Overview & Objective:**
+Executed **PG-015 Post-Implementation Security Hardening**, addressing five architectural and concurrency findings across the signup OTP challenge state machine, the storage SPI, Flyway integration test lifecycle, and JPA update contracts.
+
+**Five-Finding Resolution Summary:**
+1. **Finding 1 — Atomic Failed-Attempt Threshold & Challenge Locking (State-Machine Atomicity):**
+   - *Problem:* `SignupOtpChallengeService` previously incremented `failed_verify_attempts` to 5 and then invoked `tryAtomicLockAfterMaxFailures` as a separate operation, leaving an intermediate window where `status` remained `ACTIVE` while `failed_verify_attempts == 5`. A concurrent valid verification could theoretically succeed.
+   - *Resolution:* `PostgresSignupOtpChallengeStore.tryAtomicRecordFailedVerify` atomically updates `status = 'LOCKED'` within the exact same update statement on the 5th failed attempt (`status = CASE WHEN failed_verify_attempts + 1 >= ? THEN 'LOCKED' ELSE status END`). Both `PostgresSignupOtpChallengeStore` and `MongoSignupOtpChallengeStore` now enforce `failed_verify_attempts < MAX_FAILED_VERIFY_ATTEMPTS` inside `tryAtomicMarkVerified()`. In `SignupOtpChallengeService`, `tryAtomicRecordFailedVerify` checks for `LOCKED` status and records `VERIFICATION_LOCK` immediately without separate locking races. Added verification and concurrency race tests in `SignupOtpChallengeVerificationTest` and `PostgresSignupOtpChallengePersistenceIntegrationTest`.
+2. **Finding 2 — Legacy Unguarded Failed-Attempt Updates in Storage Interface:**
+   - *Problem:* `SignupOtpChallengeStore.tryAtomicRecordFailedVerify(emailKey, now)` and `tryAtomicLockAfterMaxFailures(emailKey, now)` permitted unguarded updates without binding to challenge ID and OTP digest.
+   - *Resolution:* Made guarded overloads mandatory for security operations. Formally deprecated (`@Deprecated`) the unguarded legacy overloads in `SignupOtpChallengeStore`, `SignupOtpChallengePersistence`, `PostgresSignupOtpChallengeStore`, and `MongoSignupOtpChallengeStore`. Migrated all callers across tests to the guarded overloads `tryAtomicRecordFailedVerify(emailKey, challengeId, otpDigest, now)` and `tryAtomicLockAfterMaxFailures(emailKey, challengeId, now)`, while retaining explicit backwards-compatibility test coverage (`test63_legacyUnguardedFailedAttemptAndLockCompatibility`).
+3. **Finding 3 — Fail-Closed Resend Cooldown Parity with MongoDB:**
+   - *Problem:* `PostgresSignupOtpChallengeStore` previously permitted `(next_resend_at IS NULL OR next_resend_at <= ?)`, which allowed a premature resend if `next_resend_at` was unexpectedly null before cooldown calculation.
+   - *Resolution:* Removed `next_resend_at IS NULL`, requiring `next_resend_at <= ?` and establishing strict fail-closed resend cooldown parity with `MongoSignupOtpChallengeStore`.
+4. **Finding 4 — Flyway Test Disposable Database Lifecycle and Safe Teardown:**
+   - *Problem:* `FlywayMigrationIntegrationTest` previously dropped fixed test database names on setup and teardown, risked collisions under concurrent runs, and silently returned early when `test.postgres.port` was absent (producing false-positive passing tests without exercising PostgreSQL).
+   - *Resolution:* Replaced fixed names with uniquely generated disposable databases (`DisposableDatabaseSession`), positive ownership tracking (`createdAndOwned`), safe environment check guardrails (`assertSafeTestEnvironment`), and introduced `getRequiredTestPort()` with JUnit 5 assumptions (`assumeTrue`) and explicit CI failure assertions (`test.postgres.mandatory=true` / `CI=true`), preventing unexercised tests from masquerading as passed.
+5. **Finding 5 — Explicit JPA Entity Timestamp Contract:**
+   - *Problem:* `JpaSignupOtpChallenge` previously contained conditional logic in `@PreUpdate` that avoided updating `updatedAt` if already set, which risked masking JPA update lifecycles.
+   - *Resolution:* Made JPA entity lifecycle contract explicit by unconditionally setting `updatedAt = Instant.now()` on `@PreUpdate`, and verified JPA update behavior in `SecurityJpaRepositoryIntegrationTest`.
+
+**Verification Commands & Results:**
+- **Verification Commands:**
+  - `mvn test -Dtest=PostgresSignupOtpChallengePersistenceIntegrationTest,SignupOtpChallengeVerificationTest,SignupOtpChallengePersistenceTest "-Dtest.postgres.port=54353"`
+  - `mvn test -Dtest=FlywayMigrationIntegrationTest,SecurityJpaRepositoryIntegrationTest "-Dtest.postgres.port=54353"`
+  - `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest,SecurityJpaRepositoryIntegrationTest,PostgresCatalogInitializerIntegrationTest,PostgresCatalogStartupActivationIntegrationTest,PostgresAbuseCounterStoreIntegrationTest,PostgresLoginRateLimiterIntegrationTest,PostgresSignupOtpChallengePersistenceIntegrationTest "-Dtest.postgres.port=54353"`
+- **Results:**
+  - `SignupOtpChallengeVerificationTest`: 11 tests run, 0 failures, 0 errors, 0 skipped (including concurrent 5th-attempt lock races).
+  - `SignupOtpChallengePersistenceTest`: 19 tests run, 0 failures, 0 errors, 0 skipped.
+  - `PostgresSignupOtpChallengePersistenceIntegrationTest`: 63 tests run, 0 failures, 0 errors, 0 skipped (including test 63 backwards-compatibility test).
+  - `FlywayMigrationIntegrationTest`: 5 tests run, 0 failures, 0 errors, 0 skipped (disposable database isolation & CI guardrails).
+  - `SecurityJpaRepositoryIntegrationTest`: 34 tests run, 0 failures, 0 errors, 0 skipped.
+  - Full 15-suite regression: 390 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
 
 **Next Task:**  
 `PG-016` — Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management (`NOT STARTED`).

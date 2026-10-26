@@ -256,11 +256,14 @@ public class SignupOtpChallengeService {
             var updated = persistence.tryAtomicRecordFailedVerify(
                     emailKey, challenge.getChallengeId(), challenge.getOtpDigest(), now);
             if (updated.isPresent()
-                    && updated.get().getFailedVerifyAttempts()
-                    >= SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS) {
-                SignupOtpChallenge locked = persistence.tryAtomicLockAfterMaxFailures(
-                        emailKey, challenge.getChallengeId(), now)
-                        .orElse(updated.get());
+                    && (updated.get().getStatus() == OtpChallengeStatus.LOCKED
+                        || updated.get().getFailedVerifyAttempts()
+                            >= SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS)) {
+                SignupOtpChallenge locked = updated.get().getStatus() == OtpChallengeStatus.LOCKED
+                        ? updated.get()
+                        : persistence.tryAtomicLockAfterMaxFailures(
+                                emailKey, challenge.getChallengeId(), now)
+                                .orElse(updated.get());
                 observability.record(
                         SignupOtpObservability.Event.VERIFICATION_FAILURE,
                         SignupOtpObservability.Context.fromChallenge(
@@ -273,6 +276,17 @@ public class SignupOtpChallengeService {
             }
             SignupOtpChallenge failedState = updated
                     .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(challenge));
+            if (failedState.getStatus() == OtpChallengeStatus.LOCKED) {
+                observability.record(
+                        SignupOtpObservability.Event.VERIFICATION_FAILURE,
+                        SignupOtpObservability.Context.fromChallenge(
+                                failedState, "OTP_INVALID", null));
+                observability.record(
+                        SignupOtpObservability.Event.VERIFICATION_LOCK,
+                        SignupOtpObservability.Context.fromChallenge(
+                                failedState, "OTP_VERIFICATION_LOCKED", null));
+                return new VerifyOtpResult.Locked(challengeViewForEmail(normalizedEmail));
+            }
             observability.record(
                     SignupOtpObservability.Event.VERIFICATION_FAILURE,
                     SignupOtpObservability.Context.fromChallenge(
@@ -283,10 +297,23 @@ public class SignupOtpChallengeService {
         Optional<SignupOtpChallenge> verified =
                 persistence.tryAtomicMarkVerified(emailKey, challenge.getOtpDigest(), now);
         if (verified.isEmpty()) {
+            SignupOtpChallenge failedState =
+                    persistence.findByEmailKey(emailKey).orElse(challenge);
+            if (failedState.getStatus() == OtpChallengeStatus.LOCKED
+                    || failedState.getFailedVerifyAttempts()
+                        >= SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS) {
+                observability.record(
+                        SignupOtpObservability.Event.VERIFICATION_LOCK,
+                        SignupOtpObservability.Context.fromChallenge(
+                                failedState,
+                                "OTP_VERIFICATION_LOCKED",
+                                null));
+                return new VerifyOtpResult.Locked(challengeViewForEmail(normalizedEmail));
+            }
             observability.record(
                     SignupOtpObservability.Event.VERIFICATION_FAILURE,
                     SignupOtpObservability.Context.fromChallenge(
-                            persistence.findByEmailKey(emailKey).orElse(challenge),
+                            failedState,
                             "OTP_INVALID",
                             null));
             return new VerifyOtpResult.Invalid(challengeViewForEmail(normalizedEmail));

@@ -30,6 +30,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -65,6 +66,24 @@ public class FlywayMigrationIntegrationTest {
 
     private String getTestPort() {
         return System.getProperty("test.postgres.port");
+    }
+
+    private String getRequiredTestPort(String testName) {
+        String port = getTestPort();
+        boolean mandatory = Boolean.getBoolean("test.postgres.mandatory")
+                || "true".equalsIgnoreCase(System.getenv("CI_POSTGRES_MANDATORY"))
+                || "true".equalsIgnoreCase(System.getenv("CI"));
+        if (mandatory) {
+            assertThat(port)
+                    .withFailMessage("test.postgres.port system property is required for PG-003 Flyway integration tests in mandatory CI mode (" + testName + ")")
+                    .isNotBlank();
+        } else {
+            assumeTrue(
+                    port != null && !port.isBlank(),
+                    "test.postgres.port system property is required for " + testName + "; skipping because PostgreSQL database is unavailable"
+            );
+        }
+        return port;
     }
 
     private String getJdbcUrl(String dbName) {
@@ -146,11 +165,7 @@ public class FlywayMigrationIntegrationTest {
     @Order(1)
     @DisplayName("Direct Flyway API: V1 migration executes cleanly and records history with all 17 tables")
     void test1_directFlyway_initialMigration_executesAndPopulatesSchemaHistoryAnd17Tables() throws Exception {
-        String port = getTestPort();
-        if (port == null || port.isBlank()) {
-            System.out.println("No test.postgres.port provided; skipping test1.");
-            return;
-        }
+        String port = getRequiredTestPort("test1_directFlyway_initialMigration");
 
         directDbName = TEST_DB_PREFIX + "direct_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
         directDatabaseSession = new DisposableDatabaseSession(port, directDbName);
@@ -259,11 +274,7 @@ public class FlywayMigrationIntegrationTest {
     @Order(2)
     @DisplayName("Direct Flyway API: Idempotency check executes zero migrations on second run")
     void test2_directFlyway_idempotency_secondRunAppliesZeroMigrations() throws Exception {
-        String port = getTestPort();
-        if (port == null || port.isBlank()) {
-            System.out.println("No test.postgres.port provided; skipping test2.");
-            return;
-        }
+        String port = getRequiredTestPort("test2_directFlyway_idempotency");
 
         assertThat(directDatabaseSession)
                 .withFailMessage("directDatabaseSession must be initialized by test1")
@@ -302,11 +313,7 @@ public class FlywayMigrationIntegrationTest {
     @Order(3)
     @DisplayName("Direct Flyway API: Validation succeeds with zero errors and matching checksum")
     void test3_directFlyway_validate_validationSuccessful() {
-        String port = getTestPort();
-        if (port == null || port.isBlank()) {
-            System.out.println("No test.postgres.port provided; skipping test3.");
-            return;
-        }
+        String port = getRequiredTestPort("test3_directFlyway_validate");
 
         assertThat(directDatabaseSession)
                 .withFailMessage("directDatabaseSession must be initialized by test1")
@@ -334,11 +341,7 @@ public class FlywayMigrationIntegrationTest {
     @Order(4)
     @DisplayName("Spring Boot Auto-Configuration: Minimal context boots DataSource, HikariCP, and Flyway cleanly")
     void test4_springBootAutoConfiguration_minimalContext_bootsAndMigrates() throws Exception {
-        String port = getTestPort();
-        if (port == null || port.isBlank()) {
-            System.out.println("No test.postgres.port provided; skipping test4.");
-            return;
-        }
+        String port = getRequiredTestPort("test4_springBootAutoConfiguration");
 
         springDbName = TEST_DB_PREFIX + "spring_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
         springDatabaseSession = new DisposableDatabaseSession(port, springDbName);
@@ -438,6 +441,14 @@ public class FlywayMigrationIntegrationTest {
 
         // 3. Live provision/ownership/drop lifecycle if test.postgres.port is provided
         String port = getTestPort();
+        boolean mandatory = Boolean.getBoolean("test.postgres.mandatory")
+                || "true".equalsIgnoreCase(System.getenv("CI_POSTGRES_MANDATORY"))
+                || "true".equalsIgnoreCase(System.getenv("CI"));
+        if (mandatory) {
+            assertThat(port)
+                    .withFailMessage("test.postgres.port system property is required for test5 live lifecycle verification in mandatory CI mode")
+                    .isNotBlank();
+        }
         if (port != null && !port.isBlank()) {
             String ownedName = TEST_DB_PREFIX + "guard_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
             DisposableDatabaseSession ownedSession = new DisposableDatabaseSession(port, ownedName);

@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -188,6 +189,71 @@ class SignupOtpChallengeVerificationTest {
 
         service.clear(EMAIL);
         assertFalse(store.containsKey(emailKey));
+    }
+
+    @Test
+    void validOtpRacingAgainstFifthInvalidAttemptIsLockedOnceCounterReachesMax() {
+        seedActiveChallenge(correctDigest, SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS - 1);
+
+        // 5th wrong attempt triggers lock
+        SignupOtpChallengeService.VerifyOtpResult wrongResult = service.verifyOtp(EMAIL, WRONG_OTP);
+        assertTrue(wrongResult instanceof SignupOtpChallengeService.VerifyOtpResult.Locked);
+
+        // Concurrent/subsequent valid OTP verification cannot succeed
+        SignupOtpChallengeService.VerifyOtpResult validResult = service.verifyOtp(EMAIL, CORRECT_OTP);
+        assertTrue(validResult instanceof SignupOtpChallengeService.VerifyOtpResult.Locked);
+
+        SignupOtpChallenge current = store.get(emailKey);
+        assertEquals(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS, current.getFailedVerifyAttempts());
+        assertEquals(OtpChallengeStatus.LOCKED, current.getStatus());
+    }
+
+    @Test
+    void validOtpRejectedWhenAttemptsAlreadyAtMaxEvenIfStatusStillActive() {
+        // Simulates the intermediate race window: 5 failed attempts reached while status is still ACTIVE
+        SignupOtpChallenge challenge = seedActiveChallenge(correctDigest,
+                SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+        challenge.setStatus(OtpChallengeStatus.ACTIVE);
+        store.put(emailKey, challenge);
+
+        SignupOtpChallengeService.VerifyOtpResult result = service.verifyOtp(EMAIL, CORRECT_OTP);
+        assertTrue(result instanceof SignupOtpChallengeService.VerifyOtpResult.Locked);
+
+        // Status must NOT have transitioned to VERIFIED
+        assertNotEquals(OtpChallengeStatus.VERIFIED, store.get(emailKey).getStatus());
+    }
+
+    @Test
+    void concurrentValidOtpAndFifthInvalidAttemptRaceNeverAllowsVerifiedAfterLock() throws Exception {
+        seedActiveChallenge(correctDigest, SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS - 1);
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
+
+        java.util.concurrent.Future<SignupOtpChallengeService.VerifyOtpResult> wrongFuture = executor.submit(() -> {
+            barrier.await();
+            return service.verifyOtp(EMAIL, WRONG_OTP);
+        });
+
+        java.util.concurrent.Future<SignupOtpChallengeService.VerifyOtpResult> validFuture = executor.submit(() -> {
+            barrier.await();
+            return service.verifyOtp(EMAIL, CORRECT_OTP);
+        });
+
+        SignupOtpChallengeService.VerifyOtpResult wrongRes = wrongFuture.get();
+        SignupOtpChallengeService.VerifyOtpResult validRes = validFuture.get();
+        executor.shutdown();
+
+        SignupOtpChallenge current = store.get(emailKey);
+        if (wrongRes instanceof SignupOtpChallengeService.VerifyOtpResult.Locked) {
+            // If the 5th wrong attempt locked the challenge, valid OTP verification MUST NOT succeed
+            assertFalse(validRes instanceof SignupOtpChallengeService.VerifyOtpResult.Verified);
+            assertEquals(OtpChallengeStatus.LOCKED, current.getStatus());
+        } else {
+            // Valid OTP won before the 5th wrong attempt was processed
+            assertTrue(validRes instanceof SignupOtpChallengeService.VerifyOtpResult.Verified);
+            assertEquals(OtpChallengeStatus.VERIFIED, current.getStatus());
+        }
     }
 
     private SignupOtpChallenge seedActiveChallenge(String otpDigest, int failedAttempts) {
