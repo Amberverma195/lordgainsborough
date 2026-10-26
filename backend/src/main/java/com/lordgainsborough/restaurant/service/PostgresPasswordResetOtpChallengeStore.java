@@ -577,7 +577,6 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
     }
 
     @Override
-    @Transactional(transactionManager = "transactionManager")
     public PasswordResetExecutionResult executePasswordResetTransaction(
             String emailKey,
             String challengeId,

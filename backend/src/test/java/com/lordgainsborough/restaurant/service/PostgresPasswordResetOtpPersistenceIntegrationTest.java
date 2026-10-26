@@ -25,6 +25,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import java.util.Properties;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -1149,6 +1152,23 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         }
     }
 
+    @Configuration
+    static class RealJpaSpringContextConfig extends MinimalSpringContextConfig {
+        @Bean
+        public LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource dataSource) {
+            LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
+            em.setDataSource(dataSource);
+            em.setPackagesToScan("com.lordgainsborough.restaurant.persistence.jpa.entity");
+            em.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+            Properties properties = new Properties();
+            properties.setProperty("hibernate.hbm2ddl.auto", "validate");
+            properties.setProperty("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
+            properties.setProperty("hibernate.show_sql", "false");
+            em.setJpaProperties(properties);
+            return em;
+        }
+    }
+
     @Test
     @Order(27)
     @DisplayName("27. Spring DI selects PostgresPasswordResetOtpChallengeStore when opted-in")
@@ -1602,43 +1622,126 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @Test
     @Order(43)
-    @DisplayName("43. Concurrent replace-expired vs complete race: strictly consistent outcome")
+    @DisplayName("43. Concurrent eligible complete vs fresh replacement race: older operation cannot affect replacement")
     void test43_concurrentReplaceExpiredVersusCompleteRace() throws Exception {
         requirePostgres();
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
-        String rawCode = "123456";
-        PasswordResetOtpChallenge oldCh = buildChallenge(emailKey, "ch-old-comp-race", TEST_USER_ID, rawCode, clock.instant());
-        // Set challenge to be expired so replacement is eligible
-        oldCh.setChallengeExpiresAt(clock.instant().minusSeconds(1));
+        String oldRawCode = "123456";
+        Instant now = clock.instant();
+
+        // 1. Initial state: old challenge is ACTIVE and NOT expired, so completion is fully eligible
+        PasswordResetOtpChallenge oldCh = buildChallenge(emailKey, "ch-old-eligible-race", TEST_USER_ID, oldRawCode, now);
         persistence.getStore().tryInsert(oldCh);
 
-        PasswordResetOtpChallenge newCh = buildChallenge(emailKey, "ch-fresh-comp-race", TEST_USER_ID, "654321", clock.instant());
+        PasswordResetOtpChallenge newCh = buildChallenge(emailKey, "ch-fresh-replacement", TEST_USER_ID, "654321", now);
 
-        Instant now = clock.instant();
+        // 2. Race eligible completion of old challenge vs creation/replacement with fresh challenge
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CyclicBarrier barrier = new CyclicBarrier(2);
+
+        Future<PasswordResetExecutionResult> completeFuture = executor.submit(() -> {
+            barrier.await();
+            return persistence.executePasswordResetTransaction(
+                    emailKey, "ch-old-eligible-race", oldCh.getCodeDigest(), "reset-op-old", NEW_PASSWORD, now);
+        });
 
         Future<Optional<PasswordResetOtpChallenge>> replaceFuture = executor.submit(() -> {
             barrier.await();
             return persistence.tryCreateOrReplaceExpired(newCh, now);
         });
 
-        Future<PasswordResetExecutionResult> completeFuture = executor.submit(() -> {
-            barrier.await();
-            return persistence.executePasswordResetTransaction(emailKey, "ch-old-comp-race", oldCh.getCodeDigest(), "reset-op-replace-race", NEW_PASSWORD, now);
-        });
-
-        Optional<PasswordResetOtpChallenge> replaceResult = replaceFuture.get(10, TimeUnit.SECONDS);
         PasswordResetExecutionResult completeResult = completeFuture.get(10, TimeUnit.SECONDS);
+        Optional<PasswordResetOtpChallenge> replaceResult = replaceFuture.get(10, TimeUnit.SECONDS);
         executor.shutdown();
 
-        // Old challenge was expired, so complete must fail with CHALLENGE_EXPIRED or INVALID_CHALLENGE if replaced
-        assertFalse(completeResult.isSuccess());
-        assertTrue(replaceResult.isPresent());
+        // Completion of the eligible challenge must have succeeded
+        assertTrue(completeResult.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.SUCCESS, completeResult.status());
 
-        // Password remains unchanged
-        String storedPassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
-        assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, storedPassword));
+        // If replacement ran before completion committed, it refused to replace active unexpired challenge;
+        // now that completion has committed (status = CONSUMED), replacement must succeed
+        if (replaceResult.isEmpty()) {
+            replaceResult = persistence.tryCreateOrReplaceExpired(newCh, now);
+        }
+        assertTrue(replaceResult.isPresent());
+        assertEquals("ch-fresh-replacement", replaceResult.get().getChallengeId());
+
+        // Verify intermediate state: User password updated to NEW_PASSWORD, token_version = 1
+        String currentPasswordHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, currentPasswordHash));
+        Long currentVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, TEST_USER_ID);
+        assertEquals(1L, currentVersion);
+        String currentOpId = jdbcTemplate.queryForObject("SELECT last_password_reset_operation_id FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertEquals("reset-op-old", currentOpId);
+
+        // Verify fresh replacement challenge is currently ACTIVE with fresh digest
+        PasswordResetOtpChallenge storedReplacement = persistence.findByEmailKey(emailKey).orElseThrow();
+        assertEquals("ch-fresh-replacement", storedReplacement.getChallengeId());
+        assertEquals(PasswordResetChallengeStatus.ACTIVE, storedReplacement.getStatus());
+        assertFalse(storedReplacement.isPasswordUpdated());
+        assertNull(storedReplacement.getConsumedAt());
+        assertEquals(newCh.getCodeDigest(), storedReplacement.getCodeDigest());
+
+        // 3. Stale older operation attempt: Replay/delayed completion of the older challenge MUST NOT affect the replacement
+        String stalePassword = "StaleAttackerPassword789!";
+        PasswordResetExecutionResult staleResult = persistence.executePasswordResetTransaction(
+                emailKey,
+                "ch-old-eligible-race",
+                oldCh.getCodeDigest(),
+                "stale-op-id",
+                stalePassword,
+                now
+        );
+
+        assertFalse(staleResult.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, staleResult.status());
+        assertEquals("Challenge ID mismatch", staleResult.failureReason());
+
+        // Assert user state remains completely untouched by the older operation
+        String postStalePassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, postStalePassword));
+        assertFalse(PasswordUtil.checkPassword(stalePassword, postStalePassword));
+        Long postStaleVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, TEST_USER_ID);
+        assertEquals(1L, postStaleVersion);
+        String postStaleOpId = jdbcTemplate.queryForObject("SELECT last_password_reset_operation_id FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertEquals("reset-op-old", postStaleOpId);
+
+        // Assert replacement challenge state remains ACTIVE and unaffected
+        PasswordResetOtpChallenge postStaleChallenge = persistence.findByEmailKey(emailKey).orElseThrow();
+        assertEquals("ch-fresh-replacement", postStaleChallenge.getChallengeId());
+        assertEquals(PasswordResetChallengeStatus.ACTIVE, postStaleChallenge.getStatus());
+        assertFalse(postStaleChallenge.isPasswordUpdated());
+        assertNull(postStaleChallenge.getConsumedAt());
+        assertEquals(newCh.getCodeDigest(), postStaleChallenge.getCodeDigest());
+
+        // 4. Assert replacement challenge can itself be successfully completed with fresh credentials
+        String finalFreshPassword = "FinalFreshPassword321@";
+        PasswordResetExecutionResult freshCompleteResult = persistence.executePasswordResetTransaction(
+                emailKey,
+                "ch-fresh-replacement",
+                newCh.getCodeDigest(),
+                "reset-op-fresh",
+                finalFreshPassword,
+                now
+        );
+
+        assertTrue(freshCompleteResult.isSuccess());
+        assertEquals(PasswordResetExecutionResult.Status.SUCCESS, freshCompleteResult.status());
+
+        // Assert final user state
+        String finalPassword = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertTrue(PasswordUtil.checkPassword(finalFreshPassword, finalPassword));
+        Long finalVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, TEST_USER_ID);
+        assertEquals(2L, finalVersion);
+        String finalOpId = jdbcTemplate.queryForObject("SELECT last_password_reset_operation_id FROM users WHERE id = ?", String.class, TEST_USER_ID);
+        assertEquals("reset-op-fresh", finalOpId);
+
+        // Assert final challenge state
+        PasswordResetOtpChallenge finalChallenge = persistence.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(PasswordResetChallengeStatus.CONSUMED, finalChallenge.getStatus());
+        assertTrue(finalChallenge.isPasswordUpdated());
+        assertNotNull(finalChallenge.getConsumedAt());
+        assertNull(finalChallenge.getCodeDigest());
     }
 
     @Test
@@ -1793,21 +1896,21 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @Test
     @Order(47)
-    @DisplayName("47. Production-style JpaTransactionManager configuration selection and integration")
+    @DisplayName("47. Production-style JpaTransactionManager configuration selection and real reset execution")
     void test47_productionStyleJpaTransactionManagerSelectionAndResetExecution() {
         requirePostgres();
-        EntityManagerFactory mockEmf = mock(EntityManagerFactory.class);
         new ApplicationContextRunner()
                 .withUserConfiguration(
-                        MinimalSpringContextConfig.class,
+                        RealJpaSpringContextConfig.class,
                         PostgresPasswordResetPersistenceConfiguration.class,
                         PasswordResetOtpChallengePersistence.class
                 )
                 .withPropertyValues(
                         "spring.profiles.active=postgres-migration",
-                        "app.security.postgres-password-reset.enabled=true"
+                        "app.security.postgres-password-reset.enabled=true",
+                        "app.security.postgres-password-reset.allow-isolated-test=true"
                 )
-                .withBean(EntityManagerFactory.class, () -> mockEmf)
+                .withSystemProperties("test.postgres.port=" + testPort)
                 .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -1818,6 +1921,73 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                     PostgresPasswordResetOtpChallengeStore storeBean = (PostgresPasswordResetOtpChallengeStore)
                             context.getBean("postgresPasswordResetOtpChallengeStore", PasswordResetOtpChallengeStore.class);
                     assertThat(storeBean.getTransactionManager()).isSameAs(txManager);
+
+                    // 1. Execute successful password-reset transaction through JpaTransactionManager and assert committed state
+                    String jpaUserId = "usr-jpa-tx-" + UUID.randomUUID().toString().substring(0, 8);
+                    String jpaUserEmail = "jpa.tx." + UUID.randomUUID().toString().substring(0, 8) + "@example.com";
+                    createTestUser(jpaUserId, jpaUserEmail, OLD_PASSWORD);
+
+                    String emailKey = persistence.emailKey(jpaUserEmail);
+                    String rawCode = "654321";
+                    String challengeId = "ch-jpa-tx-" + UUID.randomUUID().toString().substring(0, 8);
+                    PasswordResetOtpChallenge ch = buildChallenge(emailKey, challengeId, jpaUserId, rawCode, clock.instant());
+                    assertTrue(storeBean.tryInsert(ch));
+
+                    PasswordResetExecutionResult commitResult = storeBean.executePasswordResetTransaction(
+                            emailKey, challengeId, ch.getCodeDigest(), "op-jpa-tx-commit", NEW_PASSWORD, clock.instant());
+
+                    assertTrue(commitResult.isSuccess());
+                    assertEquals(PasswordResetExecutionResult.Status.SUCCESS, commitResult.status());
+                    assertNotNull(commitResult.challenge());
+                    assertEquals(jpaUserId, commitResult.challenge().getUserId());
+
+                    // Assert committed user state in database
+                    String updatedHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, jpaUserId);
+                    assertTrue(PasswordUtil.checkPassword(NEW_PASSWORD, updatedHash));
+                    Long updatedVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, jpaUserId);
+                    assertEquals(1L, updatedVersion);
+                    String lastOp = jdbcTemplate.queryForObject("SELECT last_password_reset_operation_id FROM users WHERE id = ?", String.class, jpaUserId);
+                    assertEquals("op-jpa-tx-commit", lastOp);
+
+                    // Assert committed challenge state in database
+                    PasswordResetOtpChallenge committedCh = storeBean.findByEmailKey(emailKey).orElseThrow();
+                    assertEquals(PasswordResetChallengeStatus.CONSUMED, committedCh.getStatus());
+                    assertTrue(committedCh.isPasswordUpdated());
+                    assertNotNull(committedCh.getConsumedAt());
+                    assertNull(committedCh.getCodeDigest());
+
+                    // 2. Execute rolled-back password-reset transaction through JpaTransactionManager and assert rollback state
+                    String rollbackUserId = "usr-jpa-rb-" + UUID.randomUUID().toString().substring(0, 8);
+                    String rollbackEmail = "jpa.rb." + UUID.randomUUID().toString().substring(0, 8) + "@example.com";
+                    createTestUser(rollbackUserId, rollbackEmail, OLD_PASSWORD);
+
+                    String rbEmailKey = persistence.emailKey(rollbackEmail);
+                    String rbChallengeId = "ch-jpa-rb-" + UUID.randomUUID().toString().substring(0, 8);
+                    PasswordResetOtpChallenge rbCh = buildChallenge(rbEmailKey, rbChallengeId, rollbackUserId, "789123", clock.instant());
+                    assertTrue(storeBean.tryInsert(rbCh));
+
+                    // Mismatched expected digest triggers failure and status.setRollbackOnly()
+                    PasswordResetExecutionResult rollbackResult = storeBean.executePasswordResetTransaction(
+                            rbEmailKey, rbChallengeId, "non-matching-digest", "op-jpa-tx-rollback", NEW_PASSWORD, clock.instant());
+
+                    assertFalse(rollbackResult.isSuccess());
+                    assertEquals(PasswordResetExecutionResult.Status.INVALID_CHALLENGE, rollbackResult.status());
+                    assertEquals("Code digest mismatch", rollbackResult.failureReason());
+
+                    // Assert rolled-back user state: password, token version, and operation ID remain untouched
+                    String rbHash = jdbcTemplate.queryForObject("SELECT password FROM users WHERE id = ?", String.class, rollbackUserId);
+                    assertTrue(PasswordUtil.checkPassword(OLD_PASSWORD, rbHash));
+                    Long rbVersion = jdbcTemplate.queryForObject("SELECT token_version FROM users WHERE id = ?", Long.class, rollbackUserId);
+                    assertEquals(0L, rbVersion);
+                    String rbLastOp = jdbcTemplate.queryForObject("SELECT last_password_reset_operation_id FROM users WHERE id = ?", String.class, rollbackUserId);
+                    assertNull(rbLastOp);
+
+                    // Assert rolled-back challenge state: challenge remains ACTIVE, password not updated, code digest retained
+                    PasswordResetOtpChallenge rolledBackCh = storeBean.findByEmailKey(rbEmailKey).orElseThrow();
+                    assertEquals(PasswordResetChallengeStatus.ACTIVE, rolledBackCh.getStatus());
+                    assertFalse(rolledBackCh.isPasswordUpdated());
+                    assertNull(rolledBackCh.getConsumedAt());
+                    assertNotNull(rolledBackCh.getCodeDigest());
                 });
     }
 }

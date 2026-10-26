@@ -1978,6 +1978,56 @@ Executed mandatory verification of the full 48-test `PostgresPasswordResetOtpPer
 **Next Task:**  
 `PG-017` — Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing (`NOT STARTED`).
 
+
+---
+
+### [2026-10-26T18:05:00-04:00] Real JPA Transaction Manager Integration Coverage & Proxy Rollback-Only Resolution
+
+Addressed audit finding regarding `PostgresPasswordResetOtpPersistenceIntegrationTest.test47_productionStyleJpaTransactionManagerSelectionAndResetExecution`:
+
+1. **Real JPA-Backed Spring Context Execution:**
+   - Introduced `RealJpaSpringContextConfig` configuring a real `LocalContainerEntityManagerFactoryBean` connected to the active disposable PostgreSQL database, scanning `com.lordgainsborough.restaurant.persistence.jpa.entity` with `HibernateJpaVendorAdapter` and `hibernate.hbm2ddl.auto=validate`.
+   - Expanded `test47` from a mock-based bean selection test into a full end-to-end JPA transaction execution test:
+     - Verified that Spring selects `JpaTransactionManager` as the primary `PlatformTransactionManager` bean.
+     - Verified that `storeBean.getTransactionManager()` is that same `JpaTransactionManager`.
+     - Executed a successful password reset through `storeBean.executePasswordResetTransaction(...)` and asserted committed database state: user password hash updated, `token_version` incremented to `1L`, `last_password_reset_operation_id` set, challenge transitioned to `CONSUMED`, `password_updated = true`, `consumed_at` recorded, and `code_digest` nullified.
+     - Executed a rolled-back password reset through `storeBean.executePasswordResetTransaction(...)` with mismatched digest and asserted rolled-back database state: user password untouched, `token_version` remains `0L`, `last_password_reset_operation_id` remains `null`, challenge remains `ACTIVE`, `password_updated = false`, `consumed_at` null, and `code_digest` retained.
+
+2. **Resolution of Programmatic Rollback-Only with Declarative Proxy Interception:**
+   - In `PostgresPasswordResetOtpChallengeStore.java`, removed redundant declarative `@Transactional(transactionManager = "transactionManager")` from `executePasswordResetTransaction`.
+   - **Architectural Rationale:** `executePasswordResetTransaction` manages its transaction programmatically via `transactionTemplate.execute(...)`. On validation failure (e.g. digest mismatch), the callback marks `status.setRollbackOnly()` and returns `PasswordResetExecutionResult.failure(...)` rather than throwing an exception. When the method was also annotated with `@Transactional`, Spring's outer CGLIB `TransactionInterceptor` intercepted the normal return, attempted to commit the transaction, and threw `UnexpectedRollbackException: Transaction silently rolled back because it has been marked as rollback-only`. Removing `@Transactional` from `executePasswordResetTransaction` allows programmatic transaction rollback to return failure values cleanly without exception propagation. Other store methods retain `@Transactional`, maintaining Spring AOP proxy creation verified by `test29_springTransactionalProxyVerified`.
+
+3. **Verification Results:**
+   - `PostgresPasswordResetOtpPersistenceIntegrationTest` (48 tests): 48 run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 57.58s).
+   - `MongoPasswordResetOtpChallengeStoreUnitTest` & `PasswordResetSupportServicesTest` (11 tests): 11 run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 4.19s).
+
+
+---
+
+### [2026-10-26T18:18:00-04:00] Genuinely Competing Eligible Completion vs Fresh Replacement Race & Stale Isolation
+
+Addressed audit finding regarding `PostgresPasswordResetOtpPersistenceIntegrationTest.test43_concurrentReplaceExpiredVersusCompleteRace`:
+
+1. **Resolution of Premature Expiration Ineligibility:**
+   - Previous implementation initialized the challenge as pre-expired (`challengeExpiresAt = now - 1s`), rendering completion ineligible prior to concurrency.
+   - Refactored `test43` so the initial challenge `oldCh` is fully `ACTIVE` and unexpired (`challengeExpiresAt = now + 30m`, `codeExpiresAt = now + 10m`), making completion genuinely eligible.
+
+2. **Genuine Competing State Transition Race:**
+   - Raced eligible completion of `oldCh` (`executePasswordResetTransaction`) against creation of a fresh challenge `newCh` (`tryCreateOrReplaceExpired`).
+   - Verified that completion succeeds cleanly, mutating the user password and marking `oldCh` as `CONSUMED`.
+   - Verified that `newCh` atomically replaces the consumed challenge once `status = 'CONSUMED'`, creating a clean `ACTIVE` replacement challenge.
+
+3. **Stale Operation Isolation Assertion:**
+   - Executed a delayed/replay older operation attempting to complete using `oldCh`'s credentials against the replacement.
+   - Verified that the older operation is rejected (`INVALID_CHALLENGE`, "Challenge ID mismatch").
+   - Verified that the user credentials (`password`, `token_version`, `last_password_reset_operation_id`) and replacement challenge (`ACTIVE`, `consumed_at = null`, `code_digest` intact) remain completely unaffected by the stale operation.
+   - Executed legitimate completion of the replacement challenge `newCh` with fresh credentials, verifying complete end-to-end viability (`token_version` incremented to `2L`, `status = CONSUMED`).
+
+4. **Verification Results:**
+   - `PostgresPasswordResetOtpPersistenceIntegrationTest#test43` (1 test): 1 run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 13.91s).
+   - Full `PostgresPasswordResetOtpPersistenceIntegrationTest` (48 tests): 48 run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 58.82s).
+   - `MongoPasswordResetOtpChallengeStoreUnitTest` & `PasswordResetSupportServicesTest` (11 tests): 11 run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 4.35s).
+
 ---
 
 ## Agent Execution Rules
