@@ -811,19 +811,24 @@ public class PostgresAbuseCounterStoreIntegrationTest {
 
     @Test
     @Order(33)
-    @DisplayName("Req 33: Production-like configuration refuses global clear with UnsupportedOperationException")
+    @DisplayName("Req 33: Production-like configuration refuses global clear even if system property is set")
     void test33_clearInProductionConfigRefusesGlobalClear() {
-        PostgresAbuseCounterStore prodStore = new PostgresAbuseCounterStore(dataSource); // default allowClear = false
-        assertThat(prodStore.isAllowClear()).isFalse();
+        System.setProperty("app.postgres.abuse-store.allow-clear", "true");
+        try {
+            PostgresAbuseCounterStore prodStore = new PostgresAbuseCounterStore(dataSource); // must strictly default to false
+            assertThat(prodStore.isAllowClear()).isFalse();
 
-        assertThatThrownBy(prodStore::clear)
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Global clearing of PostgreSQL abuse counters is disabled by default");
+            assertThatThrownBy(prodStore::clear)
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("Global clearing of PostgreSQL abuse counters is disabled in runtime code");
+        } finally {
+            System.clearProperty("app.postgres.abuse-store.allow-clear");
+        }
     }
 
     @Test
     @Order(34)
-    @DisplayName("Req 34: Test-mode clear removes records safely without table truncation")
+    @DisplayName("Req 34: Test-mode clear removes records safely on verified disposable test database")
     void test34_clearInTestModeRemovesRecords() throws Exception {
         PostgresAbuseCounterStore testStore = new PostgresAbuseCounterStore(dataSource, true);
         Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
@@ -840,6 +845,21 @@ public class PostgresAbuseCounterStoreIntegrationTest {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getInt(1)).isEqualTo(0);
         }
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("Req 34b: clear() rejects execution on protected or non-disposable database even with allowClear = true")
+    void test34b_clearRefusesOnProtectedOrNonTestDatabase() {
+        PGSimpleDataSource adminDs = new PGSimpleDataSource();
+        adminDs.setUrl("jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable");
+        adminDs.setUser("postgres");
+        adminDs.setPassword("postgres");
+
+        PostgresAbuseCounterStore storeOnAdminDb = new PostgresAbuseCounterStore(adminDs, true);
+        assertThatThrownBy(storeOnAdminDb::clear)
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("Refusing to execute clear() on protected database: postgres");
     }
 
     // =========================================================================

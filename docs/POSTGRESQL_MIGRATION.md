@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T03:13:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T03:18:00-04:00 (America/Toronto)  
 
 ---
 
@@ -360,7 +360,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
-| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundaries; production-safe `clear()`; explicit backend selection via `@Primary`; 38/38 tests; full 13-suite regression passed (276/276 tests) |
+| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; 39/39 tests; full 13-suite regression passed (276/276 tests) |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
@@ -1576,6 +1576,22 @@ Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `Post
   2. **Explicit Primary Backend Selection:** Designated `postgresAbuseCounterStore` as `@Primary` and aliased with `@Bean(name = {"postgresAbuseCounterStore", "abuseCounterStore"})` in `PostgresAbuseCounterStoreConfiguration`. When opt-in PostgreSQL is activated, unqualified injection of `AbuseCounterStore` resolves explicitly and unambiguously to `PostgresAbuseCounterStore`.
   3. **Preserved Default MongoDB Behavior:** When `app.security.postgres-abuse-store.enabled` is missing or false (default runtime), `PostgresAbuseCounterStoreConfiguration` does not load, leaving `MongoAbuseCounterStore` as the sole active bean.
   4. **Combined Context Integration Tests:** Added `test37_combinedContextWithBothStoresResolvesUnambiguouslyToPostgres` and `test38_defaultContextWithMongoStoreResolvesToMongo` in `PostgresAbuseCounterStoreIntegrationTest` demonstrating that both stores coexist simultaneously in the same Spring context, unqualified injection resolves to `@Primary` PostgreSQL, named qualifiers resolve both implementations, and default context resolves to MongoDB.
+
+---
+
+### [2026-10-26T03:18:00-04:00] PG-013 Destructive Operation Guarding: Verified Disposable Database Tie for clear()
+
+**Overview & Code Review Finding Addressed:**
+- **Finding:** `PostgresAbuseCounterStore` allowed global deletion using a constructor flag or the JVM system property `app.postgres.abuse-store.allow-clear`. The permission was not intrinsically tied to a verified disposable database, posing a risk of catastrophic rate-limit data wipe if misconfigured against a live or production database.
+- **Resolution:**
+  1. **Removed System Property Override:** Default constructors `PostgresAbuseCounterStore(JdbcTemplate)` and `PostgresAbuseCounterStore(DataSource)` strictly set `allowClear = false`. The JVM property `app.postgres.abuse-store.allow-clear` has been completely eliminated.
+  2. **Intrinsically Verified Disposable Database Check:** `clear()` executes `assertDisposableTestDatabase()`, executing `SELECT current_database()`:
+     - Rejects system and production databases (`postgres`, `template0`, `template1`, `public`, `lordgainsborough`, `restaurant`) with `SecurityException`.
+     - Validates that the active database matches recognized disposable test patterns (`pg_abuse_store_test_`, `*_test_*`, etc.).
+     - Blocks global deletion even if `allowClear = true` was passed, unless the target database is positively confirmed to be a disposable test database.
+  3. **Updated Verification Tests:**
+     - Updated `test33` in `PostgresAbuseCounterStoreIntegrationTest` asserting that setting `-Dapp.postgres.abuse-store.allow-clear=true` does not enable `allowClear` and `clear()` fails with `UnsupportedOperationException`.
+     - Added `test34b` asserting that even with `allowClear = true`, calling `clear()` against a protected database (e.g. `postgres`) throws `SecurityException: Refusing to execute clear() on protected database: postgres`.
 
 **Next Task:**  
 `PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).

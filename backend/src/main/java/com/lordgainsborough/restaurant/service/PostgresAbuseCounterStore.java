@@ -13,6 +13,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * PG-013: PostgreSQL implementation of {@link AbuseCounterStore}.
@@ -38,6 +39,10 @@ import java.util.Objects;
 public class PostgresAbuseCounterStore implements AbuseCounterStore {
 
     private static final Logger log = LoggerFactory.getLogger(PostgresAbuseCounterStore.class);
+
+    private static final Set<String> FORBIDDEN_DATABASES = Set.of(
+            "postgres", "template0", "template1", "public", "lordgainsborough", "restaurant"
+    );
 
     private static final String SQL_INCREMENT = """
             INSERT INTO signup_abuse_limits (id, bucket_type, subject_hash, count, window_start, expires_at)
@@ -72,12 +77,11 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
     }
 
     public PostgresAbuseCounterStore(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, Boolean.getBoolean("app.postgres.abuse-store.allow-clear"));
+        this(jdbcTemplate, false);
     }
 
     public PostgresAbuseCounterStore(DataSource dataSource) {
-        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")),
-                Boolean.getBoolean("app.postgres.abuse-store.allow-clear"));
+        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")), false);
     }
 
     @Override
@@ -154,12 +158,37 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
     public void clear() {
         if (!allowClear) {
             throw new UnsupportedOperationException(
-                    "Global clearing of PostgreSQL abuse counters is disabled by default to prevent catastrophic rate-limit wipe. "
-                            + "Clearing is only authorized in explicitly configured disposable test environments."
+                    "Global clearing of PostgreSQL abuse counters is disabled in runtime code to prevent catastrophic rate-limit wipe. "
+                            + "Clearing is only permitted in explicitly constructed test instances on verified disposable test databases."
             );
         }
+        assertDisposableTestDatabase();
         jdbcTemplate.update("DELETE FROM signup_abuse_limits");
-        log.info("Cleared all records from signup_abuse_limits (authorized test environment).");
+        log.info("Cleared all records from signup_abuse_limits on verified disposable test database.");
+    }
+
+    private void assertDisposableTestDatabase() {
+        String currentDb;
+        try {
+            currentDb = jdbcTemplate.queryForObject("SELECT current_database()", String.class);
+        } catch (Exception e) {
+            throw new SecurityException("Failed to verify current database name before clearing: " + e.getMessage(), e);
+        }
+
+        if (currentDb == null || currentDb.isBlank()) {
+            throw new SecurityException("Refusing to execute clear(): current database name is empty");
+        }
+
+        String dbLower = currentDb.toLowerCase();
+        if (FORBIDDEN_DATABASES.contains(dbLower)) {
+            throw new SecurityException("Refusing to execute clear() on protected database: " + currentDb);
+        }
+
+        if (!dbLower.matches("^[a-z0-9_]{5,63}$") || (!dbLower.startsWith("pg_abuse_store_test_") && !dbLower.contains("_test_"))) {
+            throw new SecurityException(
+                    "Refusing to execute clear(): database '" + currentDb + "' is not a recognized disposable test database."
+            );
+        }
     }
 
     public boolean isAllowClear() {
