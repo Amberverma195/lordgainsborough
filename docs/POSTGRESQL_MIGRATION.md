@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T22:01:30-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T22:12:00-04:00 (America/Toronto)  
 
 ---
 
@@ -353,7 +353,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-003` | Phase 2 | Create `V1__init_relational_schema.sql` with full relational DDL, constraints, and indexes | `COMPLETED` | 2026-10-25T19:14:28-04:00 | 2026-10-25T19:44:21-04:00 | 17 tables, 55 indexes, 72/72 assertions passed on PostgreSQL 17.11 |
 | `PG-004` | Phase 5 | Create core domain JPA entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`) | `COMPLETED` | 2026-10-25T21:02:53-04:00 | 2026-10-25T21:08:45-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 7/7 JPA integration tests passed |
 | `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 18/18 JPA integration tests passed |
-| `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `NOT STARTED` | — | — | Unit tests for cart & review mappings |
+| `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 20/20 JPA integration tests passed |
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `NOT STARTED` | — | — | Entity validation tests |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `NOT STARTED` | — | — | Entity validation tests |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `NOT STARTED` | — | — | Repository compilation and method checks |
@@ -668,6 +668,67 @@ Hardened relationship helper methods, collection replacement, identifier equalit
 
 **Next Task:**  
 `PG-006` — Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`).
+
+### [2026-10-25T22:12:00-04:00] — Task PG-006: Cart, Review and Reservation JPA Entities
+
+**Task:** PG-006 — Create cart and review JPA entities (`JpaCart`, `JpaCartItem`, `JpaOrderReview`, `JpaOrderReviewItem`, `JpaReservation`)  
+**Status:** COMPLETED  
+**Started At:** 2026-10-25T22:04:44-04:00  
+**Completed At:** 2026-10-25T22:12:00-04:00  
+
+**Implementation Summary:**  
+Implemented the five operational JPA entities for Phase 6 in the dedicated package `com.lordgainsborough.restaurant.persistence.jpa.entity` matching the PostgreSQL V1 schema:
+1. **`JpaCart` (`carts`):**
+   - Mapped `id` (primary key `VARCHAR(64)`), `user` via `@OneToOne(fetch = FetchType.LAZY) @JoinColumn(name = "user_id", nullable = false, unique = true)` referencing `JpaUser`, and `updatedAt` (`Instant` mapped to `TIMESTAMP WITH TIME ZONE`).
+   - Modeled `@OneToMany(mappedBy = "cart", cascade = CascadeType.ALL, orphanRemoval = true) @OrderColumn(name = "item_index", nullable = false)` with safe collection synchronization (`setItems`), self-assignment guard, safe child removal (`removeItem`), non-null ID equality, and stable hash code.
+   - Preserved 7-day TTL expiration semantics in the entity layer (`TTL_SECONDS = 7 * 24 * 60 * 60`, `isExpired()`, `isExpired(Instant)`), without automatic callbacks or eager scheduled cleanup.
+2. **`JpaCartItem` (`cart_items`):**
+   - Mapped `id`, `cart` (`@ManyToOne @JoinColumn(name = "cart_id", nullable = false)`), `menuItemId`, `name`, `description`, `price` (`BigDecimal` precision 10, scale 2), `category`, `image`, and `quantity`.
+   - Maintained read-only `itemIndex` with package-private setter, strictly derived from parent collection ordering.
+   - Omitted foreign key to `menu_items` to preserve historical cart item snapshots.
+3. **`JpaOrderReview` (`order_reviews`):**
+   - Mapped `id`, `order` via `@JsonIgnore @OneToOne(fetch = FetchType.LAZY) @JoinColumn(name = "order_id", nullable = false, unique = true)` referencing `JpaCustomerOrder` (enforcing single review per order and preventing circular JSON serialization).
+   - Mapped `customerName`, `customerEmail`, `customerPhone`, `status` (defaulting to `"PENDING"`), `createdAt`, and `updatedAt` as `LocalDateTime`.
+   - Modeled `@OneToMany(mappedBy = "review", cascade = CascadeType.ALL, orphanRemoval = true) @OrderColumn(name = "item_index", nullable = false)` for review items with safe collection synchronization.
+4. **`JpaOrderReviewItem` (`order_review_items`):**
+   - Mapped `id`, `review` (`@ManyToOne @JoinColumn(name = "review_id", nullable = false)`), `menuItemId`, `itemName`, `rating` (`int` constrained 1–5), and `description`.
+   - Maintained read-only `itemIndex` with package-private setter; omitted mandatory FK to `menu_items`.
+5. **`JpaReservation` (`reservations`):**
+   - Mapped `id`, `name`, `email`, `phone`, `date` (`String`), `time` (`String`), `partySize` (`int`), `specialRequests`, `status` (defaulting to `"PENDING"`), and `createdAt` (`LocalDateTime`).
+   - Supports guest reservations without user foreign key; respects database check constraints (`party_size > 0`).
+
+**Verification:**  
+- Created integration test suite `backend/src/test/java/com/lordgainsborough/restaurant/persistence/jpa/CartReviewReservationJpaIntegrationTest.java` (20 tests) executed against a disposable PostgreSQL 17.11 instance initialized via Flyway V1:
+  1. Hibernate `ddl-auto=validate` passed against the expanded 13-entity JPA metamodel.
+  2. Cart persisted with an existing user.
+  3. Unique user/cart relationship enforced (duplicate user cart rejected).
+  4. Cart items cascade-persisted and reloaded in exact list order.
+  5. Cart items appended, reordered, and removed with orphan deletion.
+  6. Cart deletion cascaded to cart items.
+  7. User deletion cascaded to cart and cart items (`ON DELETE CASCADE`).
+  8. `updatedAt` persisted as `Instant` with UTC timestamp semantics.
+  9. Seven-day expiration calculation verified against MongoDB equivalent semantics.
+  10. Review persisted against an existing customer order.
+  11. Second review for the same order rejected by unique constraint.
+  12. Review items persisted and reloaded in list order.
+  13. Review item orphan removal verified on collection replacement.
+  14. Customer order deletion cascaded to review and review items (`ON DELETE CASCADE`).
+  15. Invalid review ratings (< 1 or > 5) rejected by database check constraint `chk_review_items_rating`.
+  16. Guest reservation persisted successfully without user reference.
+  17. Reservation date and time string values round-tripped with exact fidelity.
+  18. Invalid party size (<= 0) rejected by database check constraint `chk_reservations_party_size`.
+  19. `BigDecimal` cart item price retained exact precision (10, 2).
+  20. Spring Boot context booted with all 13 JPA entities validated against PostgreSQL schema.
+- Full regression suite execution across all 5 test suites (`PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`):
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest -Dtest.postgres.port=54337`
+  - Results: 52 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 15.329s).
+- Clean compilation: `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 112 source files compiled cleanly).
+
+**MongoDB Compatibility:**  
+- Confirmed intact: existing MongoDB model classes (`Cart`, `OrderReview`, `Reservation`), repositories, and services remain completely untouched and operational.
+
+**Next Task:**  
+`PG-007` — Create security challenge JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`).
 
 ---
 
