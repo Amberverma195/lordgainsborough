@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T02:55:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T03:10:00-04:00 (America/Toronto)  
 
 ---
 
@@ -359,8 +359,8 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
-| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 40/40 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (239/239 tests) |
-| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundary semantics; production-safe `clear()`; 36/36 tests passed; full 13-suite regression passed (275/275 tests) |
+| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
+| `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T02:53:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; metadata consistency guard; BIGINT overflow handling; `getCount` exact boundary semantics; production-safe `clear()`; 36/36 tests passed; full 13-suite regression passed (276/276 tests) |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
@@ -1530,6 +1530,40 @@ Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `Post
 - **MongoDB Initializer Regression:**
   - `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.875s).
 - **Combined Repository Total:** **291 tests run, 0 failures, 0 errors, 0 skipped**.
+
+---
+
+### [2026-10-26T03:10:00-04:00] PG-012/PG-013 Test Infrastructure Hardening: Disposable Database Lifecycle in Startup Activation Suite
+
+**Overview & Code Review Finding Addressed:**
+- **Finding:** `PostgresCatalogStartupActivationIntegrationTest.java` used fixed database names (`pg_seed_activation_test_db`, `pg_seed_coexist_test_db`) and executed unconditional `DROP DATABASE IF EXISTS ... WITH (FORCE)` prior to creation. This could delete a preexisting database or conflict with parallel test runs.
+- **Resolution:**
+  1. **Dynamic Identifier Generation:** Configured `TEST_DB_PREFIX = "pg_seed_act_test_"` and generated randomized, UUID-based unique database names for both the primary activation test database and coexisting transaction manager test database.
+  2. **`DisposableDatabaseSession` Encapsulation:** Implemented lifecycle tracking with `createdAndOwned = true` strictly upon successful `CREATE DATABASE`.
+  3. **Conditional Destruction & Protection:** `drop()` skips execution if ownership was not verified, terminates active connections cleanly, and strictly validates that database names match expected prefix/regex and are not protected/system databases (`postgres`, `template0`, `template1`, `public`, `lordgainsborough`, `restaurant`).
+  4. **Dedicated Verification:** Added `test05_disposableDatabaseSession_unownedAndCreationFailureGuardrails` asserting that unowned sessions refuse drop, failed provisions do not grant ownership, and protected database names are rejected.
+
+**Verification Results:**
+- **Targeted Startup Activation Suite:**
+  - `PostgresCatalogStartupActivationIntegrationTest`: **5 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 13.60s).
+- **Full 13-Suite PostgreSQL Regression Breakdown:**
+  1. `PostgresConfigurationSmokeTest`: **3** tests
+  2. `FlywayMigrationIntegrationTest`: **4** tests
+  3. `CoreJpaEntityIntegrationTest`: **7** tests
+  4. `OrderJpaEntityIntegrationTest`: **18** tests
+  5. `CartReviewReservationJpaIntegrationTest`: **26** tests
+  6. `SecurityChallengeJpaIntegrationTest`: **26** tests
+  7. `AbuseAndLoginFailureJpaIntegrationTest`: **25** tests
+  8. `CoreJpaRepositoryIntegrationTest`: **25** tests
+  9. `OperationalJpaRepositoryIntegrationTest`: **31** tests
+  10. `SecurityJpaRepositoryIntegrationTest`: **34** tests
+  11. `PostgresCatalogInitializerIntegrationTest`: **36** tests
+  12. `PostgresCatalogStartupActivationIntegrationTest`: **5** tests
+  13. `PostgresAbuseCounterStoreIntegrationTest`: **36** tests
+  - **Full 13-Suite Regression Total:** **276 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 1m 16s).
+- **MongoDB Initializer Regression:**
+  - `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.875s).
+- **Combined Repository Total:** **292 tests run, 0 failures, 0 errors, 0 skipped**.
 
 **Next Task:**  
 `PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).
