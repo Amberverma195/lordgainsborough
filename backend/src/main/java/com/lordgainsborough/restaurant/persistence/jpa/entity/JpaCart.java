@@ -1,5 +1,7 @@
 package com.lordgainsborough.restaurant.persistence.jpa.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -31,6 +33,7 @@ public class JpaCart {
     @Column(name = "id", length = 64, nullable = false)
     private String id;
 
+    @JsonIgnore
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false, unique = true)
     private JpaUser user;
@@ -69,6 +72,30 @@ public class JpaCart {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Touches the cart by advancing {@link #updatedAt} to {@link Instant#now()}.
+     * <p>
+     * In JPA/Hibernate, modifying child entities (e.g. adding, removing, updating,
+     * or reordering cart items) does not dirty the parent entity row and therefore
+     * does not trigger the {@code @PreUpdate} lifecycle callback on {@code JpaCart}.
+     * Calling {@code touch()} ensures the parent entity is marked dirty within the
+     * active persistence context, causing an {@code UPDATE carts SET updated_at = ...}
+     * upon transaction flush/commit and resetting the 7-day TTL countdown.
+     * </p>
+     */
+    public void touch() {
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Touches the cart with a specific timestamp.
+     *
+     * @param timestamp the new instant to set
+     */
+    public void touch(Instant timestamp) {
+        this.updatedAt = timestamp != null ? timestamp : Instant.now();
+    }
+
     public boolean isExpired() {
         if (this.updatedAt == null) {
             return true;
@@ -87,6 +114,7 @@ public class JpaCart {
         if (item != null) {
             items.add(item);
             item.setCart(this);
+            touch();
         }
     }
 
@@ -95,15 +123,35 @@ public class JpaCart {
             if (item.getCart() == this) {
                 item.setCart(null);
             }
+            touch();
+        }
+    }
+
+    /**
+     * Reorders an item within the cart from one index to another, touching the cart
+     * so that the updated timestamp advances.
+     *
+     * @param fromIndex source position
+     * @param toIndex   target position
+     */
+    public void reorderItems(int fromIndex, int toIndex) {
+        if (fromIndex >= 0 && fromIndex < items.size() && toIndex >= 0 && toIndex < items.size()) {
+            if (fromIndex != toIndex) {
+                JpaCartItem moved = items.remove(fromIndex);
+                items.add(toIndex, moved);
+                touch();
+            }
         }
     }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
+    @JsonIgnore
     public JpaUser getUser() { return user; }
     public void setUser(JpaUser user) { this.user = user; }
 
+    @JsonProperty("userId")
     public String getUserId() { return user != null ? user.getId() : null; }
 
     public Instant getUpdatedAt() { return updatedAt; }
@@ -123,6 +171,7 @@ public class JpaCart {
                     existing.setCart(null);
                 }
             }
+            touch();
             return;
         }
 
@@ -160,6 +209,7 @@ public class JpaCart {
                 }
             }
         }
+        touch();
     }
 
     @Override

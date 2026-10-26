@@ -1,5 +1,6 @@
 package com.lordgainsborough.restaurant.persistence.jpa.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -21,6 +22,7 @@ public class JpaCartItem {
     @Column(name = "id", length = 64, nullable = false)
     private String id;
 
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "cart_id", nullable = false)
     private JpaCart cart;
@@ -81,6 +83,7 @@ public class JpaCartItem {
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
+    @JsonIgnore
     public JpaCart getCart() { return cart; }
     public void setCart(JpaCart cart) { this.cart = cart; }
 
@@ -97,22 +100,64 @@ public class JpaCartItem {
     public void setMenuItemId(String menuItemId) { this.menuItemId = menuItemId; }
 
     public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
+    public void setName(String name) {
+        if (!Objects.equals(this.name, name)) {
+            this.name = name;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     public String getDescription() { return description; }
-    public void setDescription(String description) { this.description = description; }
+    public void setDescription(String description) {
+        if (!Objects.equals(this.description, description)) {
+            this.description = description;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     public BigDecimal getPrice() { return price; }
-    public void setPrice(BigDecimal price) { this.price = price; }
+    public void setPrice(BigDecimal price) {
+        if (!Objects.equals(this.price, price)) {
+            this.price = price;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     public String getCategory() { return category; }
-    public void setCategory(String category) { this.category = category; }
+    public void setCategory(String category) {
+        if (!Objects.equals(this.category, category)) {
+            this.category = category;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     public String getImage() { return image; }
-    public void setImage(String image) { this.image = image; }
+    public void setImage(String image) {
+        if (!Objects.equals(this.image, image)) {
+            this.image = image;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     public int getQuantity() { return quantity; }
-    public void setQuantity(int quantity) { this.quantity = quantity; }
+    public void setQuantity(int quantity) {
+        if (this.quantity != quantity) {
+            this.quantity = quantity;
+            if (this.cart != null) {
+                this.cart.touch();
+            }
+        }
+    }
 
     @Override
     public boolean equals(Object o) {

@@ -14,6 +14,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.EntityTransaction;
 import jakarta.persistence.PersistenceException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -1018,4 +1019,359 @@ public class CartReviewReservationJpaIntegrationTest {
             assertThat(springEmf.getMetamodel().entity(JpaReservation.class)).isNotNull();
         });
     }
+
+    @Test
+    @Order(21)
+    @DisplayName("Cart Touch on Add Item: Adding an item without changing parent scalar fields advances carts.updated_at")
+    void test21_cartTimestampAdvances_onAddItemWithoutParentScalarChanges() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String cartId = "cart-touch-add-" + UUID.randomUUID();
+        Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MILLIS);
+
+        try {
+            tx.begin();
+            JpaUser user = createAndPersistUser(em, "touch-add");
+            JpaCart cart = new JpaCart(cartId, user);
+            cart.setUpdatedAt(pastTime);
+            em.persist(cart);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Verify initial past timestamp via JDBC
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getTimestamp("updated_at").toInstant().truncatedTo(ChronoUnit.MILLIS)).isEqualTo(pastTime);
+        }
+
+        // Fresh persistence context: add item without modifying any parent scalar fields
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCart loaded = em.find(JpaCart.class, cartId);
+            assertThat(loaded).isNotNull();
+            // Add item via helper; do NOT set any scalar fields on loaded
+            loaded.addItem(new JpaCartItem("m-touch-1", "Crispy Calamari", "Appetizer", new BigDecimal("14.50"), "Starters", null, 2));
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Direct SQL assertion: carts.updated_at must have advanced
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+            assertThat(rs.next()).isTrue();
+            Instant dbUpdatedAt = rs.getTimestamp("updated_at").toInstant();
+            assertThat(dbUpdatedAt).isAfter(pastTime);
+        }
+    }
+
+    @Test
+    @Order(22)
+    @DisplayName("Cart Touch on Remove Item: Removing an item without changing parent scalar fields advances carts.updated_at")
+    void test22_cartTimestampAdvances_onRemoveItem() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String cartId = "cart-touch-rm-" + UUID.randomUUID();
+        Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MILLIS);
+
+        try {
+            tx.begin();
+            JpaUser user = createAndPersistUser(em, "touch-rm");
+            JpaCart cart = new JpaCart(cartId, user);
+            cart.setUpdatedAt(pastTime);
+            cart.addItem(new JpaCartItem("m-rm-1", "Item A", "Desc A", new BigDecimal("10.00"), "Cat", null, 1));
+            cart.addItem(new JpaCartItem("m-rm-2", "Item B", "Desc B", new BigDecimal("20.00"), "Cat", null, 1));
+            // Reset to pastTime after initial addItem calls
+            cart.setUpdatedAt(pastTime);
+            em.persist(cart);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Fresh persistence context: remove an item
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCart loaded = em.find(JpaCart.class, cartId);
+            assertThat(loaded).isNotNull();
+            assertThat(loaded.getItems()).hasSize(2);
+            loaded.removeItem(loaded.getItems().get(0));
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Direct SQL assertion: carts.updated_at advanced in database
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+            assertThat(rs.next()).isTrue();
+            Instant dbUpdatedAt = rs.getTimestamp("updated_at").toInstant();
+            assertThat(dbUpdatedAt).isAfter(pastTime);
+        }
+    }
+
+    @Test
+    @Order(23)
+    @DisplayName("Cart Touch on Quantity Change: Modifying cart item quantity advances carts.updated_at")
+    void test23_cartTimestampAdvances_onChangeItemQuantity() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String cartId = "cart-touch-qty-" + UUID.randomUUID();
+        Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MILLIS);
+
+        try {
+            tx.begin();
+            JpaUser user = createAndPersistUser(em, "touch-qty");
+            JpaCart cart = new JpaCart(cartId, user);
+            cart.setUpdatedAt(pastTime);
+            cart.addItem(new JpaCartItem("m-qty-1", "Steak", "Sirloin", new BigDecimal("32.00"), "Mains", null, 1));
+            cart.setUpdatedAt(pastTime);
+            em.persist(cart);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Fresh persistence context: modify item quantity directly
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCart loaded = em.find(JpaCart.class, cartId);
+            assertThat(loaded).isNotNull();
+            JpaCartItem item = loaded.getItems().get(0);
+            item.setQuantity(5); // Mutates child quantity; automatically touches parent
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Direct SQL assertion: item quantity is 5 and carts.updated_at advanced
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            try (ResultSet rs = stmt.executeQuery("SELECT quantity FROM cart_items WHERE cart_id = '" + cartId + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt("quantity")).isEqualTo(5);
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+                assertThat(rs.next()).isTrue();
+                Instant dbUpdatedAt = rs.getTimestamp("updated_at").toInstant();
+                assertThat(dbUpdatedAt).isAfter(pastTime);
+            }
+        }
+    }
+
+    @Test
+    @Order(24)
+    @DisplayName("Cart Touch on Price Change: Modifying cart item price advances carts.updated_at")
+    void test24_cartTimestampAdvances_onChangeItemPrice() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String cartId = "cart-touch-price-" + UUID.randomUUID();
+        Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MILLIS);
+
+        try {
+            tx.begin();
+            JpaUser user = createAndPersistUser(em, "touch-price");
+            JpaCart cart = new JpaCart(cartId, user);
+            cart.setUpdatedAt(pastTime);
+            cart.addItem(new JpaCartItem("m-price-1", "Roast Beef", "Special", new BigDecimal("25.00"), "Mains", null, 1));
+            cart.setUpdatedAt(pastTime);
+            em.persist(cart);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Fresh persistence context: modify item price directly
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCart loaded = em.find(JpaCart.class, cartId);
+            assertThat(loaded).isNotNull();
+            JpaCartItem item = loaded.getItems().get(0);
+            item.setPrice(new BigDecimal("29.95")); // Repricing touches parent cart
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Direct SQL assertion: item price is 29.95 and carts.updated_at advanced
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            try (ResultSet rs = stmt.executeQuery("SELECT price FROM cart_items WHERE cart_id = '" + cartId + "'")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getBigDecimal("price")).isEqualByComparingTo(new BigDecimal("29.95"));
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+                assertThat(rs.next()).isTrue();
+                Instant dbUpdatedAt = rs.getTimestamp("updated_at").toInstant();
+                assertThat(dbUpdatedAt).isAfter(pastTime);
+            }
+        }
+    }
+
+    @Test
+    @Order(25)
+    @DisplayName("Cart Touch on Reorder: Reordering items advances carts.updated_at and persists new order")
+    void test25_cartTimestampAdvances_onReorderItems() throws Exception {
+        EntityManager em = emf.createEntityManager();
+        EntityTransaction tx = em.getTransaction();
+        String cartId = "cart-touch-reorder-" + UUID.randomUUID();
+        String itemAId = "citem-a-" + UUID.randomUUID();
+        String itemBId = "citem-b-" + UUID.randomUUID();
+        String itemCId = "citem-c-" + UUID.randomUUID();
+        Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MILLIS);
+
+        try {
+            tx.begin();
+            JpaUser user = createAndPersistUser(em, "touch-reorder");
+            JpaCart cart = new JpaCart(cartId, user);
+            cart.setUpdatedAt(pastTime);
+            cart.addItem(new JpaCartItem(itemAId, "m-a", "A", "Desc", new BigDecimal("10.00"), "Cat", null, 1));
+            cart.addItem(new JpaCartItem(itemBId, "m-b", "B", "Desc", new BigDecimal("20.00"), "Cat", null, 1));
+            cart.addItem(new JpaCartItem(itemCId, "m-c", "C", "Desc", new BigDecimal("30.00"), "Cat", null, 1));
+            cart.setUpdatedAt(pastTime);
+            em.persist(cart);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Fresh persistence context: reorder items (move item 0 to index 2: [B, C, A])
+        em = emf.createEntityManager();
+        tx = em.getTransaction();
+        try {
+            tx.begin();
+            JpaCart loaded = em.find(JpaCart.class, cartId);
+            assertThat(loaded).isNotNull();
+            loaded.reorderItems(0, 2);
+            em.flush();
+            tx.commit();
+        } catch (Exception e) {
+            if (tx.isActive()) tx.rollback();
+            throw e;
+        } finally {
+            em.close();
+        }
+
+        // Direct SQL assertion: carts.updated_at advanced and positions updated in database
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            try (ResultSet rs = stmt.executeQuery("SELECT updated_at FROM carts WHERE id = '" + cartId + "'")) {
+                assertThat(rs.next()).isTrue();
+                Instant dbUpdatedAt = rs.getTimestamp("updated_at").toInstant();
+                assertThat(dbUpdatedAt).isAfter(pastTime);
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT id, item_index FROM cart_items WHERE cart_id = '" + cartId + "' ORDER BY item_index")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(itemBId);
+                assertThat(rs.getInt("item_index")).isEqualTo(0);
+
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(itemCId);
+                assertThat(rs.getInt("item_index")).isEqualTo(1);
+
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("id")).isEqualTo(itemAId);
+                assertThat(rs.getInt("item_index")).isEqualTo(2);
+
+                assertThat(rs.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    @Order(26)
+    @DisplayName("Jackson Serialization Safeguards: Serializes userId without leaking user credentials or causing circular recursion")
+    void test26_cartJacksonSerialization_safeguardsUserCredentialsAndExposesUserId() throws Exception {
+        JpaUser user = new JpaUser(
+                "user-sec-" + UUID.randomUUID(),
+                "Alice Security",
+                "alice." + UUID.randomUUID() + "@example.com",
+                "519-555-0199",
+                "MEMBER"
+        );
+        user.setPassword("SuperSecretBcryptHash$2a$10$abcdef1234567890");
+        user.setTokenVersion(42L);
+        user.setLastPasswordResetOperationId("op-reset-xyz-777");
+
+        JpaCart cart = new JpaCart("cart-sec-" + UUID.randomUUID(), user);
+        cart.addItem(new JpaCartItem("m-sec-1", "Pot Pie", "Savory pie", new BigDecimal("17.00"), "Mains", null, 2));
+
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.findAndRegisterModules();
+
+        String json = mapper.writeValueAsString(cart);
+        assertThat(json).isNotNull();
+
+        // 1. Exposes userId matching MongoDB REST contract
+        assertThat(json).contains("\"userId\":\"" + user.getId() + "\"");
+
+        // 2. Safeguards: Never leaks user password, token version, or reset operation ID
+        assertThat(json).doesNotContain("SuperSecretBcryptHash");
+        assertThat(json).doesNotContain("\"password\":");
+        assertThat(json).doesNotContain("\"tokenVersion\":");
+        assertThat(json).doesNotContain("op-reset-xyz-777");
+        assertThat(json).doesNotContain("\"lastPasswordResetOperationId\":");
+
+        // 3. Never serializes nested user object
+        assertThat(json).doesNotContain("\"user\":");
+
+        // 4. Never causes circular back-reference in child cart items
+        assertThat(json).doesNotContain("\"cart\":");
+
+        // 5. Normal cart fields are intact
+        assertThat(json).contains("\"id\":\"" + cart.getId() + "\"");
+        assertThat(json).contains("\"items\":[");
+        assertThat(json).contains("\"name\":\"Pot Pie\"");
+    }
 }
+

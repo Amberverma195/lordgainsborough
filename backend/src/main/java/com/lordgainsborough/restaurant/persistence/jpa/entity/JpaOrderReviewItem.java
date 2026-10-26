@@ -1,5 +1,6 @@
 package com.lordgainsborough.restaurant.persistence.jpa.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -20,6 +21,7 @@ public class JpaOrderReviewItem {
     @Column(name = "id", length = 64, nullable = false)
     private String id;
 
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "review_id", nullable = false)
     private JpaOrderReview review;
@@ -68,6 +70,7 @@ public class JpaOrderReviewItem {
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
+    @JsonIgnore
     public JpaOrderReview getReview() { return review; }
     public void setReview(JpaOrderReview review) { this.review = review; }
 

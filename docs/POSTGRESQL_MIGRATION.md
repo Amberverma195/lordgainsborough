@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T22:12:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T22:24:30-04:00 (America/Toronto)  
 
 ---
 
@@ -726,6 +726,41 @@ Implemented the five operational JPA entities for Phase 6 in the dedicated packa
 
 **MongoDB Compatibility:**  
 - Confirmed intact: existing MongoDB model classes (`Cart`, `OrderReview`, `Reservation`), repositories, and services remain completely untouched and operational.
+
+**Next Task:**  
+`PG-007` — Create security challenge JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`).
+
+### [2026-10-25T22:24:30-04:00] — PG-006 Follow-Up: Cart Expiration and Serialization Hardening
+
+**Task:** PG-006 Follow-Up — Cart Expiration and Serialization Hardening  
+**Status:** COMPLETED  
+**Timestamp:** 2026-10-25T22:24:30-04:00  
+
+**Implementation Summary:**  
+Hardened cart timestamp tracking, entity lifecycle dirtying, Jackson serialization safeguards, and parent-child encapsulation across cart entities:
+1. **Timestamp Touch Mechanism (`JpaCart.touch`):**
+   - In JPA/Hibernate, modifying child entities (adding, removing, mutating, or reordering cart items) updates only child rows (`cart_items`) without dirtying the parent row (`carts`), leaving parent `@PreUpdate` callbacks unexecuted.
+   - Introduced a documented `touch()` / `touch(Instant)` mechanism on `JpaCart` that updates `updatedAt = Instant.now()`, marking `JpaCart` as dirty in the persistence context and reliably issuing `UPDATE carts SET updated_at = ?` on transaction commit/flush.
+   - Integrated automatic parent-touch into all cart collection mutations: `addItem()`, `removeItem()`, `setItems()`, and `reorderItems()`.
+   - Wired child entity property setters in `JpaCartItem` (`setQuantity`, `setPrice`, `setName`, `setDescription`, `setCategory`, `setImage`) to automatically invoke `this.cart.touch()` when modified, ensuring child item changes advance the cart expiration timer without requiring manual scalar changes on the parent.
+2. **Jackson Serialization Safeguards (`JpaCart` & `JpaCartItem`):**
+   - Added `@JsonIgnore` to `JpaCart.user` and `getUser()` to prevent serializing sensitive user credentials (`password`, `tokenVersion`, `lastPasswordResetOperationId`) and prevent lazy loading issues outside of active transactions.
+   - Added `@JsonProperty("userId") public String getUserId()` to serialize `userId` as a top-level string matching MongoDB's original REST JSON shape.
+   - Added `@JsonIgnore` to `JpaCartItem.cart` (and `JpaOrderReviewItem.review`) to eliminate circular back-references and infinite serialization recursion.
+3. **Regression Tests Added (`CartReviewReservationJpaIntegrationTest`):**
+   - Test 21: Added item without changing parent scalar fields; verified via direct JDBC query that `carts.updated_at` advanced in PostgreSQL.
+   - Test 22: Removed item; verified direct JDBC query that `carts.updated_at` advanced.
+   - Test 23: Mutated existing item quantity; verified direct JDBC query that `quantity` updated and `carts.updated_at` advanced.
+   - Test 24: Mutated existing item price; verified direct JDBC query that `price` updated and `carts.updated_at` advanced.
+   - Test 25: Reordered items; verified direct JDBC query that `item_index` positions reordered and `carts.updated_at` advanced.
+   - Test 26: Serialized `JpaCart` with Jackson; verified `userId` present while `password`, `tokenVersion`, `lastPasswordResetOperationId`, and circular `cart` references are excluded.
+
+**Verification:**  
+- `CartReviewReservationJpaIntegrationTest`: 26/26 tests passed in 6.686s against disposable PostgreSQL 17.11.
+- Full regression suite across all 5 test suites (`PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`):
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest -Dtest.postgres.port=54337`
+  - Result: 58 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 15.128s).
+- Clean compilation: `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 112 source files compiled cleanly).
 
 **Next Task:**  
 `PG-007` — Create security challenge JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`).
