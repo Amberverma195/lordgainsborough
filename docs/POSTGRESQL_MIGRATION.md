@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T02:08:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T02:18:00-04:00 (America/Toronto)  
 
 ---
 
@@ -353,13 +353,13 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-003` | Phase 2 | Create `V1__init_relational_schema.sql` with full relational DDL, constraints, and indexes | `COMPLETED` | 2026-10-25T19:14:28-04:00 | 2026-10-25T19:44:21-04:00 | 17 tables, 55 indexes, 72/72 assertions passed on PostgreSQL 17.11 |
 | `PG-004` | Phase 5 | Create core domain JPA entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`) | `COMPLETED` | 2026-10-25T21:02:53-04:00 | 2026-10-25T21:08:45-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 7/7 JPA integration tests passed |
 | `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 18/18 JPA integration tests passed |
-| `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 20/20 JPA integration tests passed |
-| `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 25/25 security integration tests passed |
+| `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 26/26 JPA integration tests passed |
+| `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 26/26 security integration tests passed |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `COMPLETED` | 2026-10-25T22:51:00-04:00 | 2026-10-25T22:56:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED (all 17 entities); 25/25 integration tests passed; full 7-suite regression passed (109/109 tests) |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
-| `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 30/30 repository integration tests passed; full 9-suite regression passed (164/164 tests) |
-| `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 33/33 security repository integration tests passed; full 10-suite regression passed (198/198 tests) |
-| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:05:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 38/38 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (237/237 tests) |
+| `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 31/31 repository integration tests passed; full 9-suite regression passed (165/165 tests) |
+| `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
+| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 40/40 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (239/239 tests) |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
@@ -1350,7 +1350,7 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
 1. **Single Source of Truth (`CatalogSeedSpecifications`):**
    - Extracted immutable category and menu item specifications into `com.lordgainsborough.restaurant.config.CatalogSeedSpecifications`.
    - Preserves all 14 categories with exact names and `displayOrder` values (Appetizers, Pizzas, Salads, Sandwiches, Homemade Burgers, Classics, Pasta, Panzerotti, Kids Menu, Beverages, Hot Sandwiches, Sides, Gainsborough Melts, A Taste of Greece).
-   - Preserves all 119 menu item specifications, including 3 independently orderable pizza sizes (Personal 10", Medium 12", Large 14" with distinct prices), aliases (`Garlic Bread and Cheese` → `Cheesy Garlic Bread`), legacy items, and operational descriptions.
+   - Preserves all 119 menu item specifications, including 3 independently orderable pizza sizes (Small 10", Medium 12", Large 16" with distinct prices), aliases (`Garlic Bread and Cheese` → `Cheesy Garlic Bread`), legacy items, and operational descriptions.
    - Refactored MongoDB `DataInitializer.java` to delegate to `CatalogSeedSpecifications.categories()` and `CatalogSeedSpecifications.menuCatalog()` while preserving its exact public/package API and MongoDB repository constructor.
 2. **Transactional Synchronization Service (`PostgresCatalogSynchronizationService`):**
    - Annotated with Spring `@Transactional`.
@@ -1378,40 +1378,64 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
   - Result: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 0.882s).
 - **PostgreSQL Catalog Initializer Integration Suite:**
   - `com.lordgainsborough.restaurant.config.PostgresCatalogInitializerIntegrationTest`
-  - Coverage: 34 tests exercising service initialization, profile/property gating, Flyway V1 schema validation, 14 categories sync, 119 menu items sync, 3 pizza sizes, canonical/alias matching, operational field preservation (`available=false`, `isMostLoved=true`, custom image), `BigDecimal` scale 2 verification, idempotency on repeated run, rollback on category/menu/marker failure, ambiguity detection, and concurrent execution under multi-transaction advisory locking.
+  - Coverage: 34 tests exercising service initialization, profile/property gating, Flyway V1 schema validation, 14 categories sync, 119 menu items sync, 3 pizza sizes (10", 12", 16"), canonical/alias matching, operational field preservation (`available=false`, `isMostLoved=true`, custom image), `BigDecimal` scale 2 verification, idempotency on repeated run, rollback on category/menu/marker failure, ambiguity detection, and concurrent execution under multi-transaction advisory locking.
   - Result: **34 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 16.83s).
-- **Complete PostgreSQL Regression Baseline (11 test suites):**
-  - Suites: `PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`, `SecurityChallengeJpaIntegrationTest`, `AbuseAndLoginFailureJpaIntegrationTest`, `CoreJpaRepositoryIntegrationTest`, `OperationalJpaRepositoryIntegrationTest`, `SecurityJpaRepositoryIntegrationTest`, `PostgresCatalogInitializerIntegrationTest`.
+- **Complete PostgreSQL Regression Baseline (11 test suites from Surefire reports):**
+  1. `PostgresConfigurationSmokeTest`: 3 tests
+  2. `FlywayMigrationIntegrationTest`: 4 tests
+  3. `CoreJpaEntityIntegrationTest`: 7 tests
+  4. `OrderJpaEntityIntegrationTest`: 18 tests
+  5. `CartReviewReservationJpaIntegrationTest`: 26 tests
+  6. `SecurityChallengeJpaIntegrationTest`: 26 tests
+  7. `AbuseAndLoginFailureJpaIntegrationTest`: 25 tests
+  8. `CoreJpaRepositoryIntegrationTest`: 25 tests
+  9. `OperationalJpaRepositoryIntegrationTest`: 31 tests
+  10. `SecurityJpaRepositoryIntegrationTest`: 34 tests
+  11. `PostgresCatalogInitializerIntegrationTest`: 34 tests
   - Total Tests Run: **233**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 50.815s).
 
 ---
 
-### [2026-10-26T02:05:00-04:00] PG-012 Code Review Resolution: Startup Activation Ordering & Transaction Manager Coexistence
+### [2026-10-26T02:18:00-04:00] PG-012 Code Review Resolutions: Startup Activation Ordering, Transaction Manager Coexistence, Real Marker Rollback, and Documentation Corrections
 
-**Overview & Code Review Findings:**
-Addressed code review finding: "PostgreSQL startup activation isn't fully proven":
-1. **Bean Processing Ordering Issue:** In `PostgresCatalogInitializerConfiguration.java`, class-level `@ConditionalOnBean({JpaCategoryRepository.class, JpaMenuItemRepository.class, JpaCatalogMigrationRepository.class})` evaluated during standard `@SpringBootApplication` component scanning *before* `DataJpaRepositoriesAutoConfiguration` ran. In a live application context, `@ConditionalOnBean` evaluated to `false` during configuration class parsing, skipping the catalog synchronization service and runner.
-2. **Transaction Manager Coexistence:** `MongoConfig` registers `mongoTransactionManager`. In a hybrid MongoDB/PostgreSQL application context, Spring Boot's JPA auto-configuration backs off from creating a default `transactionManager` due to `@ConditionalOnMissingBean(TransactionManager.class)`. An unqualified `@Transactional` could be ambiguous or fail with `NoUniqueBeanDefinitionException`.
+**Overview & Code Review Findings Addressed:**
+1. **Startup Activation Order & Coexistence:**
+   - Class-level `@ConditionalOnBean` evaluated before `DataJpaRepositoriesAutoConfiguration` ran, causing configuration parsing to back off prematurely during normal startup.
+   - Spring Boot's JPA auto-configuration backed off from creating `transactionManager` due to existing `mongoTransactionManager`.
+2. **Migration-Marker Rollback Incompleteness:**
+   - `test28` previously verified late rollback by overriding `synchronizeCatalog()` after categories/menu sync, but did not exercise a failing real `JpaCatalogMigrationRepository.save()` or database flush operation.
+3. **Pizza Dimensions & Suite Count Consistency:**
+   - Corrected pizza dimensions in documentation from 10", 12", 14" to 10", 12", 16" matching `CatalogSeedSpecifications`.
+   - Aligned individual suite test counts in the roadmap table and journal with actual Surefire report outputs.
 
-**Resolution & Implementation:**
-1. **Removed Class-Level `@ConditionalOnBean`:** Removed `@ConditionalOnBean` on repositories from `PostgresCatalogInitializerConfiguration`. Startup activation is strictly gated by `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty(name = "app.catalog.postgres-seed.enabled", havingValue = "true", matchIfMissing = false)`. Spring Boot resolves repository beans and `EntityManager` naturally as `@Bean` method parameters once JPA auto-configuration completes.
-2. **Explicit JPA Transaction Manager Bean:** Added a dedicated fallback `@Bean(name = "transactionManager") @ConditionalOnMissingBean(name = "transactionManager")` in `PostgresCatalogInitializerConfiguration` returning `new JpaTransactionManager(entityManager.getEntityManagerFactory())`.
-3. **Qualified `@Transactional`:** Updated `PostgresCatalogSynchronizationService.synchronizeCatalog()` to explicitly specify `@Transactional(transactionManager = "transactionManager")`. This guarantees binding to the relational JPA transaction manager even when `mongoTransactionManager` is present in the context.
-4. **Integration Test Suite (`PostgresCatalogStartupActivationIntegrationTest`):**
-   - Added `PostgresCatalogStartupActivationIntegrationTest` verifying:
-     - Full application context startup under `postgres-migration` profile and `app.catalog.postgres-seed.enabled=true` with Spring Boot repository auto-configuration (`DataJpaRepositoriesAutoConfiguration`).
-     - Activation of `PostgresCatalogSynchronizationService` and `CommandLineRunner`.
-     - Seed execution inserting 14 categories, 119 menu items, and migration marker `"2026-08-lord-gains-menu"`.
-     - Idempotency on repeated invocation.
-     - Complete back-off when `app.catalog.postgres-seed.enabled` is missing or default profile is active.
-     - Coexistence with `MongoTransactionManager` ensuring `@Transactional(transactionManager = "transactionManager")` executes cleanly without conflicts.
-
-**Verification Results:**
-- `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 2.882s).
-- `PostgresCatalogStartupActivationIntegrationTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 13.743s).
-- `PostgresCatalogInitializerIntegrationTest`: **34 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 27.552s).
-- **Full 12-Suite PostgreSQL Regression Baseline:**
-  - Total Tests Run: **237**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 1m 19s).
+**Implementation & Verification Details:**
+1. **Startup Activation & Coexistence:**
+   - Removed class-level `@ConditionalOnBean` from `PostgresCatalogInitializerConfiguration`. Startup activation is strictly gated by `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty(name = "app.catalog.postgres-seed.enabled", havingValue = "true")`.
+   - Added fallback `@Bean(name = "transactionManager") @ConditionalOnMissingBean(name = "transactionManager")` returning `new JpaTransactionManager(entityManager.getEntityManagerFactory())`.
+   - Updated `PostgresCatalogSynchronizationService.synchronizeCatalog()` to explicitly specify `@Transactional(transactionManager = "transactionManager")`.
+   - Added `PostgresCatalogStartupActivationIntegrationTest` (4 tests) verifying real repository auto-configuration startup, runner execution, idempotency, back-off, and non-relational coexistence.
+2. **Real Migration Marker Save and Flush Rollback Integration Tests:**
+   - In `PostgresCatalogInitializerIntegrationTest`:
+     - Added `test35_realMigrationMarkerSaveFailureRollsBackCatalogChanges`: proxies `JpaCatalogMigrationRepository.save()` to throw `DataIntegrityViolationException` when `save()` is invoked after `syncCategories()` and `syncMenuItems()`. Verifies whole transaction rollback, asserting 0 categories, 0 menu items, and 0 migration markers in PostgreSQL.
+     - Added `test36_migrationMarkerDatabaseFlushFailureRollsBackCatalogChanges`: installs a PostgreSQL table trigger (`fail_marker_insert_trg`) `BEFORE INSERT ON catalog_migrations` that raises an exception. Executes unmodified production `syncService.synchronizeCatalog()` with real repositories, verifying that SQL flush failure of the marker rolls back all catalog modifications, leaving 0 categories, 0 menu items, and 0 migration markers.
+     - Updated `test28` display name and added explicit assertion verifying 0 migration markers on late application exception rollback.
+     - `PostgresCatalogInitializerIntegrationTest` now contains **36 tests** (all passing).
+3. **Surefire Verified Regression Breakdown (12 Suites):**
+   - `PostgresConfigurationSmokeTest`: **3** tests
+   - `FlywayMigrationIntegrationTest`: **4** tests
+   - `CoreJpaEntityIntegrationTest`: **7** tests
+   - `OrderJpaEntityIntegrationTest`: **18** tests
+   - `CartReviewReservationJpaIntegrationTest`: **26** tests
+   - `SecurityChallengeJpaIntegrationTest`: **26** tests
+   - `AbuseAndLoginFailureJpaIntegrationTest`: **25** tests
+   - `CoreJpaRepositoryIntegrationTest`: **25** tests
+   - `OperationalJpaRepositoryIntegrationTest`: **31** tests
+   - `SecurityJpaRepositoryIntegrationTest`: **34** tests
+   - `PostgresCatalogInitializerIntegrationTest`: **36** tests
+   - `PostgresCatalogStartupActivationIntegrationTest`: **4** tests
+   - **Full 12-Suite PostgreSQL Regression Total:** **239 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 1m 22s).
+   - **MongoDB Initializer:** `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.870s).
+   - **Combined Repository Total:** **243 tests run, 0 failures, 0 errors, 0 skipped**.
 
 **Next Task:**  
 `PG-013` — Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries (`NOT STARTED`).

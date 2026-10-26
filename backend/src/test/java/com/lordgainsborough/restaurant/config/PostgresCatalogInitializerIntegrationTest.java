@@ -37,6 +37,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.data.jpa.repository.support.JpaRepositoryFactory;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.jpa.SharedEntityManagerCreator;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -45,6 +46,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -777,8 +779,8 @@ public class PostgresCatalogInitializerIntegrationTest {
 
     @Test
     @Order(28)
-    @DisplayName("Req 28: Migration marker failure rolls back catalog changes")
-    void test28_migrationMarkerFailureRollsBackCatalogChanges() throws Exception {
+    @DisplayName("Req 28: Late synchronization exception rolls back catalog changes")
+    void test28_lateExceptionRollsBackCatalogChanges() throws Exception {
         String rollbackDb = TEST_DB_PREFIX + "rb_mark_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         try (IsolatedTestEnvironment env = new IsolatedTestEnvironment(testPort, rollbackDb)) {
             PostgresCatalogSynchronizationService failingService = new PostgresCatalogSynchronizationService(
@@ -788,16 +790,16 @@ public class PostgresCatalogInitializerIntegrationTest {
                 public boolean synchronizeCatalog() {
                     super.syncCategories();
                     super.syncMenuItems();
-                    throw new RuntimeException("Simulated migration marker persistence failure");
+                    throw new RuntimeException("Simulated late synchronization failure");
                 }
             };
 
             TransactionTemplate tt = new TransactionTemplate(env.txManager);
             assertThatThrownBy(() -> tt.execute(status -> failingService.synchronizeCatalog()))
                     .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("Simulated migration marker persistence failure");
+                    .hasMessageContaining("Simulated late synchronization failure");
 
-            // Verify categories and menu items rolled back to 0
+            // Verify categories, menu items, and migration markers rolled back to 0
             try (Connection conn = DriverManager.getConnection(env.url, "postgres", "postgres");
                  Statement stmt = conn.createStatement()) {
                 try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM categories")) {
@@ -805,6 +807,10 @@ public class PostgresCatalogInitializerIntegrationTest {
                     assertThat(rs.getInt(1)).isEqualTo(0);
                 }
                 try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM menu_items")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM catalog_migrations")) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getInt(1)).isEqualTo(0);
                 }
@@ -1003,5 +1009,97 @@ public class PostgresCatalogInitializerIntegrationTest {
                     assertThat(ctx).doesNotHaveBean(JpaMenuItemRepository.class);
                     assertThat(ctx).doesNotHaveBean(JpaCatalogMigrationRepository.class);
                 });
+    }
+
+    @Test
+    @Order(35)
+    @DisplayName("Req 35: Real JpaCatalogMigrationRepository.save() failure rolls back catalog changes")
+    void test35_realMigrationMarkerSaveFailureRollsBackCatalogChanges() throws Exception {
+        String rollbackDb = TEST_DB_PREFIX + "rb_save_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        try (IsolatedTestEnvironment env = new IsolatedTestEnvironment(testPort, rollbackDb)) {
+            // Create a dynamic proxy delegating to env.migrationRepo, but intercepting save() to throw
+            JpaCatalogMigrationRepository failingMigrationRepo = (JpaCatalogMigrationRepository) Proxy.newProxyInstance(
+                    JpaCatalogMigrationRepository.class.getClassLoader(),
+                    new Class<?>[]{JpaCatalogMigrationRepository.class},
+                    (proxy, method, args) -> {
+                        if ("save".equals(method.getName())) {
+                            throw new DataIntegrityViolationException("Simulated JpaCatalogMigrationRepository.save() persistence failure");
+                        }
+                        return method.invoke(env.migrationRepo, args);
+                    }
+            );
+
+            // Use the real PostgresCatalogSynchronizationService class (no methods overridden)
+            PostgresCatalogSynchronizationService serviceWithFailingRepo = new PostgresCatalogSynchronizationService(
+                    env.categoryRepo, env.menuItemRepo, failingMigrationRepo, env.em
+            );
+
+            TransactionTemplate tt = new TransactionTemplate(env.txManager);
+            assertThatThrownBy(() -> tt.execute(status -> serviceWithFailingRepo.synchronizeCatalog()))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("Simulated JpaCatalogMigrationRepository.save() persistence failure");
+
+            // Verify all category and menu changes rolled back and no marker remains
+            try (Connection conn = DriverManager.getConnection(env.url, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM categories")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM menu_items")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM catalog_migrations")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+            }
+        }
+    }
+
+    @Test
+    @Order(36)
+    @DisplayName("Req 36: Migration marker database flush failure rolls back catalog changes")
+    void test36_migrationMarkerDatabaseFlushFailureRollsBackCatalogChanges() throws Exception {
+        String rollbackDb = TEST_DB_PREFIX + "rb_flush_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        try (IsolatedTestEnvironment env = new IsolatedTestEnvironment(testPort, rollbackDb)) {
+            // Install a database trigger on catalog_migrations that fails BEFORE INSERT
+            try (Connection conn = DriverManager.getConnection(env.url, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute(
+                        "CREATE OR REPLACE FUNCTION trg_fail_marker_insert() RETURNS trigger AS $$\n"
+                        + "BEGIN\n"
+                        + "    RAISE EXCEPTION 'Simulated database flush failure during catalog migration marker insert';\n"
+                        + "END;\n"
+                        + "$$ LANGUAGE plpgsql;\n"
+                        + "CREATE TRIGGER fail_marker_insert_trg\n"
+                        + "BEFORE INSERT ON catalog_migrations\n"
+                        + "FOR EACH ROW EXECUTE FUNCTION trg_fail_marker_insert();"
+                );
+            }
+
+            // Run real unmodified syncService with real repos - save() and database flush are executed
+            TransactionTemplate tt = new TransactionTemplate(env.txManager);
+            assertThatThrownBy(() -> tt.execute(status -> env.syncService.synchronizeCatalog()))
+                    .isInstanceOf(Exception.class);
+
+            // Verify all category and menu changes rolled back and no marker remains
+            try (Connection conn = DriverManager.getConnection(env.url, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM categories")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM menu_items")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+                try (ResultSet rs = stmt.executeQuery("SELECT count(*) FROM catalog_migrations")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(0);
+                }
+            }
+        }
     }
 }
