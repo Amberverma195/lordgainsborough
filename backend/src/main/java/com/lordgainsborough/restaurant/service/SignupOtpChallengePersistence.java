@@ -5,11 +5,8 @@ import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import com.lordgainsborough.restaurant.repository.SignupOtpChallengeRepository;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -19,12 +16,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * MongoDB persistence for signup OTP challenges.
- * Controllers / email sending are not wired here yet — this is the storage layer only.
+ * Persistence facade for signup OTP challenges.
+ * Delegates database storage operations to {@link SignupOtpChallengeStore}, supporting
+ * MongoDB (default) and PostgreSQL with identical business semantics.
  */
 @Service
 public class SignupOtpChallengePersistence {
@@ -36,17 +35,27 @@ public class SignupOtpChallengePersistence {
     public static final int MAX_RESENDS = 5;
     public static final int MAX_FAILED_VERIFY_ATTEMPTS = 5;
 
-    private final SignupOtpChallengeRepository repository;
-    private final MongoTemplate mongoTemplate;
+    private final SignupOtpChallengeStore store;
     private final Clock clock;
 
+    @Autowired
+    public SignupOtpChallengePersistence(SignupOtpChallengeStore store, Clock clock) {
+        this.store = Objects.requireNonNull(store, "store is required");
+        this.clock = Objects.requireNonNull(clock, "clock is required");
+    }
+
+    /**
+     * Backward-compatible constructor for existing callers and tests.
+     */
     public SignupOtpChallengePersistence(
             SignupOtpChallengeRepository repository,
             MongoTemplate mongoTemplate,
             Clock clock) {
-        this.repository = repository;
-        this.mongoTemplate = mongoTemplate;
-        this.clock = clock;
+        this(new MongoSignupOtpChallengeStore(repository, mongoTemplate), clock);
+    }
+
+    public SignupOtpChallengeStore getStore() {
+        return store;
     }
 
     public String normalizeEmail(String email) {
@@ -110,7 +119,7 @@ public class SignupOtpChallengePersistence {
     public Optional<SignupOtpChallenge> findActiveUnexpiredByEmail(String email) {
         Instant now = clock.instant();
         String emailKey = emailKeyFromRawEmail(email);
-        Optional<SignupOtpChallenge> found = repository.findById(emailKey);
+        Optional<SignupOtpChallenge> found = store.findById(emailKey);
         if (found.isEmpty()) {
             return Optional.empty();
         }
@@ -128,7 +137,7 @@ public class SignupOtpChallengePersistence {
 
     public Optional<SignupOtpChallenge> findUsableByEmailKey(String emailKey) {
         Instant now = clock.instant();
-        Optional<SignupOtpChallenge> found = repository.findById(emailKey);
+        Optional<SignupOtpChallenge> found = store.findById(emailKey);
         if (found.isEmpty()) {
             return Optional.empty();
         }
@@ -196,12 +205,7 @@ public class SignupOtpChallengePersistence {
      * (duplicate {@code emailKey} / _id).
      */
     public boolean tryInsert(SignupOtpChallenge challenge) {
-        try {
-            mongoTemplate.insert(challenge);
-            return true;
-        } catch (org.springframework.dao.DuplicateKeyException ex) {
-            return false;
-        }
+        return store.tryInsert(challenge);
     }
 
     /**
@@ -212,46 +216,7 @@ public class SignupOtpChallengePersistence {
      */
     public Optional<SignupOtpChallenge> tryAtomicReplaceExpired(
             String emailKey, SignupOtpChallenge fresh, Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-        if (fresh == null) {
-            throw new IllegalArgumentException("fresh challenge is required");
-        }
-        if (fresh.getOtpDigest() == null || fresh.getOtpDigest().isBlank()) {
-            throw new IllegalArgumentException("otpDigest is required");
-        }
-        if (fresh.getChallengeId() == null || fresh.getChallengeId().isBlank()) {
-            throw new IllegalArgumentException("challengeId is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("challengeExpiresAt").lte(now));
-
-        Update update = new Update()
-                .set("normalizedEmail", fresh.getNormalizedEmail())
-                .set("challengeId", fresh.getChallengeId())
-                .set("status", OtpChallengeStatus.ACTIVE)
-                .set("otpDigest", fresh.getOtpDigest())
-                .set("resendCount", 0)
-                .set("failedVerifyAttempts", 0)
-                .set("nextResendAt", fresh.getNextResendAt())
-                .set("otpExpiresAt", fresh.getOtpExpiresAt())
-                .set("challengeExpiresAt", fresh.getChallengeExpiresAt())
-                .set("createdAt", fresh.getCreatedAt())
-                .set("updatedAt", fresh.getUpdatedAt())
-                .set("sendOperationId", fresh.getSendOperationId())
-                .set("sendStatus", fresh.getSendStatus())
-                .set("sendLeaseUntil", fresh.getSendLeaseUntil())
-                .set("clientIdempotencyKey", fresh.getClientIdempotencyKey())
-                .set("lastSendWasInitial", fresh.isLastSendWasInitial());
-
-        SignupOtpChallenge replaced = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(replaced);
+        return store.tryAtomicReplaceExpired(emailKey, fresh, now);
     }
 
     /**
@@ -270,7 +235,7 @@ public class SignupOtpChallengePersistence {
      */
     public SignupOtpChallenge upsertNewActiveChallenge(String email, String otpDigest) {
         SignupOtpChallenge challenge = buildNewActiveChallenge(email, otpDigest, UUID.randomUUID().toString());
-        return repository.save(challenge);
+        return store.save(challenge);
     }
 
     public SignupOtpChallenge save(SignupOtpChallenge challenge) {
@@ -278,18 +243,18 @@ public class SignupOtpChallengePersistence {
             throw new IllegalArgumentException("challenge emailKey is required");
         }
         challenge.setUpdatedAt(clock.instant());
-        return repository.save(challenge);
+        return store.save(challenge);
     }
 
     public void deleteByEmail(String email) {
-        repository.deleteById(emailKeyFromRawEmail(email));
+        deleteByEmailKey(emailKeyFromRawEmail(email));
     }
 
     public void deleteByEmailKey(String emailKey) {
         if (emailKey == null || emailKey.isBlank()) {
             return;
         }
-        repository.deleteById(emailKey);
+        store.deleteById(emailKey);
     }
 
     public Instant now() {
@@ -306,40 +271,7 @@ public class SignupOtpChallengePersistence {
             String sendOperationId,
             String clientIdempotencyKey,
             Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-        if (newOtpDigest == null || newOtpDigest.isBlank()) {
-            throw new IllegalArgumentException("otpDigest is required");
-        }
-        if (sendOperationId == null || sendOperationId.isBlank()) {
-            throw new IllegalArgumentException("sendOperationId is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("status").is(OtpChallengeStatus.ACTIVE)
-                .and("challengeExpiresAt").gt(now)
-                .and("resendCount").lt(MAX_RESENDS)
-                .and("nextResendAt").lte(now));
-
-        Update update = new Update()
-                .inc("resendCount", 1)
-                .set("otpDigest", newOtpDigest)
-                .set("otpExpiresAt", now.plus(OTP_TTL))
-                .set("nextResendAt", now.plus(RESEND_COOLDOWN))
-                .set("sendOperationId", sendOperationId)
-                .set("sendStatus", OtpSendStatus.RESERVED)
-                .set("sendLeaseUntil", now.plus(SEND_LEASE))
-                .set("clientIdempotencyKey", clientIdempotencyKey)
-                .set("lastSendWasInitial", false)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.tryAtomicResend(emailKey, newOtpDigest, sendOperationId, clientIdempotencyKey, now);
     }
 
     /**
@@ -350,30 +282,7 @@ public class SignupOtpChallengePersistence {
             String sendOperationId,
             OtpSendStatus outcome,
             Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-        if (sendOperationId == null || sendOperationId.isBlank()) {
-            throw new IllegalArgumentException("sendOperationId is required");
-        }
-        if (outcome == null || outcome == OtpSendStatus.RESERVED) {
-            throw new IllegalArgumentException("terminal send outcome is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("sendOperationId").is(sendOperationId)
-                .and("sendStatus").is(OtpSendStatus.RESERVED));
-
-        Update update = new Update()
-                .set("sendStatus", outcome)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.tryMarkSendOutcome(emailKey, sendOperationId, outcome, now);
     }
 
     /**
@@ -384,28 +293,14 @@ public class SignupOtpChallengePersistence {
             String emailKey,
             String sendOperationId,
             Instant now) {
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("sendOperationId").is(sendOperationId)
-                .and("sendStatus").is(OtpSendStatus.DEFINITELY_FAILED)
-                .and("lastSendWasInitial").is(true));
-
-        Update update = new Update()
-                .set("challengeExpiresAt", now)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.expireAfterDefiniteInitialFailure(emailKey, sendOperationId, now);
     }
 
     public Optional<SignupOtpChallenge> findByEmailKey(String emailKey) {
         if (emailKey == null || emailKey.isBlank()) {
             return Optional.empty();
         }
-        return repository.findById(emailKey);
+        return store.findById(emailKey);
     }
 
     public ResendDenialReason diagnoseResendDenial(String emailKey, Instant now) {
@@ -440,29 +335,7 @@ public class SignupOtpChallengePersistence {
      */
     public Optional<SignupOtpChallenge> tryAtomicMarkVerified(
             String emailKey, String otpDigest, Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-        if (otpDigest == null || otpDigest.isBlank()) {
-            throw new IllegalArgumentException("otpDigest is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("status").is(OtpChallengeStatus.ACTIVE)
-                .and("challengeExpiresAt").gt(now)
-                .and("otpExpiresAt").gt(now)
-                .and("otpDigest").is(otpDigest));
-
-        Update update = new Update()
-                .set("status", OtpChallengeStatus.VERIFIED)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.tryAtomicMarkVerified(emailKey, otpDigest, now);
     }
 
     /**
@@ -470,50 +343,14 @@ public class SignupOtpChallengePersistence {
      * Returns the updated document when this request claimed an attempt slot.
      */
     public Optional<SignupOtpChallenge> tryAtomicRecordFailedVerify(String emailKey, Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("status").is(OtpChallengeStatus.ACTIVE)
-                .and("challengeExpiresAt").gt(now)
-                .and("otpExpiresAt").gt(now)
-                .and("failedVerifyAttempts").lt(MAX_FAILED_VERIFY_ATTEMPTS));
-
-        Update update = new Update()
-                .inc("failedVerifyAttempts", 1)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.tryAtomicRecordFailedVerify(emailKey, now);
     }
 
     /**
      * Atomically locks an ACTIVE challenge that has exhausted failed verify attempts.
      */
     public Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(String emailKey, Instant now) {
-        if (emailKey == null || emailKey.isBlank()) {
-            throw new IllegalArgumentException("emailKey is required");
-        }
-
-        Query query = new Query(Criteria.where("_id").is(emailKey)
-                .and("status").is(OtpChallengeStatus.ACTIVE)
-                .and("failedVerifyAttempts").gte(MAX_FAILED_VERIFY_ATTEMPTS));
-
-        Update update = new Update()
-                .set("status", OtpChallengeStatus.LOCKED)
-                .set("updatedAt", now);
-
-        SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
-                FindAndModifyOptions.options().returnNew(true),
-                SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+        return store.tryAtomicLockAfterMaxFailures(emailKey, now);
     }
 
     public enum ResendDenialReason {

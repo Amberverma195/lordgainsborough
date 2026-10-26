@@ -71,6 +71,17 @@ public class FlywayMigrationIntegrationTest {
         }
     }
 
+    private void ensureFreshDatabase(String dbName) throws Exception {
+        String port = getTestPort();
+        String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
+            stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
+            stmt.executeUpdate("CREATE DATABASE " + dbName);
+        }
+    }
+
     @Test
     @Order(1)
     @DisplayName("Direct Flyway API: V1 migration executes cleanly and records history with all 17 tables")
@@ -82,7 +93,7 @@ public class FlywayMigrationIntegrationTest {
         }
 
         String dbName = "flyway_direct_test";
-        ensureDatabaseExists(dbName);
+        ensureFreshDatabase(dbName);
         String jdbcUrl = getJdbcUrl(dbName);
 
         Flyway flyway = Flyway.configure()

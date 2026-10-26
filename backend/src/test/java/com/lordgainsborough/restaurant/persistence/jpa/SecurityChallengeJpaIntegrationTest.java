@@ -873,9 +873,11 @@ public class SecurityChallengeJpaIntegrationTest {
         String key1 = sha256Hex("unique-ch-1-" + UUID.randomUUID());
         String key2 = sha256Hex("unique-ch-2-" + UUID.randomUUID());
 
+        String userId;
         try {
             tx.begin();
             JpaUser user = createAndPersistUser(em, "unique-ch");
+            userId = user.getId();
             JpaPasswordResetOtpChallenge chal1 = new JpaPasswordResetOtpChallenge(
                     key1,
                     sharedChallengeId,
@@ -899,7 +901,7 @@ public class SecurityChallengeJpaIntegrationTest {
         tx = em.getTransaction();
         try {
             tx.begin();
-            JpaUser managedUser = em.find(JpaUser.class, em.createQuery("SELECT u.id FROM JpaUser u WHERE u.email LIKE '%unique-ch%'", String.class).getSingleResult());
+            JpaUser managedUser = em.find(JpaUser.class, userId);
             JpaPasswordResetOtpChallenge chal2 = new JpaPasswordResetOtpChallenge(
                     key2,
                     sharedChallengeId,

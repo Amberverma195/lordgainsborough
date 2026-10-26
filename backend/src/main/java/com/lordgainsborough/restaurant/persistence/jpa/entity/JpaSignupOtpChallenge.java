@@ -111,7 +111,9 @@ public class JpaSignupOtpChallenge {
 
     @PreUpdate
     public void preUpdate() {
-        this.updatedAt = Instant.now();
+        if (this.updatedAt == null) {
+            this.updatedAt = Instant.now();
+        }
     }
 
     public boolean isChallengeExpired(Instant now) {
