@@ -12,6 +12,8 @@ import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -99,8 +101,20 @@ public class PostgresCatalogSynchronizationService {
         JpaCatalogMigration marker = new JpaCatalogMigration(CatalogSeedSpecifications.MIGRATION_ID, Instant.now());
         migrationRepository.save(marker);
 
-        log.info("PostgreSQL catalog synchronization successfully committed for migration '{}'.",
-                CatalogSeedSpecifications.MIGRATION_ID);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    log.info("PostgreSQL catalog synchronization successfully committed for migration '{}'.",
+                            CatalogSeedSpecifications.MIGRATION_ID);
+                }
+            });
+            log.info("PostgreSQL catalog synchronization work complete; pending transaction commit for migration '{}'.",
+                    CatalogSeedSpecifications.MIGRATION_ID);
+        } else {
+            log.info("PostgreSQL catalog synchronization work complete for migration '{}'.",
+                    CatalogSeedSpecifications.MIGRATION_ID);
+        }
         return true;
     }
 

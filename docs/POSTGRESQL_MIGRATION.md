@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T02:18:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T02:37:00-04:00 (America/Toronto)  
 
 ---
 
@@ -1396,7 +1396,7 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
 
 ---
 
-### [2026-10-26T02:18:00-04:00] PG-012 Code Review Resolutions: Startup Activation Ordering, Transaction Manager Coexistence, Real Marker Rollback, and Documentation Corrections
+### [2026-10-26T02:37:00-04:00] PG-012 Code Review Resolutions: Startup Activation Ordering, Transaction Manager Coexistence, Real Marker Rollback, Documentation Corrections, and Commit-Aware Logging
 
 **Overview & Code Review Findings Addressed:**
 1. **Startup Activation Order & Coexistence:**
@@ -1407,6 +1407,8 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
 3. **Pizza Dimensions & Suite Count Consistency:**
    - Corrected pizza dimensions in documentation from 10", 12", 14" to 10", 12", 16" matching `CatalogSeedSpecifications`.
    - Aligned individual suite test counts in the roadmap table and journal with actual Surefire report outputs.
+4. **Transaction Commit Success Logging Hardening:**
+   - `PostgresCatalogSynchronizationService.synchronizeCatalog()` previously logged that synchronization was successfully committed before returning from the `@Transactional` method, before the actual database commit took place.
 
 **Implementation & Verification Details:**
 1. **Startup Activation & Coexistence:**
@@ -1420,7 +1422,11 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
      - Added `test36_migrationMarkerDatabaseFlushFailureRollsBackCatalogChanges`: installs a PostgreSQL table trigger (`fail_marker_insert_trg`) `BEFORE INSERT ON catalog_migrations` that raises an exception. Executes unmodified production `syncService.synchronizeCatalog()` with real repositories, verifying that SQL flush failure of the marker rolls back all catalog modifications, leaving 0 categories, 0 menu items, and 0 migration markers.
      - Updated `test28` display name and added explicit assertion verifying 0 migration markers on late application exception rollback.
      - `PostgresCatalogInitializerIntegrationTest` now contains **36 tests** (all passing).
-3. **Surefire Verified Regression Breakdown (12 Suites):**
+3. **Transaction Commit-Aware Logging (`PostgresCatalogSynchronizationService`):**
+   - Registered an after-commit synchronization callback via `TransactionSynchronizationManager.registerSynchronization(...)` when a transaction is active. The definitive log message (`"PostgreSQL catalog synchronization successfully committed for migration '{}'."`) is now logged strictly inside `afterCommit()`.
+   - Prior to method return, logs: `"PostgreSQL catalog synchronization work complete; pending transaction commit for migration '{}'."`.
+   - If executed outside transaction synchronization, falls back to logging work completion directly without claiming transaction commit.
+4. **Surefire Verified Regression Breakdown (12 Suites):**
    - `PostgresConfigurationSmokeTest`: **3** tests
    - `FlywayMigrationIntegrationTest`: **4** tests
    - `CoreJpaEntityIntegrationTest`: **7** tests
