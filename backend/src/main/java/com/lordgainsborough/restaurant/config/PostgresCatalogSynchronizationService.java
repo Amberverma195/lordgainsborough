@@ -74,7 +74,7 @@ public class PostgresCatalogSynchronizationService {
      * @return {@code true} if synchronization was executed and committed;
      *         {@code false} if skipped because the migration marker was already present
      */
-    @Transactional
+    @Transactional(transactionManager = "transactionManager")
     public boolean synchronizeCatalog() {
         // 1. Acquire transaction-level advisory lock to coordinate concurrent application instances
         acquireAdvisoryLock();

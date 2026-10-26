@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T01:21:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T02:08:00-04:00 (America/Toronto)  
 
 ---
 
@@ -359,7 +359,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:23:00-04:00 | 5 Spring Data JPA repos implemented; 25/25 repository integration tests passed; full 8-suite regression passed (134/134 tests) |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `COMPLETED` | 2026-10-25T23:57:00-04:00 | 2026-10-26T00:15:00-04:00 | 4 Spring Data JPA repos implemented; 30/30 repository integration tests passed; full 9-suite regression passed (164/164 tests) |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 33/33 security repository integration tests passed; full 10-suite regression passed (198/198 tests) |
-| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T01:21:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 34/34 PostgreSQL seeding tests passed; full 11-suite regression passed (233/233 tests) |
+| `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:05:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 38/38 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (237/237 tests) |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `NOT STARTED` | — | — | Atomic increment unit tests |
 | `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
@@ -1383,6 +1383,35 @@ Implemented **PG-012: Adapt DataInitializer for PostgreSQL Catalog Synchronizati
 - **Complete PostgreSQL Regression Baseline (11 test suites):**
   - Suites: `PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`, `SecurityChallengeJpaIntegrationTest`, `AbuseAndLoginFailureJpaIntegrationTest`, `CoreJpaRepositoryIntegrationTest`, `OperationalJpaRepositoryIntegrationTest`, `SecurityJpaRepositoryIntegrationTest`, `PostgresCatalogInitializerIntegrationTest`.
   - Total Tests Run: **233**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 50.815s).
+
+---
+
+### [2026-10-26T02:05:00-04:00] PG-012 Code Review Resolution: Startup Activation Ordering & Transaction Manager Coexistence
+
+**Overview & Code Review Findings:**
+Addressed code review finding: "PostgreSQL startup activation isn't fully proven":
+1. **Bean Processing Ordering Issue:** In `PostgresCatalogInitializerConfiguration.java`, class-level `@ConditionalOnBean({JpaCategoryRepository.class, JpaMenuItemRepository.class, JpaCatalogMigrationRepository.class})` evaluated during standard `@SpringBootApplication` component scanning *before* `DataJpaRepositoriesAutoConfiguration` ran. In a live application context, `@ConditionalOnBean` evaluated to `false` during configuration class parsing, skipping the catalog synchronization service and runner.
+2. **Transaction Manager Coexistence:** `MongoConfig` registers `mongoTransactionManager`. In a hybrid MongoDB/PostgreSQL application context, Spring Boot's JPA auto-configuration backs off from creating a default `transactionManager` due to `@ConditionalOnMissingBean(TransactionManager.class)`. An unqualified `@Transactional` could be ambiguous or fail with `NoUniqueBeanDefinitionException`.
+
+**Resolution & Implementation:**
+1. **Removed Class-Level `@ConditionalOnBean`:** Removed `@ConditionalOnBean` on repositories from `PostgresCatalogInitializerConfiguration`. Startup activation is strictly gated by `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty(name = "app.catalog.postgres-seed.enabled", havingValue = "true", matchIfMissing = false)`. Spring Boot resolves repository beans and `EntityManager` naturally as `@Bean` method parameters once JPA auto-configuration completes.
+2. **Explicit JPA Transaction Manager Bean:** Added a dedicated fallback `@Bean(name = "transactionManager") @ConditionalOnMissingBean(name = "transactionManager")` in `PostgresCatalogInitializerConfiguration` returning `new JpaTransactionManager(entityManager.getEntityManagerFactory())`.
+3. **Qualified `@Transactional`:** Updated `PostgresCatalogSynchronizationService.synchronizeCatalog()` to explicitly specify `@Transactional(transactionManager = "transactionManager")`. This guarantees binding to the relational JPA transaction manager even when `mongoTransactionManager` is present in the context.
+4. **Integration Test Suite (`PostgresCatalogStartupActivationIntegrationTest`):**
+   - Added `PostgresCatalogStartupActivationIntegrationTest` verifying:
+     - Full application context startup under `postgres-migration` profile and `app.catalog.postgres-seed.enabled=true` with Spring Boot repository auto-configuration (`DataJpaRepositoriesAutoConfiguration`).
+     - Activation of `PostgresCatalogSynchronizationService` and `CommandLineRunner`.
+     - Seed execution inserting 14 categories, 119 menu items, and migration marker `"2026-08-lord-gains-menu"`.
+     - Idempotency on repeated invocation.
+     - Complete back-off when `app.catalog.postgres-seed.enabled` is missing or default profile is active.
+     - Coexistence with `MongoTransactionManager` ensuring `@Transactional(transactionManager = "transactionManager")` executes cleanly without conflicts.
+
+**Verification Results:**
+- `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 2.882s).
+- `PostgresCatalogStartupActivationIntegrationTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 13.743s).
+- `PostgresCatalogInitializerIntegrationTest`: **34 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 27.552s).
+- **Full 12-Suite PostgreSQL Regression Baseline:**
+  - Total Tests Run: **237**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 1m 19s).
 
 **Next Task:**  
 `PG-013` — Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries (`NOT STARTED`).
