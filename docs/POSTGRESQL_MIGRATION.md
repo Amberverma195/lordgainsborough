@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T22:31:30-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T23:17:00-04:00 (America/Toronto)  
 
 ---
 
@@ -356,7 +356,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 20/20 JPA integration tests passed |
 | `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 25/25 security integration tests passed |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `COMPLETED` | 2026-10-25T22:51:00-04:00 | 2026-10-25T22:56:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED (all 17 entities); 25/25 integration tests passed; full 7-suite regression passed (109/109 tests) |
-| `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `NOT STARTED` | — | — | Repository compilation and method checks |
+| `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `COMPLETED` | 2026-10-25T23:05:00-04:00 | 2026-10-25T23:16:10-04:00 | 5 Spring Data JPA repos implemented; 12/12 repository integration tests passed; full 8-suite regression passed (121/121 tests) |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `NOT STARTED` | — | — | Repository query method tests |
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `NOT STARTED` | — | — | Repository query tests |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `NOT STARTED` | — | — | `DataInitializerTest` pass |
@@ -917,6 +917,81 @@ Applied security preflight hardening to the PG-007 operational challenge entitie
 
 **Next Task:**  
 `PG-009` — Implement Spring Data JPA repositories for core domain and catalog entities (`UserRepository`, `CategoryRepository`, `MenuItemRepository`, `CatalogMigrationRepository`, `StoreSettingsRepository`).
+
+---
+
+### [2026-10-25T23:16:10-04:00] — PG-009: Core & Catalog Spring Data JPA Repositories
+
+**Task ID:** `PG-009`  
+**Phase:** Phase 8: Data Access Layer & JPA Repositories  
+**Status:** `COMPLETED`  
+**Start Timestamp:** 2026-10-25T23:05:00-04:00  
+**Completion Timestamp:** 2026-10-25T23:16:10-04:00  
+
+**Objective:**  
+Implement Spring Data JPA repositories in `com.lordgainsborough.restaurant.persistence.jpa.repository` for the 5 core domain and catalog entities mapped in PG-004:
+1. `JpaUserRepository` (`JpaUser`, `String`)
+2. `JpaCategoryRepository` (`JpaCategory`, `String`)
+3. `JpaMenuItemRepository` (`JpaMenuItem`, `String`)
+4. `JpaCatalogMigrationRepository` (`JpaCatalogMigration`, `String`)
+5. `JpaStoreSettingsRepository` (`JpaStoreSettings`, `String`)
+
+**Implementation Details:**
+1. **`JpaUserRepository`:**
+   - Extends `JpaRepository<JpaUser, String>`.
+   - `Optional<JpaUser> findByEmailIgnoreCase(String email)`: Case-insensitive email query supporting login and registration.
+   - `boolean existsByEmailIgnoreCase(String email)`: Fast email deduplication existence check.
+   - `Optional<JpaUser> findByPhoneNormalized(String phoneNormalized)`: Phone lookup respecting the `uq_users_phone_normalized` constraint.
+   - `boolean existsByPhoneNormalized(String phoneNormalized)`: Fast phone deduplication existence check.
+   - `List<JpaUser> findByRole(String role)`: Query users by assigned role (`CUSTOMER`, `ADMIN`, `KITCHEN_STAFF`).
+   - `@Query("SELECT u FROM JpaUser u WHERE LOWER(u.name) LIKE LOWER(CONCAT('%', :query, '%')) OR LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) OR u.phoneNormalized LIKE CONCAT('%', :query, '%')")`: Customer search query supporting admin search requirements.
+2. **`JpaCategoryRepository`:**
+   - Extends `JpaRepository<JpaCategory, String>`.
+   - `List<JpaCategory> findAllByOrderByDisplayOrderAsc()`: Ordered menu presentation query for frontend consumption.
+   - `Optional<JpaCategory> findByName(String name)`: Name lookup enforcing category uniqueness.
+   - `boolean existsByName(String name)`: Category deduplication check.
+3. **`JpaMenuItemRepository`:**
+   - Extends `JpaRepository<JpaMenuItem, String>`.
+   - `List<JpaMenuItem> findByCategoryIgnoreCase(String category)`: Menu filtering by category name.
+   - `List<JpaMenuItem> findByAvailableTrue()`: Filter for active ordering availability.
+   - `List<JpaMenuItem> findByIsMostLovedTrue()`: Filter for featured/popular items.
+   - `Optional<JpaMenuItem> findByNameIgnoreCase(String name)`: Name lookup supporting repricing and validation checks.
+   - `boolean existsByNameIgnoreCase(String name)`: Menu item deduplication check.
+4. **`JpaCatalogMigrationRepository`:**
+   - Extends `JpaRepository<JpaCatalogMigration, String>`.
+   - `boolean existsById(String id)`: Checks whether catalog schema migration ID has already been applied.
+5. **`JpaStoreSettingsRepository`:**
+   - Extends `JpaRepository<JpaStoreSettings, String>`.
+   - Provides singleton configuration management for `id = 'default'`.
+
+**Verification:**
+- Preflight hardening:
+  - Addressed Finding 1: Added `@JsonIgnore` to `id` on `JpaSignupAbuseLimit` and `JpaLoginFailureState` and verified exclusion in serialization tests.
+  - Addressed Finding 2: Hardened `CoreJpaEntityIntegrationTest` fixtures with randomized UUIDs and database cleanup in `setUpAll()`.
+- Created comprehensive integration test suite `backend/src/test/java/com/lordgainsborough/restaurant/persistence/jpa/CoreJpaRepositoryIntegrationTest.java` (12 tests) executed against disposable PostgreSQL 17.11 initialized via Flyway V1:
+  1. `JpaUserRepository`: save and find by ID.
+  2. `JpaUserRepository`: case-insensitive email query (`findByEmailIgnoreCase`).
+  3. `JpaUserRepository`: functional unique constraint on email enforces uniqueness even with varied casing.
+  4. `JpaUserRepository`: `findByPhoneNormalized` and `existsByPhoneNormalized`.
+  5. `JpaUserRepository`: `findByRole` returns matching users.
+  6. `JpaUserRepository`: search customers by partial name, email, or normalized phone.
+  7. `JpaCategoryRepository`: save and retrieve ordered categories (`findAllByOrderByDisplayOrderAsc`).
+  8. `JpaCategoryRepository`: `findByName` and unique category name constraint.
+  9. `JpaMenuItemRepository`: category filtering and availability queries (`findByCategoryIgnoreCase`, `findByAvailableTrue`).
+  10. `JpaMenuItemRepository`: `findByIsMostLovedTrue` and `findByNameIgnoreCase`.
+  11. `JpaCatalogMigrationRepository`: migration tracking with `existsById`.
+  12. `JpaStoreSettingsRepository`: save, `findById('default')`, and tax rate numeric precision (`NUMERIC(5, 4)`).
+- **Targeted Integration Test:** 12 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 8.614s).
+- **Full PostgreSQL Regression Suite:**
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest -Dtest.postgres.port=54337`
+  - Results: **121 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 32.080s across 8 suites).
+- **Clean Compilation:** `mvn test-compile` (`BUILD SUCCESS`, 121 source files compiled cleanly).
+
+**MongoDB Compatibility:**
+- Fully preserved: All MongoDB document models, repositories, and services remain completely untouched and operational.
+
+**Next Task:**
+`PG-010` — Implement Spring Data JPA repositories for operational domain models (`JpaCustomerOrderRepository`, `JpaCartRepository`, `JpaOrderReviewRepository`, `JpaReservationRepository`).
 
 ---
 
