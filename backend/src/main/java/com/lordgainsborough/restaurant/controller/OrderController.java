@@ -11,6 +11,10 @@ import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.OrderAccessService;
 import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
+import com.lordgainsborough.restaurant.service.CustomerOrderStore;
+import com.lordgainsborough.restaurant.service.MongoCustomerOrderStore;
+import com.lordgainsborough.restaurant.service.OrderMoney;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -26,13 +30,10 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/orders")
 public class OrderController {
-    private final CustomerOrderRepository orderRepository;
-    private final OrderReviewRepository reviewRepository;
-    private final MenuItemRepository menuItemRepository;
+    private final CustomerOrderStore orderStore;
     private final OrderRealtimeService realtimeService;
     private final OrderAccessService orderAccessService;
-    private final StoreSettingsService storeSettingsService;
-    private final CustomerNoShowService customerNoShowService;
+
 
     public OrderController(
             CustomerOrderRepository orderRepository,
@@ -42,13 +43,16 @@ public class OrderController {
             OrderAccessService orderAccessService,
             StoreSettingsService storeSettingsService,
             CustomerNoShowService customerNoShowService) {
-        this.orderRepository = orderRepository;
-        this.reviewRepository = reviewRepository;
-        this.menuItemRepository = menuItemRepository;
+        this(new MongoCustomerOrderStore(orderRepository, menuItemRepository, reviewRepository,
+                storeSettingsService, customerNoShowService), realtimeService, orderAccessService);
+    }
+
+    @Autowired
+    public OrderController(CustomerOrderStore orderStore, OrderRealtimeService realtimeService,
+            OrderAccessService orderAccessService) {
+        this.orderStore = orderStore;
         this.realtimeService = realtimeService;
         this.orderAccessService = orderAccessService;
-        this.storeSettingsService = storeSettingsService;
-        this.customerNoShowService = customerNoShowService;
     }
 
     @PostMapping
@@ -59,13 +63,13 @@ public class OrderController {
                     "message", "Your cart is empty."));
         }
 
-        if (!storeSettingsService.getSettings().getPickupOrdersEnabled()) {
+        if (!orderStore.settings().getPickupOrdersEnabled()) {
             return ResponseEntity.status(503).body(Map.of(
                     "code", "PICKUP_ORDERS_PAUSED",
                     "message", "Pickup orders are currently paused. Please check back later."));
         }
 
-        if (customerNoShowService.isPickupDisabledForCustomer(order.getCustomerEmail(), order.getCustomerPhone())) {
+        if (orderStore.pickupDisabled(order.getCustomerEmail(), order.getCustomerPhone())) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
                     "code", "PICKUP_DISABLED_NO_SHOW",
                     "message", CustomerNoShowService.PICKUP_DISABLED_MESSAGE));
@@ -84,21 +88,26 @@ public class OrderController {
 
         order.setId(null);
         order.setStatus("NEW");
-        order.setAverageReadyMinutes(normalizeReadyMinutes(storeSettingsService.getSettings().getDefaultReadyMinutes()));
+        order.setAverageReadyMinutes(normalizeReadyMinutes(orderStore.settings().getDefaultReadyMinutes()));
         order.setCreatedAt(LocalDateTime.now());
         order.setAcceptedAt(null);
         order.setReadyAt(null);
         order.setPickedUpAt(null);
+        order.setNoShowAt(null);
         order.setReviewed(false);
         order.setMessages(new ArrayList<>());
         order.setSpecialInstructions(normalizeInstructions(order.getSpecialInstructions()));
-        normalizeItemsAndTotals(order, storeSettingsService.getSettings().getTaxRate());
+        try {
+            if (orderStore.usesPostgres()) OrderMoney.calculate(order, orderStore.settings().getTaxRate());
+            else normalizeItemsAndTotals(order, orderStore.settings().getTaxRate());
+        } catch (IllegalArgumentException invalidMoney) {
+            return ResponseEntity.badRequest().body(cartChanged());
+        }
 
         String trackingToken = orderAccessService.generateTrackingToken();
         order.setTrackingTokenHash(orderAccessService.hashTrackingToken(trackingToken));
 
-        CustomerOrder saved = orderRepository.save(order);
-        realtimeService.orderCreated(saved);
+        CustomerOrder saved = orderStore.create(order, this::notifyCreated);
         return ResponseEntity.ok(new OrderCreationResponse(OrderStatusResponse.from(saved), trackingToken));
     }
 
@@ -107,8 +116,8 @@ public class OrderController {
             @PathVariable String id,
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestHeader(value = OrderAccessService.TRACKING_TOKEN_HEADER, required = false) String trackingToken) {
-        return orderRepository.findById(id)
-                .filter(order -> orderAccessService.canAccess(order, authHeader, trackingToken))
+        return orderStore.findById(id)
+                .filter(order -> canAccess(order, authHeader, trackingToken))
                 .map(order -> {
                     applyReviewState(order);
                     return ResponseEntity.ok(OrderStatusResponse.from(order));
@@ -127,38 +136,33 @@ public class OrderController {
             return ResponseEntity.badRequest().build();
         }
 
-        Optional<CustomerOrder> orderOpt = orderRepository.findById(id);
-        if (orderOpt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        CustomerOrder order = orderOpt.get();
-        if (!orderAccessService.canAccess(order, authHeader, trackingToken)) {
-            // Avoid leaking existence to unauthorized callers.
-            return ResponseEntity.notFound().build();
-        }
-
-        return ResponseEntity.ok(appendMessage(order, "CUSTOMER", "Customer", text.trim()));
-    }
-
-    private CustomerOrder.OrderMessage appendMessage(CustomerOrder order, String senderRole, String senderName, String text) {
         CustomerOrder.OrderMessage message = new CustomerOrder.OrderMessage();
         message.setId(UUID.randomUUID().toString());
-        message.setSenderRole(senderRole);
-        message.setSenderName(senderName);
-        message.setText(text);
+        message.setSenderRole("CUSTOMER");
+        message.setSenderName("Customer");
+        message.setText(text.trim());
         message.setCreatedAt(LocalDateTime.now());
+        return orderStore.appendMessage(id, order -> canAccess(order, authHeader, trackingToken), message,
+                saved -> {
+                    realtimeService.chatMessage(saved, message);
+                    if (orderStore.usesPostgres()) realtimeService.orderUpdatedWithCustomerCounts(saved);
+                    else realtimeService.orderUpdated(saved);
+                }).map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
 
-        List<CustomerOrder.OrderMessage> messages = order.getMessages();
-        if (messages == null) {
-            messages = new ArrayList<>();
-            order.setMessages(messages);
-        }
-        messages.add(message);
+    private boolean canAccess(CustomerOrder order, String authHeader, String trackingToken) {
+        return orderStore.usesPostgres() ? orderAccessService.canAccessPostgresOrder(order, trackingToken)
+                : orderAccessService.canAccess(order, authHeader, trackingToken);
+    }
 
-        CustomerOrder saved = orderRepository.save(order);
-        realtimeService.chatMessage(saved, message);
-        realtimeService.orderUpdated(saved);
-        return message;
+    private void notifyCreated(CustomerOrder saved) {
+        if (orderStore.usesPostgres()) realtimeService.orderCreatedWithCustomerCounts(saved);
+        else realtimeService.orderCreated(saved);
+    }
+
+    private static Map<String, String> cartChanged() {
+        return Map.of("code", "CART_ITEM_CHANGED",
+                "message", "An item in your cart is no longer on the menu. Please remove it and try again.");
     }
 
     /**
@@ -168,14 +172,11 @@ public class OrderController {
      */
     private Map<String, String> repriceFromMenu(CustomerOrder order) {
         for (CustomerOrder.OrderItem item : order.getItems()) {
-            Optional<MenuItem> menuItemOpt = Optional.empty();
-            if (item.getMenuItemId() != null && !item.getMenuItemId().isBlank()) {
-                menuItemOpt = menuItemRepository.findById(item.getMenuItemId());
-            }
-
-            if (menuItemOpt.isEmpty() && item.getName() != null && !item.getName().isBlank()) {
-                menuItemOpt = menuItemRepository.findFirstByNameIgnoreCase(item.getName().trim());
-            }
+            if (item == null) return cartChanged();
+            Optional<MenuItem> menuItemOpt;
+            try {
+                menuItemOpt = orderStore.resolveMenuItem(item.getMenuItemId(), item.getName());
+            } catch (IllegalArgumentException invalidPrice) { return cartChanged(); }
 
             if (menuItemOpt.isEmpty()) {
                 return Map.of(
@@ -242,6 +243,6 @@ public class OrderController {
     }
 
     private void applyReviewState(CustomerOrder order) {
-        order.setReviewed(order.isReviewed() || reviewRepository.existsByOrderId(order.getId()));
+        order.setReviewed(order.isReviewed() || orderStore.reviewExists(order.getId()));
     }
 }

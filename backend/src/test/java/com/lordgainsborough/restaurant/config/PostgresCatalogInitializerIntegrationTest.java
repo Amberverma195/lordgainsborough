@@ -3,6 +3,13 @@ package com.lordgainsborough.restaurant.config;
 import com.lordgainsborough.restaurant.controller.CategoryController;
 import com.lordgainsborough.restaurant.controller.MenuController;
 import com.lordgainsborough.restaurant.controller.OrderController;
+import com.lordgainsborough.restaurant.model.CustomerOrder;
+import com.lordgainsborough.restaurant.model.StoreSettings;
+import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
+import com.lordgainsborough.restaurant.repository.MenuItemRepository;
+import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
+import com.lordgainsborough.restaurant.service.*;
+import static org.mockito.Mockito.*;
 import com.lordgainsborough.restaurant.model.Category;
 import com.lordgainsborough.restaurant.model.MenuItem;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaCatalogMigration;
@@ -944,15 +951,30 @@ public class PostgresCatalogInitializerIntegrationTest {
         assertThat(hasMongoCatRepo).isTrue();
         assertThat(hasJpaCatRepo).isFalse();
 
-        // OrderController must still declare com.lordgainsborough.restaurant.repository.MenuItemRepository (MongoDB)
-        Field[] orderFields = OrderController.class.getDeclaredFields();
-        boolean hasMongoOrderMenuRepo = false;
-        for (Field f : orderFields) {
-            if (f.getType().equals(com.lordgainsborough.restaurant.repository.MenuItemRepository.class)) {
-                hasMongoOrderMenuRepo = true;
-            }
-        }
-        assertThat(hasMongoOrderMenuRepo).isTrue();
+        // PG-017 moves menu access behind an SPI. Prove default runtime still queries Mongo,
+        // rather than freezing a private field layout that prevents an opt-in adapter.
+        var mongoMenu = mock(MenuItemRepository.class);
+        var storeSettings = mock(StoreSettingsService.class);
+        when(storeSettings.getSettings()).thenReturn(new StoreSettings());
+        new ApplicationContextRunner()
+                .withUserConfiguration(PostgresOrderPersistenceConfiguration.class, MongoCustomerOrderStore.class, OrderController.class)
+                .withBean(CustomerOrderRepository.class, () -> mock(CustomerOrderRepository.class))
+                .withBean(MenuItemRepository.class, () -> mongoMenu)
+                .withBean(OrderReviewRepository.class, () -> mock(OrderReviewRepository.class))
+                .withBean(StoreSettingsService.class, () -> storeSettings)
+                .withBean(CustomerNoShowService.class, () -> mock(CustomerNoShowService.class))
+                .withBean(OrderAccessService.class, () -> mock(OrderAccessService.class))
+                .withBean(OrderRealtimeService.class, () -> mock(OrderRealtimeService.class))
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean(CustomerOrderStore.class)).isInstanceOf(MongoCustomerOrderStore.class);
+                    assertThat(ctx).doesNotHaveBean(PostgresCustomerOrderStore.class);
+                    CustomerOrder order = new CustomerOrder();
+                    CustomerOrder.OrderItem item = new CustomerOrder.OrderItem();
+                    item.setMenuItemId("unknown"); order.getItems().add(item);
+                    assertThat(ctx.getBean(OrderController.class).createOrder(order).getStatusCode().value()).isEqualTo(400);
+                    verify(mongoMenu).findById("unknown");
+                });
     }
 
     @Test

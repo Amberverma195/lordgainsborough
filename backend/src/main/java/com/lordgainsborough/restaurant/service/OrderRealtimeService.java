@@ -24,14 +24,23 @@ public class OrderRealtimeService {
 
     public void orderCreated(CustomerOrder order) {
         CustomerOrder payload = presentationService.attachCustomerOrderCount(order);
+        orderCreatedWithCustomerCounts(payload);
+    }
+
+    /** PG-017 isolated adapter supplies counts from the committed PostgreSQL dataset. */
+    public void orderCreatedWithCustomerCounts(CustomerOrder payload) {
         sendEvent("kds", "order.created", payload);
-        sendEvent("order:" + order.getId(), "order.updated", payload);
+        sendEvent("order:" + payload.getId(), "order.updated", payload);
     }
 
     public void orderUpdated(CustomerOrder order) {
         CustomerOrder payload = presentationService.attachCustomerOrderCount(order);
+        orderUpdatedWithCustomerCounts(payload);
+    }
+
+    public void orderUpdatedWithCustomerCounts(CustomerOrder payload) {
         sendEvent("kds", "order.updated", payload);
-        sendEvent("order:" + order.getId(), "order.updated", payload);
+        sendEvent("order:" + payload.getId(), "order.updated", payload);
     }
 
     public void chatMessage(CustomerOrder order, CustomerOrder.OrderMessage message) {

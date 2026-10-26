@@ -40,6 +40,10 @@ import java.util.Optional;
 @Repository
 public interface JpaCustomerOrderRepository extends JpaRepository<JpaCustomerOrder, String> {
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where o.id = :id")
+    Optional<JpaCustomerOrder> findForMessageAppend(@org.springframework.data.repository.query.Param("id") String id);
+
     List<JpaCustomerOrder> findByPickupDateOrderByCreatedAtDesc(String pickupDate);
 
     List<JpaCustomerOrder> findByCustomerEmailOrderByCreatedAtDesc(String customerEmail);

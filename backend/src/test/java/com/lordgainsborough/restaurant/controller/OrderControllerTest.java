@@ -194,6 +194,33 @@ class OrderControllerTest {
         assertEquals(17.99, body.getOrder().getSubtotal());
     }
 
+    @Test
+    void mongoMessageAppendsToExistingHistoryWithOriginalResponseContract() {
+        CustomerOrder order = new CustomerOrder(); order.setId("order-1");
+        CustomerOrder.OrderMessage existing = new CustomerOrder.OrderMessage(); existing.setId("existing");
+        order.getMessages().add(existing);
+        when(orderRepository.findById("order-1")).thenReturn(Optional.of(order));
+        when(orderAccessService.canAccess(order, null, "token")).thenReturn(true);
+        when(orderRepository.save(order)).thenReturn(order);
+        var response = controller.addCustomerMessage("order-1", null, "token", Map.of("text", "  Hello  "));
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("Hello", response.getBody().getText());
+        assertEquals("CUSTOMER", response.getBody().getSenderRole());
+        assertEquals("Customer", response.getBody().getSenderName());
+        assertNotNull(response.getBody().getId()); assertNotNull(response.getBody().getCreatedAt());
+        assertEquals(2, order.getMessages().size()); assertEquals(existing, order.getMessages().getFirst());
+        verify(realtimeService).chatMessage(order, response.getBody()); verify(realtimeService).orderUpdated(order);
+    }
+
+    @Test
+    void mongoUnauthorizedMessageDoesNotPersistOrEmit() {
+        CustomerOrder order = new CustomerOrder(); order.setId("order-1");
+        when(orderRepository.findById("order-1")).thenReturn(Optional.of(order));
+        var response = controller.addCustomerMessage("order-1", null, null, Map.of("text", "Hello"));
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        verify(orderRepository, never()).save(any()); org.mockito.Mockito.verifyNoInteractions(realtimeService);
+    }
+
     private CustomerOrder orderWith(String menuItemId, double clientUnitPrice) {
         CustomerOrder order = new CustomerOrder();
         CustomerOrder.OrderItem item = new CustomerOrder.OrderItem();

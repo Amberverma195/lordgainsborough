@@ -56,6 +56,11 @@ public class OrderAccessService {
                 .isPresent();
     }
 
+    /** PostgreSQL identity authentication is deferred to PG-022. Never resolve a Mongo identity here. */
+    public boolean canAccessPostgresOrder(CustomerOrder order, String trackingToken) {
+        return hasValidTrackingToken(order, trackingToken);
+    }
+
     public boolean canAccessWithJwtToken(CustomerOrder order, String jwtToken, String trackingToken) {
         if (hasValidTrackingToken(order, trackingToken)) {
             return true;
@@ -67,9 +72,15 @@ public class OrderAccessService {
 
     private boolean hasValidTrackingToken(CustomerOrder order, String trackingToken) {
         String expectedHash = order.getTrackingTokenHash();
-        if (expectedHash == null || expectedHash.isBlank() || trackingToken == null || trackingToken.isBlank()) {
+        if (expectedHash == null || expectedHash.isBlank() || trackingToken == null
+                || !trackingToken.matches("[A-Za-z0-9_-]{43}")) {
             return false;
         }
+        try {
+            byte[] decoded = Base64.getUrlDecoder().decode(trackingToken);
+            if (decoded.length != TRACKING_TOKEN_BYTES || !Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(decoded).equals(trackingToken)) return false;
+        } catch (IllegalArgumentException invalid) { return false; }
         byte[] expected = expectedHash.getBytes(StandardCharsets.UTF_8);
         byte[] actual = hashTrackingToken(trackingToken).getBytes(StandardCharsets.UTF_8);
         return MessageDigest.isEqual(expected, actual);
