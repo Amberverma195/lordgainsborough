@@ -203,15 +203,9 @@ public class SecurityJpaRepositoryIntegrationTest {
         userRepository = context.getBean(JpaUserRepository.class);
     }
 
-    @AfterAll
-    void tearDownAll() {
-        if (context != null) {
-            context.close();
-        }
-        dropDisposableDatabaseSafely(testDb);
-    }
+    private DisposableDatabaseSession mainDatabaseSession;
 
-    private void assertSafeTestEnvironment(String port, String dbName) {
+    static void assertSafeTestEnvironment(String port, String dbName) {
         assertThat(port)
                 .withFailMessage("Test PostgreSQL port must not be blank")
                 .isNotBlank();
@@ -226,28 +220,66 @@ public class SecurityJpaRepositoryIntegrationTest {
                 .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
     }
 
-    private void provisionDisposableDatabaseSafely(String dbName) throws Exception {
-        assertSafeTestEnvironment(testPort, dbName);
-        String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
-        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("CREATE DATABASE " + dbName);
-            this.databaseCreatedByTest = true;
+    static class DisposableDatabaseSession {
+        private final String port;
+        private final String dbName;
+        private boolean createdAndOwned = false;
+
+        DisposableDatabaseSession(String port, String dbName) {
+            this.port = port;
+            this.dbName = dbName;
+        }
+
+        void provision() throws Exception {
+            assertSafeTestEnvironment(port, dbName);
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.executeUpdate("CREATE DATABASE " + dbName);
+                this.createdAndOwned = true;
+            }
+        }
+
+        void drop() {
+            if (!createdAndOwned || dbName == null) {
+                return;
+            }
+            assertSafeTestEnvironment(port, dbName);
+            String adminUrl = "jdbc:postgresql://127.0.0.1:" + port + "/postgres?sslmode=disable";
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
+                stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
+                this.createdAndOwned = false;
+            } catch (Exception e) {
+                System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
+            }
+        }
+
+        boolean isCreatedAndOwned() {
+            return createdAndOwned;
         }
     }
 
-    private void dropDisposableDatabaseSafely(String dbName) {
-        if (!databaseCreatedByTest || dbName == null) {
-            return;
+    @AfterAll
+    void tearDownAll() {
+        if (context != null) {
+            context.close();
         }
-        assertSafeTestEnvironment(testPort, dbName);
-        String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
-        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
-            stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
-        } catch (Exception e) {
-            System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
+        if (mainDatabaseSession != null) {
+            mainDatabaseSession.drop();
+        }
+    }
+
+    private void provisionDisposableDatabaseSafely(String dbName) throws Exception {
+        mainDatabaseSession = new DisposableDatabaseSession(testPort, dbName);
+        mainDatabaseSession.provision();
+        this.databaseCreatedByTest = mainDatabaseSession.isCreatedAndOwned();
+    }
+
+    private void dropDisposableDatabaseSafely(String dbName) {
+        if (mainDatabaseSession != null) {
+            mainDatabaseSession.drop();
         }
     }
 
@@ -1328,5 +1360,92 @@ public class SecurityJpaRepositoryIntegrationTest {
                     assertThat(ctx).doesNotHaveBean(JpaOrderReviewRepository.class);
                     assertThat(ctx).doesNotHaveBean(JpaReservationRepository.class);
                 });
+    }
+
+    @Test
+    @Order(32)
+    @DisplayName("Req 32: Disposable database creation failure and unowned teardown safety guardrails")
+    void test32_databaseCreationFailureCannotCauseDeletionOfExistingDatabase() throws Exception {
+        String safeName = TEST_DB_PREFIX + "guard_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
+
+        // 1. Manually create an existing database to simulate an existing database not owned by session
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate("CREATE DATABASE " + safeName);
+        }
+
+        try {
+            // 2. An unowned session must refuse to drop the database
+            DisposableDatabaseSession unownedSession = new DisposableDatabaseSession(testPort, safeName);
+            assertThat(unownedSession.isCreatedAndOwned()).isFalse();
+
+            // Calling drop() without successful provision() must NO-OP
+            unownedSession.drop();
+
+            // Prove database was NOT deleted
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + safeName + "'")) {
+                assertThat(rs.next()).isTrue();
+            }
+
+            // 3. Attempting to provision over an existing database must fail and not grant ownership
+            assertThatThrownBy(unownedSession::provision).isInstanceOf(Exception.class);
+            assertThat(unownedSession.isCreatedAndOwned()).isFalse();
+
+            // Calling drop() again after failed provision must still NO-OP
+            unownedSession.drop();
+
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + safeName + "'")) {
+                assertThat(rs.next()).isTrue();
+            }
+        } finally {
+            // Cleanup safeName
+            try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + safeName + "' AND pid <> pg_backend_pid()");
+                stmt.executeUpdate("DROP DATABASE IF EXISTS " + safeName + " WITH (FORCE)");
+            }
+        }
+
+        // 4. Assert protected names are rejected
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "postgres"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "template0"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "template1"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "public"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "lordgainsborough"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "restaurant"))
+                .isInstanceOf(AssertionError.class);
+        assertThatThrownBy(() -> assertSafeTestEnvironment(testPort, "invalid_prefix_db"))
+                .isInstanceOf(AssertionError.class);
+
+        // 5. Successful ownership provision and drop lifecycle works as expected
+        String ownedName = TEST_DB_PREFIX + "owned_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        DisposableDatabaseSession ownedSession = new DisposableDatabaseSession(testPort, ownedName);
+        ownedSession.provision();
+        assertThat(ownedSession.isCreatedAndOwned()).isTrue();
+
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + ownedName + "'")) {
+            assertThat(rs.next()).isTrue();
+        }
+
+        ownedSession.drop();
+        assertThat(ownedSession.isCreatedAndOwned()).isFalse();
+
+        try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT 1 FROM pg_database WHERE datname = '" + ownedName + "'")) {
+            assertThat(rs.next()).isFalse();
+        }
     }
 }

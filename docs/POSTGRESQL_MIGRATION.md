@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T00:58:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T01:05:40-04:00 (America/Toronto)  
 
 ---
 
@@ -1321,6 +1321,23 @@ Existing MongoDB models (`SignupOtpChallenge`, `PasswordResetOtpChallenge`, `Sig
 
 **Next Task:**  
 `PG-012` — Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization (`NOT STARTED`).
+
+---
+
+### [2026-10-26T01:05:00-04:00] PG-011 Test Infrastructure Hardening: Disposable Database Lifecycle & Ownership Safety
+
+**Overview & Rationale:**  
+During post-implementation review of `SecurityJpaRepositoryIntegrationTest`, an unsafe database lifecycle pattern was identified where exceptions from `CREATE DATABASE` could be swallowed while teardown executed unconditional `DROP DATABASE ... WITH (FORCE)`. To guarantee complete isolation and prevent accidental deletion of existing databases:
+- **`DisposableDatabaseSession` Helper:** Encapsulated database provisioning and teardown into an explicit lifecycle session. Successful database creation records verified ownership (`createdAndOwned = true`).
+- **Conditional Destruction:** Teardown strictly refuses to terminate connections or execute `DROP DATABASE` unless test ownership was positively recorded.
+- **Loopback Enforcement & Protected Database Rejection:** Connection configuration is strictly constrained to loopback (`127.0.0.1`), and database names are validated against regex `^[a-z0-9_]{5,63}$` with prefix `sec_jpa_repo_test_` while explicitly forbidding system/production databases (`postgres`, `template0`, `template1`, `public`, `lordgainsborough`, `restaurant`).
+- **Error Transparency:** Database creation failures throw immediately and unswallowed; unexpected cleanup errors are reported to `System.err`.
+- **Focused Verification:** Added `test32_databaseCreationFailureCannotCauseDeletionOfExistingDatabase` demonstrating that an unowned database survives cleanup attempts, creation failures over existing databases do not confer ownership, and protected database names are rejected.
+
+**Verification Results:**  
+- **Targeted Integration Test Suite:** `com.lordgainsborough.restaurant.persistence.jpa.SecurityJpaRepositoryIntegrationTest`
+  - Tests Run: **34**, Failures: **0**, Errors: **0**, Skipped: **0** (`BUILD SUCCESS`, 9.487s).
+- **Status:** PG-011 test infrastructure safety correction verified. Ready to proceed to PG-012.
 
 ---
 
