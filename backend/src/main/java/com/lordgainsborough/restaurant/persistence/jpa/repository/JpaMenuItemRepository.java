@@ -20,7 +20,11 @@ public interface JpaMenuItemRepository extends JpaRepository<JpaMenuItem, String
 
     Optional<JpaMenuItem> findFirstByNameIgnoreCase(String name);
 
+    Optional<JpaMenuItem> findFirstByNameIgnoreCaseOrderByIdAsc(String name);
+
     List<JpaMenuItem> findByAvailableTrue();
+
+    List<JpaMenuItem> findByIsMostLovedTrue();
 
     boolean existsByName(String name);
 

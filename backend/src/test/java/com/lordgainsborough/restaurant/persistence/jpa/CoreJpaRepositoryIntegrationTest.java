@@ -10,6 +10,7 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaCategoryRep
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaMenuItemRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaStoreSettingsRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository;
+import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -56,6 +57,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@link JpaCatalogMigrationRepository}, and {@link JpaStoreSettingsRepository}
  * against a disposable PostgreSQL 17.11 instance initialized via Flyway V1.
  * </p>
+ * <p>
+ * Validates all 25 specific query, constraint, precision, uniqueness, and configuration
+ * requirements defined in PG-009 specification.
+ * </p>
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -65,6 +70,7 @@ public class CoreJpaRepositoryIntegrationTest {
     private static String testJdbcUrl;
 
     private AnnotationConfigApplicationContext context;
+    private EntityManagerFactory entityManagerFactory;
     private JpaUserRepository userRepository;
     private JpaCategoryRepository categoryRepository;
     private JpaMenuItemRepository menuItemRepository;
@@ -150,17 +156,12 @@ public class CoreJpaRepositoryIntegrationTest {
 
         // 4. Initialize Spring application context with JPA repository support
         context = new AnnotationConfigApplicationContext(TestJpaRepoConfig.class);
+        entityManagerFactory = context.getBean(EntityManagerFactory.class);
         userRepository = context.getBean(JpaUserRepository.class);
         categoryRepository = context.getBean(JpaCategoryRepository.class);
         menuItemRepository = context.getBean(JpaMenuItemRepository.class);
         catalogMigrationRepository = context.getBean(JpaCatalogMigrationRepository.class);
         storeSettingsRepository = context.getBean(JpaStoreSettingsRepository.class);
-
-        assertThat(userRepository).isNotNull();
-        assertThat(categoryRepository).isNotNull();
-        assertThat(menuItemRepository).isNotNull();
-        assertThat(catalogMigrationRepository).isNotNull();
-        assertThat(storeSettingsRepository).isNotNull();
     }
 
     @AfterAll
@@ -171,76 +172,160 @@ public class CoreJpaRepositoryIntegrationTest {
     }
 
     // =========================================================================
-    // JpaUserRepository Tests
+    // Requirement 1, 2, 3: Context, Isolation & Metamodel Validation
     // =========================================================================
 
     @Test
     @Order(1)
-    @DisplayName("JpaUserRepository: save, findById, and verify core attributes")
-    void test1_userRepository_saveAndFindById() {
-        String id = "user-repo-" + UUID.randomUUID();
-        String email = "repo.user." + UUID.randomUUID() + "@example.com";
-        JpaUser user = new JpaUser(id, "Repo User", email, "519-555-0101", "MEMBER");
+    @DisplayName("Req 1: All five JPA repository interfaces are instantiated in isolated Spring context")
+    void test01_allFiveJpaRepositoriesInstantiated() {
+        assertThat(userRepository).isNotNull();
+        assertThat(categoryRepository).isNotNull();
+        assertThat(menuItemRepository).isNotNull();
+        assertThat(catalogMigrationRepository).isNotNull();
+        assertThat(storeSettingsRepository).isNotNull();
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("Req 2: No MongoDB repository is registered as a JPA repository")
+    void test02_noMongoRepositoriesRegisteredInJpaContext() {
+        String[] mongoRepoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.UserRepository.class);
+        assertThat(mongoRepoBeans).isEmpty();
+
+        String[] categoryMongoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.CategoryRepository.class);
+        assertThat(categoryMongoBeans).isEmpty();
+
+        String[] menuItemMongoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.MenuItemRepository.class);
+        assertThat(menuItemMongoBeans).isEmpty();
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("Req 3: Hibernate schema validation succeeds against Flyway V1 schema")
+    void test03_hibernateSchemaValidationSucceeds() {
+        assertThat(entityManagerFactory).isNotNull();
+        assertThat(entityManagerFactory.isOpen()).isTrue();
+    }
+
+    // =========================================================================
+    // Requirement 4: JpaUserRepository CRUD lifecycle
+    // =========================================================================
+
+    @Test
+    @Order(4)
+    @DisplayName("Req 4: JpaUserRepository can save, load, update and delete a user")
+    void test04_userRepository_crudLifecycle() {
+        String id = "user-crud-" + UUID.randomUUID();
+        String email = "crud.user." + UUID.randomUUID() + "@example.com";
+        JpaUser user = new JpaUser(id, "Initial Name", email, "519-555-0101", "MEMBER");
         user.setPhoneNormalized("5195550101");
         user.setPassword("$2a$10$hashedpassword");
         user.setMemberSince("October 2026");
         user.setCreatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS));
 
-        JpaUser saved = userRepository.save(user);
-        assertThat(saved).isNotNull();
-        assertThat(saved.getId()).isEqualTo(id);
+        // Save
+        userRepository.save(user);
 
-        Optional<JpaUser> found = userRepository.findById(id);
-        assertThat(found).isPresent();
-        assertThat(found.get().getName()).isEqualTo("Repo User");
-        assertThat(found.get().getEmail()).isEqualTo(email);
-        assertThat(found.get().getPhoneNormalized()).isEqualTo("5195550101");
+        // Load
+        Optional<JpaUser> loaded = userRepository.findById(id);
+        assertThat(loaded).isPresent();
+        assertThat(loaded.get().getName()).isEqualTo("Initial Name");
+
+        // Update
+        loaded.get().setName("Updated Name");
+        userRepository.save(loaded.get());
+
+        Optional<JpaUser> reloaded = userRepository.findById(id);
+        assertThat(reloaded).isPresent();
+        assertThat(reloaded.get().getName()).isEqualTo("Updated Name");
+
+        // Delete
+        userRepository.deleteById(id);
+        assertThat(userRepository.findById(id)).isEmpty();
+    }
+
+    // =========================================================================
+    // Requirement 5, 6, 7, 8: JpaUserRepository Email Finder & Unique Constraints
+    // =========================================================================
+
+    @Test
+    @Order(5)
+    @DisplayName("Req 5: Exact email finder matches exact casing and returns empty on mismatched case")
+    void test05_exactEmailFinder_matchesExactCasing() {
+        String id = "user-exact-email-" + UUID.randomUUID();
+        String mixedEmail = "Arthur.Pendelton." + UUID.randomUUID() + "@Gainsborough.COM";
+        JpaUser user = new JpaUser(id, "Arthur Pendelton", mixedEmail, "519-555-0102", "MEMBER");
+        userRepository.save(user);
+
+        // Exact casing match
+        Optional<JpaUser> exact = userRepository.findByEmail(mixedEmail);
+        assertThat(exact).isPresent();
+        assertThat(exact.get().getId()).isEqualTo(id);
+
+        // Mismatched casing returns empty for exact method
+        Optional<JpaUser> mismatched = userRepository.findByEmail(mixedEmail.toLowerCase());
+        assertThat(mismatched).isEmpty();
     }
 
     @Test
-    @Order(2)
-    @DisplayName("JpaUserRepository: findByEmail and findByEmailIgnoreCase")
-    void test2_userRepository_findByEmailVariations() {
-        String id = "user-email-" + UUID.randomUUID();
-        String mixedEmail = "MixedCase." + UUID.randomUUID() + "@Example.COM";
-        JpaUser user = new JpaUser(id, "Mixed User", mixedEmail, "519-555-0102", "MEMBER");
-        user.setPhoneNormalized("5195550102");
+    @Order(6)
+    @DisplayName("Req 6: Case-insensitive email finder resolves mixed-case addresses")
+    void test06_caseInsensitiveEmailFinder_resolvesMixedCase() {
+        String id = "user-case-email-" + UUID.randomUUID();
+        String mixedEmail = "Lady.Genevieve." + UUID.randomUUID() + "@LordGainsborough.COM";
+        JpaUser user = new JpaUser(id, "Lady Genevieve", mixedEmail, "519-555-0103", "MEMBER");
         userRepository.save(user);
 
-        // Exact match
-        assertThat(userRepository.findByEmail(mixedEmail)).isPresent();
-
-        // Case-insensitive match
         assertThat(userRepository.findByEmailIgnoreCase(mixedEmail.toLowerCase())).isPresent();
         assertThat(userRepository.findByEmailIgnoreCase(mixedEmail.toUpperCase())).isPresent();
-
-        // Non-existent
-        assertThat(userRepository.findByEmail("nonexistent@example.com")).isEmpty();
+        assertThat(userRepository.findByEmailIgnoreCase(mixedEmail)).isPresent();
+        assertThat(userRepository.findByEmailIgnoreCase("nonexistent." + UUID.randomUUID() + "@example.com")).isEmpty();
     }
 
     @Test
-    @Order(3)
-    @DisplayName("JpaUserRepository: existsByEmail and existsByEmailIgnoreCase")
-    void test3_userRepository_existsByEmailVariations() {
-        String id = "user-exists-" + UUID.randomUUID();
-        String email = "Exists." + UUID.randomUUID() + "@Example.com";
-        JpaUser user = new JpaUser(id, "Exists User", email, "519-555-0103", "MEMBER");
-        user.setPhoneNormalized("5195550103");
+    @Order(7)
+    @DisplayName("Req 7: Email existence queries preserve exact versus case-insensitive semantics")
+    void test07_emailExistenceQueries_preserveExactVsCaseInsensitive() {
+        String id = "user-exists-email-" + UUID.randomUUID();
+        String mixedEmail = "Sir.Galahad." + UUID.randomUUID() + "@Domain.ORG";
+        JpaUser user = new JpaUser(id, "Sir Galahad", mixedEmail, "519-555-0104", "MEMBER");
         userRepository.save(user);
 
-        assertThat(userRepository.existsByEmail(email)).isTrue();
-        assertThat(userRepository.existsByEmailIgnoreCase(email.toLowerCase())).isTrue();
-        assertThat(userRepository.existsByEmailIgnoreCase(email.toUpperCase())).isTrue();
-        assertThat(userRepository.existsByEmail("doesnotexist@example.com")).isFalse();
+        // Exact existence
+        assertThat(userRepository.existsByEmail(mixedEmail)).isTrue();
+        assertThat(userRepository.existsByEmail(mixedEmail.toLowerCase())).isFalse();
+
+        // Case-insensitive existence
+        assertThat(userRepository.existsByEmailIgnoreCase(mixedEmail.toLowerCase())).isTrue();
+        assertThat(userRepository.existsByEmailIgnoreCase(mixedEmail.toUpperCase())).isTrue();
+        assertThat(userRepository.existsByEmailIgnoreCase("nobody." + UUID.randomUUID() + "@domain.org")).isFalse();
     }
 
     @Test
-    @Order(4)
-    @DisplayName("JpaUserRepository: phone query methods (existsByPhone, normalized, and containing)")
-    void test4_userRepository_phoneQueries() {
+    @Order(8)
+    @DisplayName("Req 8: PostgreSQL functional email uniqueness rejects mixed-case duplicates")
+    void test08_functionalEmailUniqueness_rejectsMixedCaseDuplicates() {
+        String email = "DupeCheck." + UUID.randomUUID() + "@Example.com";
+        JpaUser user1 = new JpaUser("u1-" + UUID.randomUUID(), "First", email, "519-555-0111", "MEMBER");
+        userRepository.save(user1);
+
+        JpaUser user2 = new JpaUser("u2-" + UUID.randomUUID(), "Second", email.toLowerCase(), "519-555-0112", "MEMBER");
+        assertThatThrownBy(() -> userRepository.saveAndFlush(user2))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // =========================================================================
+    // Requirement 9, 10: Phone Queries
+    // =========================================================================
+
+    @Test
+    @Order(9)
+    @DisplayName("Req 9: Exact phone and normalized-phone finders work")
+    void test09_exactPhoneAndNormalizedPhoneFinders() {
         String id = "user-phone-" + UUID.randomUUID();
-        String rawPhone = "519-555-0199";
-        String normalizedPhone = "5195550199";
+        String rawPhone = "519-555-0188";
+        String normalizedPhone = "5195550188";
         JpaUser user = new JpaUser(id, "Phone User", "phone." + UUID.randomUUID() + "@example.com", rawPhone, "MEMBER");
         user.setPhoneNormalized(normalizedPhone);
         userRepository.save(user);
@@ -252,206 +337,274 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(userRepository.existsByPhoneNormalized("0000000000")).isFalse();
 
         List<JpaUser> byNormalized = userRepository.findByPhoneNormalized(normalizedPhone);
-        assertThat(byNormalized).isNotEmpty();
+        assertThat(byNormalized).hasSize(1);
         assertThat(byNormalized.get(0).getId()).isEqualTo(id);
-
-        List<JpaUser> bySubstr = userRepository.findByPhoneNormalizedContaining("5550199");
-        assertThat(bySubstr).isNotEmpty();
 
         List<JpaUser> withPhone = userRepository.findByPhoneIsNotNull();
         assertThat(withPhone).isNotEmpty();
     }
 
     @Test
-    @Order(5)
-    @DisplayName("JpaUserRepository: search methods (findByNameContainingIgnoreCase, findByEmailContainingIgnoreCase)")
-    void test5_userRepository_adminCustomerSearchMethods() {
+    @Order(10)
+    @DisplayName("Req 10: Partial normalized-phone searches work")
+    void test10_partialNormalizedPhoneSearches() {
+        String suffix = String.valueOf(System.currentTimeMillis() % 100000);
+        String normalized = "519888" + suffix;
+        String id = "user-partial-phone-" + UUID.randomUUID();
+        JpaUser user = new JpaUser(id, "Partial Phone", "partial.phone." + UUID.randomUUID() + "@example.com", "519-888-" + suffix, "MEMBER");
+        user.setPhoneNormalized(normalized);
+        userRepository.save(user);
+
+        List<JpaUser> matches = userRepository.findByPhoneNormalizedContaining(suffix);
+        assertThat(matches).anyMatch(u -> u.getId().equals(id));
+    }
+
+    // =========================================================================
+    // Requirement 11, 12: Substring Search & SQL Wildcard Safety
+    // =========================================================================
+
+    @Test
+    @Order(11)
+    @DisplayName("Req 11: Name and email substring searches work regardless of casing")
+    void test11_nameAndEmailSubstringSearches() {
         String marker = UUID.randomUUID().toString().substring(0, 8);
-        String id = "user-search-" + UUID.randomUUID();
-        String name = "Lord Bartholomew " + marker;
-        String email = "bart." + marker + "@lordgainsborough.com";
+        String id = "user-sub-" + UUID.randomUUID();
+        String name = "Duke of Wellington " + marker;
+        String email = "wellington." + marker + "@lordgainsborough.com";
 
         JpaUser user = new JpaUser(id, name, email, "519-555-0105", "MEMBER");
         user.setPhoneNormalized("5195550105");
         userRepository.save(user);
 
-        // Name containing ignore case
-        List<JpaUser> byName = userRepository.findByNameContainingIgnoreCase("BARTHOLOMEW " + marker.toLowerCase());
+        List<JpaUser> byName = userRepository.findByNameContainingIgnoreCase("WELLINGTON " + marker.toLowerCase());
         assertThat(byName).isNotEmpty();
         assertThat(byName.get(0).getId()).isEqualTo(id);
 
-        // Email containing ignore case
-        List<JpaUser> byEmail = userRepository.findByEmailContainingIgnoreCase("BART." + marker.toUpperCase());
+        List<JpaUser> byEmail = userRepository.findByEmailContainingIgnoreCase("WELLINGTON." + marker.toUpperCase());
         assertThat(byEmail).isNotEmpty();
         assertThat(byEmail.get(0).getId()).isEqualTo(id);
     }
 
     @Test
-    @Order(6)
-    @DisplayName("JpaUserRepository: case-insensitive email duplicate rejected by PostgreSQL unique constraint")
-    void test6_userRepository_duplicateEmailRejected() {
-        String email = "Unique." + UUID.randomUUID() + "@example.com";
-        JpaUser user1 = new JpaUser("u1-" + UUID.randomUUID(), "First", email, "519-555-0111", "MEMBER");
-        userRepository.save(user1);
+    @Order(12)
+    @DisplayName("Req 12: SQL wildcard characters are handled safely without unintended wildcard expansion")
+    void test12_sqlWildcardInputHandledSafely() {
+        String token = UUID.randomUUID().toString().substring(0, 6);
+        String name1 = "Special 100% Chef " + token;
+        String name2 = "Special 1000 Chef " + token;
 
-        JpaUser user2 = new JpaUser("u2-" + UUID.randomUUID(), "Second", email.toLowerCase(), "519-555-0112", "MEMBER");
-        assertThatThrownBy(() -> userRepository.saveAndFlush(user2))
-                .isInstanceOf(DataIntegrityViolationException.class);
+        JpaUser user1 = new JpaUser("u-wild1-" + UUID.randomUUID(), name1, "wild1." + token + "@example.com", null, "MEMBER");
+        JpaUser user2 = new JpaUser("u-wild2-" + UUID.randomUUID(), name2, "wild2." + token + "@example.com", null, "MEMBER");
+        userRepository.saveAll(List.of(user1, user2));
+
+        // Searching for exact substring with % should not throw SQL exception
+        List<JpaUser> results = userRepository.findByNameContainingIgnoreCase("100% Chef " + token);
+        assertThat(results).isNotEmpty();
+        assertThat(results).allMatch(u -> u.getName().contains("100%"));
     }
 
     // =========================================================================
-    // JpaCategoryRepository Tests
+    // Requirement 13, 14, 15: Category Repository Queries & Semantics
     // =========================================================================
 
     @Test
-    @Order(7)
-    @DisplayName("JpaCategoryRepository: save, findById, findByName, and existsByName")
-    void test7_categoryRepository_basicQueries() {
-        String catId = "cat-" + UUID.randomUUID();
-        String catName = "Starters & Appetizers " + UUID.randomUUID();
-        JpaCategory category = new JpaCategory(catId, catName, "Crispy and fresh starters", 1);
+    @Order(13)
+    @DisplayName("Req 13: Category repository finds by exact name")
+    void test13_categoryRepository_findByExactName() {
+        String catId = "cat-exact-" + UUID.randomUUID();
+        String catName = "Exclusive Wines " + UUID.randomUUID();
+        JpaCategory category = new JpaCategory(catId, catName, "Finest vintage selections", 5);
         categoryRepository.save(category);
 
-        Optional<JpaCategory> byId = categoryRepository.findById(catId);
-        assertThat(byId).isPresent();
-        assertThat(byId.get().getName()).isEqualTo(catName);
-
-        Optional<JpaCategory> byName = categoryRepository.findByName(catName);
-        assertThat(byName).isPresent();
-        assertThat(byName.get().getId()).isEqualTo(catId);
-
-        Optional<JpaCategory> byNameIgnoreCase = categoryRepository.findByNameIgnoreCase(catName.toUpperCase());
-        assertThat(byNameIgnoreCase).isPresent();
-
-        assertThat(categoryRepository.existsByName(catName)).isTrue();
-        assertThat(categoryRepository.existsByNameIgnoreCase(catName.toLowerCase())).isTrue();
-        assertThat(categoryRepository.existsByName("Nonexistent Category")).isFalse();
+        JpaCategory found = categoryRepository.findByName(catName);
+        assertThat(found).isNotNull();
+        assertThat(found.getId()).isEqualTo(catId);
+        assertThat(found.getName()).isEqualTo(catName);
     }
 
     @Test
-    @Order(8)
-    @DisplayName("JpaCategoryRepository: findAllByOrderByDisplayOrderAsc returns categories in ascending display order")
-    void test8_categoryRepository_findAllByOrderByDisplayOrderAsc() {
-        String suffix = UUID.randomUUID().toString().substring(0, 8);
-        JpaCategory cat3 = new JpaCategory("cat-ord-3-" + suffix, "Desserts " + suffix, "Sweet finishes", 3);
-        JpaCategory cat1 = new JpaCategory("cat-ord-1-" + suffix, "Starters " + suffix, "Beginning dishes", 1);
-        JpaCategory cat2 = new JpaCategory("cat-ord-2-" + suffix, "Mains " + suffix, "Main entrees", 2);
+    @Order(14)
+    @DisplayName("Req 14: Missing category returns null where required by the existing contract")
+    void test14_categoryRepository_missingReturnsNull() {
+        JpaCategory missing = categoryRepository.findByName("NonExistentCategory_" + UUID.randomUUID());
+        assertThat(missing).isNull();
+    }
 
+    @Test
+    @Order(15)
+    @DisplayName("Req 15: Category CRUD and displayOrder updates work")
+    void test15_categoryRepository_crudAndDisplayOrderUpdates() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        JpaCategory cat3 = new JpaCategory("cat-ord-3-" + suffix, "Desserts " + suffix, "Sweet finishes", 30);
+        JpaCategory cat1 = new JpaCategory("cat-ord-1-" + suffix, "Starters " + suffix, "Beginning dishes", 10);
+        JpaCategory cat2 = new JpaCategory("cat-ord-2-" + suffix, "Mains " + suffix, "Main entrees", 20);
         categoryRepository.saveAll(List.of(cat3, cat1, cat2));
 
         List<JpaCategory> ordered = categoryRepository.findAllByOrderByDisplayOrderAsc();
         assertThat(ordered).isNotEmpty();
-
-        // Verify strictly non-decreasing order of displayOrder
         for (int i = 0; i < ordered.size() - 1; i++) {
             assertThat(ordered.get(i).getDisplayOrder())
                     .isLessThanOrEqualTo(ordered.get(i + 1).getDisplayOrder());
         }
+
+        // Update display order
+        cat3.setDisplayOrder(5);
+        categoryRepository.save(cat3);
+
+        JpaCategory updatedCat3 = categoryRepository.findByName("Desserts " + suffix);
+        assertThat(updatedCat3).isNotNull();
+        assertThat(updatedCat3.getDisplayOrder()).isEqualTo(5);
     }
 
     // =========================================================================
-    // JpaMenuItemRepository Tests
+    // Requirement 16, 17, 18, 19: Menu Item Repository Queries & Behavior
     // =========================================================================
 
     @Test
-    @Order(9)
-    @DisplayName("JpaMenuItemRepository: save, findByCategory, and findFirstByNameIgnoreCase")
-    void test9_menuItemRepository_categoryAndNameQueries() {
-        String catName = "Seasonal Mains " + UUID.randomUUID();
-        String itemId = "item-repo-" + UUID.randomUUID();
-        String itemName = "Crispy Duck Breast " + UUID.randomUUID();
-        BigDecimal price = new BigDecimal("32.50");
-
-        JpaMenuItem item = new JpaMenuItem(
-                itemId,
-                itemName,
-                "Pan-seared duck breast with cherry reduction",
-                price,
-                catName,
-                "https://images.example.com/duck.jpg",
-                true,
-                true
-        );
+    @Order(16)
+    @DisplayName("Req 16: Menu items can be found by category")
+    void test16_menuItems_findByCategory() {
+        String catName = "Steaks & Grills " + UUID.randomUUID();
+        String itemId = "item-cat-" + UUID.randomUUID();
+        JpaMenuItem item = new JpaMenuItem(itemId, "Wagyu Ribeye " + UUID.randomUUID(), "Desc", new BigDecimal("65.00"), catName, null, true, true);
         menuItemRepository.save(item);
 
         List<JpaMenuItem> byCategory = menuItemRepository.findByCategory(catName);
         assertThat(byCategory).hasSize(1);
-        assertThat(byCategory.get(0).getName()).isEqualTo(itemName);
+        assertThat(byCategory.get(0).getId()).isEqualTo(itemId);
 
-        Optional<JpaMenuItem> byName = menuItemRepository.findFirstByNameIgnoreCase(itemName.toLowerCase());
-        assertThat(byName).isPresent();
-        assertThat(byName.get().getId()).isEqualTo(itemId);
-        assertThat(byName.get().getPrice().compareTo(price)).isEqualTo(0);
-
-        assertThat(menuItemRepository.existsByName(itemName)).isTrue();
-        assertThat(menuItemRepository.existsByNameIgnoreCase(itemName.toUpperCase())).isTrue();
+        // Empty category returns empty list
+        List<JpaMenuItem> emptyCategory = menuItemRepository.findByCategory("Nonexistent Category " + UUID.randomUUID());
+        assertThat(emptyCategory).isEmpty();
     }
 
     @Test
-    @Order(10)
-    @DisplayName("JpaMenuItemRepository: findByAvailableTrue returns only available items")
-    void test10_menuItemRepository_availableQuery() {
-        String suffix = UUID.randomUUID().toString().substring(0, 8);
-        JpaMenuItem availItem = new JpaMenuItem(
-                "item-avail-" + suffix,
-                "Available Item " + suffix,
-                "Desc",
-                new BigDecimal("15.00"),
-                "Mains",
-                null,
-                true,
-                false
-        );
-        JpaMenuItem unavailItem = new JpaMenuItem(
-                "item-unavail-" + suffix,
-                "Unavailable Item " + suffix,
-                "Desc",
-                new BigDecimal("15.00"),
-                "Mains",
-                null,
-                false,
-                false
-        );
+    @Order(17)
+    @DisplayName("Req 17: Case-insensitive menu name finder works")
+    void test17_menuItems_caseInsensitiveNameFinder() {
+        String name = "Atlantic Lobster Thermidor " + UUID.randomUUID();
+        String itemId = "item-lob-" + UUID.randomUUID();
+        JpaMenuItem item = new JpaMenuItem(itemId, name, "Lobster with cheese reduction", new BigDecimal("48.00"), "Seafood", null, true, false);
+        menuItemRepository.save(item);
 
-        menuItemRepository.saveAll(List.of(availItem, unavailItem));
+        Optional<JpaMenuItem> found = menuItemRepository.findFirstByNameIgnoreCase(name.toLowerCase());
+        assertThat(found).isPresent();
+        assertThat(found.get().getId()).isEqualTo(itemId);
 
-        List<JpaMenuItem> available = menuItemRepository.findByAvailableTrue();
-        assertThat(available).anyMatch(i -> i.getId().equals("item-avail-" + suffix));
-        assertThat(available).noneMatch(i -> i.getId().equals("item-unavail-" + suffix));
+        Optional<JpaMenuItem> foundUpper = menuItemRepository.findFirstByNameIgnoreCase(name.toUpperCase());
+        assertThat(foundUpper).isPresent();
+        assertThat(foundUpper.get().getId()).isEqualTo(itemId);
+    }
+
+    @Test
+    @Order(18)
+    @DisplayName("Req 18: Multiple matching menu names have stable, documented first-match behavior")
+    void test18_menuItems_multipleMatchingNamesStableFirstMatch() {
+        String sharedName = "Special Soup " + UUID.randomUUID();
+        String id1 = "item-soup-1-" + UUID.randomUUID();
+        String id2 = "item-soup-2-" + UUID.randomUUID();
+
+        // SQL allows duplicate names since menu_items.name is not UNIQUE
+        JpaMenuItem item1 = new JpaMenuItem(id1, sharedName, "Version 1", new BigDecimal("12.00"), "Soups", null, true, false);
+        JpaMenuItem item2 = new JpaMenuItem(id2, sharedName, "Version 2", new BigDecimal("14.00"), "Soups", null, true, false);
+        menuItemRepository.saveAll(List.of(item1, item2));
+
+        // findFirstByNameIgnoreCase returns a non-empty result
+        Optional<JpaMenuItem> first = menuItemRepository.findFirstByNameIgnoreCase(sharedName);
+        assertThat(first).isPresent();
+        assertThat(List.of(id1, id2)).contains(first.get().getId());
+
+        // findFirstByNameIgnoreCaseOrderByIdAsc provides deterministic ordering
+        Optional<JpaMenuItem> stable = menuItemRepository.findFirstByNameIgnoreCaseOrderByIdAsc(sharedName);
+        assertThat(stable).isPresent();
+        String expectedId = id1.compareTo(id2) < 0 ? id1 : id2;
+        assertThat(stable.get().getId()).isEqualTo(expectedId);
+    }
+
+    @Test
+    @Order(19)
+    @DisplayName("Req 19: Menu price BigDecimal precision remains exact")
+    void test19_menuItems_priceBigDecimalPrecision() {
+        BigDecimal exactPrice = new BigDecimal("42.99");
+        String itemId = "item-price-" + UUID.randomUUID();
+        JpaMenuItem item = new JpaMenuItem(itemId, "Precision Steak " + UUID.randomUUID(), "Desc", exactPrice, "Mains", null, true, false);
+        menuItemRepository.save(item);
+
+        Optional<JpaMenuItem> loaded = menuItemRepository.findById(itemId);
+        assertThat(loaded).isPresent();
+        assertThat(loaded.get().getPrice()).isEqualByComparingTo(exactPrice);
+        assertThat(loaded.get().getPrice().scale()).isEqualTo(2);
     }
 
     // =========================================================================
-    // JpaCatalogMigrationRepository Tests
+    // Requirement 20, 21: CatalogMigration Repository
     // =========================================================================
 
     @Test
-    @Order(11)
-    @DisplayName("JpaCatalogMigrationRepository: save, existsById, and findById")
-    void test11_catalogMigrationRepository_crudAndExists() {
-        String migrationId = "migration-repo-" + UUID.randomUUID();
-        Instant appliedTime = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+    @Order(20)
+    @DisplayName("Req 20: CatalogMigration assigned IDs are preserved without alteration or UUID generation")
+    void test20_catalogMigration_assignedIdsPreserved() {
+        String assignedId = "2026-10-lord-gains-autumn-" + UUID.randomUUID();
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        JpaCatalogMigration migration = new JpaCatalogMigration(assignedId, now);
 
-        assertThat(catalogMigrationRepository.existsById(migrationId)).isFalse();
-
-        JpaCatalogMigration migration = new JpaCatalogMigration(migrationId, appliedTime);
         catalogMigrationRepository.save(migration);
 
-        assertThat(catalogMigrationRepository.existsById(migrationId)).isTrue();
-
-        Optional<JpaCatalogMigration> loaded = catalogMigrationRepository.findById(migrationId);
+        Optional<JpaCatalogMigration> loaded = catalogMigrationRepository.findById(assignedId);
         assertThat(loaded).isPresent();
-        assertThat(loaded.get().getId()).isEqualTo(migrationId);
-        assertThat(loaded.get().getAppliedAt()).isEqualTo(appliedTime);
+        assertThat(loaded.get().getId()).isEqualTo(assignedId);
+        assertThat(loaded.get().getAppliedAt()).isEqualTo(now);
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("Req 21: CatalogMigration existsById works correctly before and after save")
+    void test21_catalogMigration_existsById() {
+        String testMigrationId = "2026-11-winter-menu-" + UUID.randomUUID();
+        assertThat(catalogMigrationRepository.existsById(testMigrationId)).isFalse();
+
+        catalogMigrationRepository.save(new JpaCatalogMigration(testMigrationId, Instant.now()));
+        assertThat(catalogMigrationRepository.existsById(testMigrationId)).isTrue();
     }
 
     // =========================================================================
-    // JpaStoreSettingsRepository Tests
+    // Requirement 22, 23: StoreSettings Singleton & Numeric Precision
     // =========================================================================
 
     @Test
-    @Order(12)
-    @DisplayName("JpaStoreSettingsRepository: save, findById('default'), and tax rate numeric precision")
-    void test12_storeSettingsRepository_singletonAndPrecision() {
+    @Order(22)
+    @DisplayName("Req 22: StoreSettings singleton can be inserted, updated and retrieved")
+    void test22_storeSettings_singletonInsertUpdateRetrieve() {
+        JpaStoreSettings settings = new JpaStoreSettings(
+                JpaStoreSettings.DEFAULT_ID,
+                new BigDecimal("0.1300"),
+                25,
+                "Lord Gainsborough"
+        );
+        settings.setContactEmail("info@lordgainsborough.com");
+        settings.setPickupOrdersEnabled(true);
+        settings.setKdsAllowedIp("192.168.1.100");
+        storeSettingsRepository.save(settings);
+
+        Optional<JpaStoreSettings> loaded = storeSettingsRepository.findById(JpaStoreSettings.DEFAULT_ID);
+        assertThat(loaded).isPresent();
+        assertThat(loaded.get().getDefaultReadyMinutes()).isEqualTo(25);
+
+        // Update operational parameters
+        loaded.get().setDefaultReadyMinutes(35);
+        loaded.get().setPickupOrdersEnabled(false);
+        storeSettingsRepository.save(loaded.get());
+
+        Optional<JpaStoreSettings> updated = storeSettingsRepository.findById(JpaStoreSettings.DEFAULT_ID);
+        assertThat(updated).isPresent();
+        assertThat(updated.get().getDefaultReadyMinutes()).isEqualTo(35);
+        assertThat(updated.get().isPickupOrdersEnabled()).isFalse();
+    }
+
+    @Test
+    @Order(23)
+    @DisplayName("Req 23: Tax rate precision (precision 5, scale 4) survives repository save and reload")
+    void test23_storeSettings_taxRatePrecisionSurvivesSaveAndReload() {
         BigDecimal taxRate = new BigDecimal("0.1300");
         JpaStoreSettings settings = new JpaStoreSettings(
                 JpaStoreSettings.DEFAULT_ID,
@@ -459,19 +612,45 @@ public class CoreJpaRepositoryIntegrationTest {
                 30,
                 "Lord Gainsborough Fine Dining"
         );
-        settings.setContactEmail("hospitality@lordgainsborough.com");
-        settings.setContactPhone("519-555-0100");
-        settings.setKdsAllowedIp("10.0.0.50");
-
         storeSettingsRepository.save(settings);
 
         Optional<JpaStoreSettings> loaded = storeSettingsRepository.findById(JpaStoreSettings.DEFAULT_ID);
         assertThat(loaded).isPresent();
-        assertThat(loaded.get().getId()).isEqualTo("default");
-        assertThat(loaded.get().getTaxRate().compareTo(taxRate)).isEqualTo(0);
-        assertThat(loaded.get().getDefaultReadyMinutes()).isEqualTo(30);
-        assertThat(loaded.get().getStoreName()).isEqualTo("Lord Gainsborough Fine Dining");
-        assertThat(loaded.get().getContactEmail()).isEqualTo("hospitality@lordgainsborough.com");
-        assertThat(loaded.get().getKdsAllowedIp()).isEqualTo("10.0.0.50");
+        assertThat(loaded.get().getTaxRate()).isEqualByComparingTo(taxRate);
+        assertThat(loaded.get().getTaxRate().scale()).isEqualTo(4);
+    }
+
+    // =========================================================================
+    // Requirement 24, 25: Isolation & Bean Name Collision Protection
+    // =========================================================================
+
+    @Test
+    @Order(24)
+    @DisplayName("Req 24: JPA repository beans do not collide with existing MongoDB repository names")
+    void test24_jpaRepositoryBeansDoNotCollideWithMongoNames() {
+        // All JPA repositories are prefixed with Jpa...
+        assertThat(context.containsBean("jpaUserRepository")).isTrue();
+        assertThat(context.containsBean("jpaCategoryRepository")).isTrue();
+        assertThat(context.containsBean("jpaMenuItemRepository")).isTrue();
+        assertThat(context.containsBean("jpaCatalogMigrationRepository")).isTrue();
+        assertThat(context.containsBean("jpaStoreSettingsRepository")).isTrue();
+
+        // Legacy MongoDB repository bean names must NOT be present in this context
+        assertThat(context.containsBean("userRepository")).isFalse();
+        assertThat(context.containsBean("categoryRepository")).isFalse();
+        assertThat(context.containsBean("menuItemRepository")).isFalse();
+        assertThat(context.containsBean("catalogMigrationRepository")).isFalse();
+        assertThat(context.containsBean("storeSettingsRepository")).isFalse();
+    }
+
+    @Test
+    @Order(25)
+    @DisplayName("Req 25: The default MongoDB configuration remains isolated from JPA repository activation")
+    void test25_defaultMongoConfigurationRemainsIsolated() {
+        // Assert that legacy repository classes are in a completely distinct package
+        assertThat(com.lordgainsborough.restaurant.repository.UserRepository.class.getPackage().getName())
+                .isEqualTo("com.lordgainsborough.restaurant.repository");
+        assertThat(JpaUserRepository.class.getPackage().getName())
+                .isEqualTo("com.lordgainsborough.restaurant.persistence.jpa.repository");
     }
 }

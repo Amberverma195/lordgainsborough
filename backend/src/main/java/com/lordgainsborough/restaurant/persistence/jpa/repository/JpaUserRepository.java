@@ -37,4 +37,6 @@ public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
     List<JpaUser> findByNameContainingIgnoreCase(String name);
 
     List<JpaUser> findByEmailContainingIgnoreCase(String email);
+
+    List<JpaUser> findByRole(String role);
 }
