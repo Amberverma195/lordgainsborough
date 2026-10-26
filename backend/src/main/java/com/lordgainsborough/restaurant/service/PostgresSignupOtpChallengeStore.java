@@ -335,6 +335,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 WHERE email_key = ?
                   AND status = 'ACTIVE'
                   AND challenge_expires_at > ?
+                  AND failed_verify_attempts < ?
                   AND resend_count < ?
                   AND next_resend_at <= ?
                 RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
@@ -354,6 +355,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     toTimestamp(now),
                     emailKey,
                     toTimestamp(now),
+                    SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,
                     SignupOtpChallengePersistence.MAX_RESENDS,
                     toTimestamp(now)
             );

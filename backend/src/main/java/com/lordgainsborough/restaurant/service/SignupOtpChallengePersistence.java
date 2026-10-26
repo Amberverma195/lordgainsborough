@@ -317,7 +317,8 @@ public class SignupOtpChallengePersistence {
         }
 
         SignupOtpChallenge challenge = found.get();
-        if (challenge.getStatus() == OtpChallengeStatus.LOCKED) {
+        if (challenge.getStatus() == OtpChallengeStatus.LOCKED
+                || challenge.getFailedVerifyAttempts() >= MAX_FAILED_VERIFY_ATTEMPTS) {
             return ResendDenialReason.CHALLENGE_LOCKED;
         }
         if (challenge.getStatus() == OtpChallengeStatus.VERIFIED) {

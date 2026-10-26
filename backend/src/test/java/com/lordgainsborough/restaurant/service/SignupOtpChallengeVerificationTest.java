@@ -1,6 +1,7 @@
 package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.OtpChallengeStatus;
+import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import com.lordgainsborough.restaurant.repository.SignupOtpChallengeRepository;
 import org.bson.Document;
@@ -256,6 +257,48 @@ class SignupOtpChallengeVerificationTest {
         }
     }
 
+    @Test
+    void concurrentResendAndFifthInvalidAttemptRaceNeverAllowsResendAfterLock() throws Exception {
+        seedActiveChallenge(correctDigest, SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS - 1);
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
+
+        java.util.concurrent.Future<SignupOtpChallengeService.VerifyOtpResult> wrongFuture = executor.submit(() -> {
+            barrier.await();
+            return service.verifyOtp(EMAIL, WRONG_OTP);
+        });
+
+        java.util.concurrent.Future<SignupOtpChallengeService.RequestOtpResult> resendFuture = executor.submit(() -> {
+            barrier.await();
+            return service.resendOtp(EMAIL, "concurrent-resend-key");
+        });
+
+        SignupOtpChallengeService.VerifyOtpResult wrongRes = wrongFuture.get();
+        SignupOtpChallengeService.RequestOtpResult resendRes = resendFuture.get();
+        executor.shutdown();
+
+        SignupOtpChallenge current = store.get(emailKey);
+
+        if (wrongRes instanceof SignupOtpChallengeService.VerifyOtpResult.Locked) {
+            // The 5th wrong attempt atomically locked the challenge.
+            // Any racing or subsequent resend MUST be denied as locked.
+            assertTrue(resendRes instanceof SignupOtpChallengeService.RequestOtpResult.Denied denied
+                    && denied.reason() == SignupOtpChallengePersistence.ResendDenialReason.CHALLENGE_LOCKED);
+            assertEquals(OtpChallengeStatus.LOCKED, current.getStatus());
+            assertEquals(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS, current.getFailedVerifyAttempts());
+        } else {
+            // Resend won before the 5th wrong attempt locked the challenge.
+            // In this case, resend rotated the digest, so the challenge has resendCount = 1.
+            assertTrue(resendRes instanceof SignupOtpChallengeService.RequestOtpResult.Sent);
+            assertEquals(1, current.getResendCount());
+        }
+
+        // Critical safety invariant: challenge must never be ACTIVE with 5 failed attempts
+        assertFalse(current.getStatus() == OtpChallengeStatus.ACTIVE
+                && current.getFailedVerifyAttempts() >= SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+    }
+
     private SignupOtpChallenge seedActiveChallenge(String otpDigest, int failedAttempts) {
         SignupOtpChallenge challenge = new SignupOtpChallenge();
         challenge.setEmailKey(emailKey);
@@ -288,8 +331,9 @@ class SignupOtpChallengeVerificationTest {
                 || !matchesInstantGt(queryDoc, "otpExpiresAt", current.getOtpExpiresAt())
                 || !matchesDigest(queryDoc, current)
                 || !matchesChallengeId(queryDoc, current)
-                || !matchesFailedAttemptsLt(queryDoc, current)
-                || !matchesFailedAttemptsGte(queryDoc, current)) {
+                || !matchesFailedAttempts(queryDoc, current)
+                || !matchesResendCountLt(queryDoc, current)
+                || !matchesNextResendAtLte(queryDoc, current)) {
             return null;
         }
 
@@ -306,8 +350,28 @@ class SignupOtpChallengeVerificationTest {
         if (inc != null && inc.containsKey("failedVerifyAttempts")) {
             current.setFailedVerifyAttempts(
                     current.getFailedVerifyAttempts() + inc.getInteger("failedVerifyAttempts"));
+            if (set != null && set.containsKey("status")) {
+                current.setStatus((OtpChallengeStatus) set.get("status"));
+            }
             if (set != null && set.get("updatedAt") != null) {
                 current.setUpdatedAt((Instant) set.get("updatedAt"));
+            }
+            store.put(id, current);
+            return cloneChallenge(current);
+        }
+
+        if (inc != null && inc.containsKey("resendCount")) {
+            current.setResendCount(current.getResendCount() + inc.getInteger("resendCount"));
+            if (set != null) {
+                if (set.containsKey("otpDigest")) current.setOtpDigest(set.getString("otpDigest"));
+                if (set.containsKey("otpExpiresAt")) current.setOtpExpiresAt((Instant) set.get("otpExpiresAt"));
+                if (set.containsKey("nextResendAt")) current.setNextResendAt((Instant) set.get("nextResendAt"));
+                if (set.containsKey("sendOperationId")) current.setSendOperationId(set.getString("sendOperationId"));
+                if (set.containsKey("sendStatus")) current.setSendStatus((OtpSendStatus) set.get("sendStatus"));
+                if (set.containsKey("sendLeaseUntil")) current.setSendLeaseUntil((Instant) set.get("sendLeaseUntil"));
+                if (set.containsKey("clientIdempotencyKey")) current.setClientIdempotencyKey(set.getString("clientIdempotencyKey"));
+                if (set.containsKey("lastSendWasInitial")) current.setLastSendWasInitial((Boolean) set.get("lastSendWasInitial"));
+                if (set.containsKey("updatedAt")) current.setUpdatedAt((Instant) set.get("updatedAt"));
             }
             store.put(id, current);
             return cloneChallenge(current);
@@ -354,26 +418,52 @@ class SignupOtpChallengeVerificationTest {
         return queryDoc.getString("challengeId").equals(current.getChallengeId());
     }
 
-    private static boolean matchesFailedAttemptsLt(Document queryDoc, SignupOtpChallenge current) {
+    private static boolean matchesFailedAttempts(Document queryDoc, SignupOtpChallenge current) {
         if (!queryDoc.containsKey("failedVerifyAttempts")) {
             return true;
         }
         Object raw = queryDoc.get("failedVerifyAttempts");
-        if (raw instanceof Document doc && doc.containsKey("$lt")) {
-            int max = ((Number) doc.get("$lt")).intValue();
-            return current.getFailedVerifyAttempts() < max;
+        if (raw instanceof Number num) {
+            return current.getFailedVerifyAttempts() == num.intValue();
         }
-        if (raw instanceof Document doc && doc.containsKey("$gte")) {
-            return true; // handled separately
+        if (raw instanceof Document doc) {
+            if (doc.containsKey("$lt")) {
+                int max = ((Number) doc.get("$lt")).intValue();
+                if (current.getFailedVerifyAttempts() >= max) {
+                    return false;
+                }
+            }
+            if (doc.containsKey("$gte")) {
+                int min = ((Number) doc.get("$gte")).intValue();
+                if (current.getFailedVerifyAttempts() < min) {
+                    return false;
+                }
+            }
+            return true;
         }
         return true;
     }
 
-    private static boolean matchesFailedAttemptsGte(Document queryDoc, SignupOtpChallenge current) {
-        Object raw = queryDoc.get("failedVerifyAttempts");
-        if (raw instanceof Document doc && doc.containsKey("$gte")) {
-            int min = ((Number) doc.get("$gte")).intValue();
-            return current.getFailedVerifyAttempts() >= min;
+    private static boolean matchesResendCountLt(Document queryDoc, SignupOtpChallenge current) {
+        if (!queryDoc.containsKey("resendCount")) {
+            return true;
+        }
+        Object raw = queryDoc.get("resendCount");
+        if (raw instanceof Document doc && doc.containsKey("$lt")) {
+            int max = ((Number) doc.get("$lt")).intValue();
+            return current.getResendCount() < max;
+        }
+        return true;
+    }
+
+    private static boolean matchesNextResendAtLte(Document queryDoc, SignupOtpChallenge current) {
+        if (!queryDoc.containsKey("nextResendAt")) {
+            return true;
+        }
+        Object raw = queryDoc.get("nextResendAt");
+        if (raw instanceof Document doc && doc.containsKey("$lte")) {
+            Instant threshold = (Instant) doc.get("$lte");
+            return current.getNextResendAt() != null && !current.getNextResendAt().isAfter(threshold);
         }
         return true;
     }

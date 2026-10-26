@@ -143,6 +143,7 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
         Query query = new Query(Criteria.where("_id").is(emailKey)
                 .and("status").is(OtpChallengeStatus.ACTIVE)
                 .and("challengeExpiresAt").gt(now)
+                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS)
                 .and("resendCount").lt(SignupOtpChallengePersistence.MAX_RESENDS)
                 .and("nextResendAt").lte(now));
 
@@ -272,31 +273,60 @@ public class MongoSignupOtpChallengeStore implements SignupOtpChallengeStore {
         }
         Objects.requireNonNull(now, "now is required");
 
-        Criteria criteria = Criteria.where("_id").is(emailKey)
+        // Attempts 1..4: atomically claim an intermediate attempt slot (< 4) without locking
+        Criteria incCriteria = Criteria.where("_id").is(emailKey)
                 .and("status").is(OtpChallengeStatus.ACTIVE)
                 .and("challengeExpiresAt").gt(now)
                 .and("otpExpiresAt").gt(now)
-                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+                .and("failedVerifyAttempts").lt(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS - 1);
 
         if (challengeId != null && !challengeId.isBlank()) {
-            criteria = criteria.and("challengeId").is(challengeId);
+            incCriteria = incCriteria.and("challengeId").is(challengeId);
         }
         if (otpDigest != null && !otpDigest.isBlank()) {
-            criteria = criteria.and("otpDigest").is(otpDigest);
+            incCriteria = incCriteria.and("otpDigest").is(otpDigest);
         }
 
-        Query query = new Query(criteria);
-
-        Update update = new Update()
+        Update incUpdate = new Update()
                 .inc("failedVerifyAttempts", 1)
                 .set("updatedAt", now);
 
         SignupOtpChallenge updated = mongoTemplate.findAndModify(
-                query,
-                update,
+                new Query(incCriteria),
+                incUpdate,
                 FindAndModifyOptions.options().returnNew(true),
                 SignupOtpChallenge.class);
-        return Optional.ofNullable(updated);
+
+        if (updated != null) {
+            return Optional.of(updated);
+        }
+
+        // Attempt 5: atomically increment 4 -> 5 and transition status to LOCKED in a single operation
+        Criteria lockCriteria = Criteria.where("_id").is(emailKey)
+                .and("status").is(OtpChallengeStatus.ACTIVE)
+                .and("challengeExpiresAt").gt(now)
+                .and("otpExpiresAt").gt(now)
+                .and("failedVerifyAttempts").is(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS - 1);
+
+        if (challengeId != null && !challengeId.isBlank()) {
+            lockCriteria = lockCriteria.and("challengeId").is(challengeId);
+        }
+        if (otpDigest != null && !otpDigest.isBlank()) {
+            lockCriteria = lockCriteria.and("otpDigest").is(otpDigest);
+        }
+
+        Update lockUpdate = new Update()
+                .inc("failedVerifyAttempts", 1)
+                .set("status", OtpChallengeStatus.LOCKED)
+                .set("updatedAt", now);
+
+        SignupOtpChallenge locked = mongoTemplate.findAndModify(
+                new Query(lockCriteria),
+                lockUpdate,
+                FindAndModifyOptions.options().returnNew(true),
+                SignupOtpChallenge.class);
+
+        return Optional.ofNullable(locked);
     }
 
     /**

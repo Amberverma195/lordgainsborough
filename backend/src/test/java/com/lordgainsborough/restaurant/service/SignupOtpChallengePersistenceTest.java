@@ -246,6 +246,7 @@ class SignupOtpChallengePersistenceTest {
         assertEquals(emailKey, queryDoc.get("_id"));
         assertEquals(OtpChallengeStatus.ACTIVE, queryDoc.get("status"));
         assertTrue(queryDoc.containsKey("challengeExpiresAt"));
+        assertTrue(queryDoc.containsKey("failedVerifyAttempts"));
         assertTrue(queryDoc.containsKey("resendCount"));
         assertTrue(queryDoc.containsKey("nextResendAt"));
 
@@ -275,6 +276,13 @@ class SignupOtpChallengePersistenceTest {
         SignupOtpChallenge locked = baseChallenge(emailKey);
         locked.setStatus(OtpChallengeStatus.LOCKED);
         when(repository.findById(emailKey)).thenReturn(Optional.of(locked));
+        assertEquals(
+                SignupOtpChallengePersistence.ResendDenialReason.CHALLENGE_LOCKED,
+                persistence.diagnoseResendDenial(emailKey, FIXED_NOW));
+
+        SignupOtpChallenge maxFailed = baseChallenge(emailKey);
+        maxFailed.setFailedVerifyAttempts(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS);
+        when(repository.findById(emailKey)).thenReturn(Optional.of(maxFailed));
         assertEquals(
                 SignupOtpChallengePersistence.ResendDenialReason.CHALLENGE_LOCKED,
                 persistence.diagnoseResendDenial(emailKey, FIXED_NOW));
@@ -391,6 +399,47 @@ class SignupOtpChallengePersistenceTest {
         org.bson.Document inc =
                 (org.bson.Document) updateCaptor.getValue().getUpdateObject().get("$inc");
         assertEquals(1, inc.getInteger("failedVerifyAttempts"));
+    }
+
+    @Test
+    void fifthFailedVerifyAttemptAtomicallySetsStatusLocked() {
+        String emailKey = persistence.emailKeyFromNormalized("member@example.com");
+        String challengeId = "ch-test-123";
+        String otpDigest = persistence.digestOtp("123456");
+        SignupOtpChallenge locked = baseChallenge(emailKey);
+        locked.setFailedVerifyAttempts(5);
+        locked.setStatus(OtpChallengeStatus.LOCKED);
+
+        // When failed attempts is 4, inc query (< 4) returns null and lock query (== 4) returns locked
+        when(mongoTemplate.findAndModify(
+                any(org.springframework.data.mongodb.core.query.Query.class),
+                any(org.springframework.data.mongodb.core.query.Update.class),
+                any(org.springframework.data.mongodb.core.FindAndModifyOptions.class),
+                org.mockito.ArgumentMatchers.eq(SignupOtpChallenge.class)))
+                .thenReturn(null)
+                .thenReturn(locked);
+
+        Optional<SignupOtpChallenge> result =
+                persistence.tryAtomicRecordFailedVerify(emailKey, challengeId, otpDigest, FIXED_NOW);
+
+        assertTrue(result.isPresent());
+        assertEquals(5, result.get().getFailedVerifyAttempts());
+        assertEquals(OtpChallengeStatus.LOCKED, result.get().getStatus());
+
+        ArgumentCaptor<org.springframework.data.mongodb.core.query.Update> updateCaptor =
+                ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Update.class);
+        verify(mongoTemplate, org.mockito.Mockito.times(2)).findAndModify(
+                any(org.springframework.data.mongodb.core.query.Query.class),
+                updateCaptor.capture(),
+                any(org.springframework.data.mongodb.core.FindAndModifyOptions.class),
+                org.mockito.ArgumentMatchers.eq(SignupOtpChallenge.class));
+
+        // The second findAndModify update (the lockUpdate) contains both $inc and $set status = LOCKED
+        org.bson.Document updateDoc = updateCaptor.getAllValues().get(1).getUpdateObject();
+        org.bson.Document inc = (org.bson.Document) updateDoc.get("$inc");
+        org.bson.Document set = (org.bson.Document) updateDoc.get("$set");
+        assertEquals(1, inc.getInteger("failedVerifyAttempts"));
+        assertEquals(OtpChallengeStatus.LOCKED, set.get("status"));
     }
 
     @Test

@@ -1818,9 +1818,14 @@ Implemented **PG-015: PostgreSQL Signup OTP Challenge Persistence**, transitioni
 Executed **PG-015 Post-Implementation Security Hardening**, addressing five architectural and concurrency findings across the signup OTP challenge state machine, the storage SPI, Flyway integration test lifecycle, and JPA update contracts.
 
 **Five-Finding Resolution Summary:**
-1. **Finding 1 — Atomic Failed-Attempt Threshold & Challenge Locking (State-Machine Atomicity):**
-   - *Problem:* `SignupOtpChallengeService` previously incremented `failed_verify_attempts` to 5 and then invoked `tryAtomicLockAfterMaxFailures` as a separate operation, leaving an intermediate window where `status` remained `ACTIVE` while `failed_verify_attempts == 5`. A concurrent valid verification could theoretically succeed.
-   - *Resolution:* `PostgresSignupOtpChallengeStore.tryAtomicRecordFailedVerify` atomically updates `status = 'LOCKED'` within the exact same update statement on the 5th failed attempt (`status = CASE WHEN failed_verify_attempts + 1 >= ? THEN 'LOCKED' ELSE status END`). Both `PostgresSignupOtpChallengeStore` and `MongoSignupOtpChallengeStore` now enforce `failed_verify_attempts < MAX_FAILED_VERIFY_ATTEMPTS` inside `tryAtomicMarkVerified()`. In `SignupOtpChallengeService`, `tryAtomicRecordFailedVerify` checks for `LOCKED` status and records `VERIFICATION_LOCK` immediately without separate locking races. Added verification and concurrency race tests in `SignupOtpChallengeVerificationTest` and `PostgresSignupOtpChallengePersistenceIntegrationTest`.
+1. **Finding 1 — Atomic Failed-Attempt Threshold & Challenge Locking (State-Machine Atomicity across PostgreSQL & MongoDB):**
+   - *Problem:* `SignupOtpChallengeService` previously incremented `failed_verify_attempts` to 5 and then invoked `tryAtomicLockAfterMaxFailures` as a separate operation, leaving an intermediate window where `status` remained `ACTIVE` while `failed_verify_attempts == 5`. A concurrent valid verification or resend could theoretically succeed before locking completed.
+   - *Resolution:* Made the 5th failed attempt increment and `LOCKED` status transition fully atomic across both stores:
+     - `PostgresSignupOtpChallengeStore.tryAtomicRecordFailedVerify` atomically updates `status = 'LOCKED'` within the exact same update statement on the 5th failed attempt (`status = CASE WHEN failed_verify_attempts + 1 >= ? THEN 'LOCKED' ELSE status END`).
+     - `MongoSignupOtpChallengeStore.tryAtomicRecordFailedVerify` atomically attempts `lockCriteria` (`failedVerifyAttempts == 4`) with `inc("failedVerifyAttempts", 1).set("status", LOCKED)` so the 5th attempt immediately locks in a single atomic MongoDB operation.
+     - Both `PostgresSignupOtpChallengeStore` and `MongoSignupOtpChallengeStore` now enforce `failed_verify_attempts < MAX_FAILED_VERIFY_ATTEMPTS` in both `tryAtomicMarkVerified()` and `tryAtomicResend()`.
+     - In `SignupOtpChallengePersistence`, `diagnoseResendDenial` maps `failedVerifyAttempts >= MAX_FAILED_VERIFY_ATTEMPTS` directly to `CHALLENGE_LOCKED`.
+     - Added concurrent 5th-failure vs. resend and valid OTP race tests across `SignupOtpChallengeVerificationTest` and `PostgresSignupOtpChallengePersistenceIntegrationTest`.
 2. **Finding 2 — Legacy Unguarded Failed-Attempt Updates in Storage Interface:**
    - *Problem:* `SignupOtpChallengeStore.tryAtomicRecordFailedVerify(emailKey, now)` and `tryAtomicLockAfterMaxFailures(emailKey, now)` permitted unguarded updates without binding to challenge ID and OTP digest.
    - *Resolution:* Made guarded overloads mandatory for security operations. Formally deprecated (`@Deprecated`) the unguarded legacy overloads in `SignupOtpChallengeStore`, `SignupOtpChallengePersistence`, `PostgresSignupOtpChallengeStore`, and `MongoSignupOtpChallengeStore`. Migrated all callers across tests to the guarded overloads `tryAtomicRecordFailedVerify(emailKey, challengeId, otpDigest, now)` and `tryAtomicLockAfterMaxFailures(emailKey, challengeId, now)`, while retaining explicit backwards-compatibility test coverage (`test63_legacyUnguardedFailedAttemptAndLockCompatibility`).
@@ -1840,12 +1845,12 @@ Executed **PG-015 Post-Implementation Security Hardening**, addressing five arch
   - `mvn test -Dtest=FlywayMigrationIntegrationTest,SecurityJpaRepositoryIntegrationTest "-Dtest.postgres.port=54353"`
   - `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest,AbuseAndLoginFailureJpaIntegrationTest,CoreJpaRepositoryIntegrationTest,OperationalJpaRepositoryIntegrationTest,SecurityJpaRepositoryIntegrationTest,PostgresCatalogInitializerIntegrationTest,PostgresCatalogStartupActivationIntegrationTest,PostgresAbuseCounterStoreIntegrationTest,PostgresLoginRateLimiterIntegrationTest,PostgresSignupOtpChallengePersistenceIntegrationTest "-Dtest.postgres.port=54353"`
 - **Results:**
-  - `SignupOtpChallengeVerificationTest`: 11 tests run, 0 failures, 0 errors, 0 skipped (including concurrent 5th-attempt lock races).
-  - `SignupOtpChallengePersistenceTest`: 19 tests run, 0 failures, 0 errors, 0 skipped.
-  - `PostgresSignupOtpChallengePersistenceIntegrationTest`: 63 tests run, 0 failures, 0 errors, 0 skipped (including test 63 backwards-compatibility test).
+  - `SignupOtpChallengeVerificationTest`: 12 tests run, 0 failures, 0 errors, 0 skipped (including concurrent 5th-attempt lock and resend races).
+  - `SignupOtpChallengePersistenceTest`: 20 tests run, 0 failures, 0 errors, 0 skipped.
+  - `PostgresSignupOtpChallengePersistenceIntegrationTest`: 64 tests run, 0 failures, 0 errors, 0 skipped (including test 64 concurrent resend vs. 5th failure race).
   - `FlywayMigrationIntegrationTest`: 5 tests run, 0 failures, 0 errors, 0 skipped (disposable database isolation & CI guardrails).
   - `SecurityJpaRepositoryIntegrationTest`: 34 tests run, 0 failures, 0 errors, 0 skipped.
-  - Full 15-suite regression: 390 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
+  - Full 15-suite regression: 392 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`).
 
 **Next Task:**  
 `PG-016` — Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management (`NOT STARTED`).

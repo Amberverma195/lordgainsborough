@@ -1685,4 +1685,85 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertTrue(locked.isPresent());
         assertEquals(OtpChallengeStatus.LOCKED, locked.get().getStatus());
     }
+
+    @Test
+    @Order(64)
+    @DisplayName("64. Concurrently racing resend and fifth failed attempt never permits resend after lock")
+    void test64_concurrentResendAndFifthInvalidAttemptRaceNeverAllowsResendAfterLock() throws Exception {
+        String email = "fail5-resend-race@example.com";
+        String initialOtp = "123456";
+        String initialDigest = persistence.digestOtp(initialOtp);
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, initialDigest, "ch-f5-res", "op-f5r", "k-f5r");
+        ch.setFailedVerifyAttempts(4); // 4 failures already recorded
+        persistence.tryInsert(ch);
+
+        Instant now = clock.instant();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch failureUpdated = new CountDownLatch(1);
+        CountDownLatch resendStarted = new CountDownLatch(1);
+
+        DefaultTransactionDefinition def1 = new DefaultTransactionDefinition();
+        def1.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        DefaultTransactionDefinition def2 = new DefaultTransactionDefinition();
+        def2.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        // Transaction 1: Records 5th failed attempt and holds row lock
+        Future<Optional<SignupOtpChallenge>> failFuture = executor.submit(() -> {
+            var status1 = transactionManager.getTransaction(def1);
+            try {
+                Optional<SignupOtpChallenge> failRes = persistence.tryAtomicRecordFailedVerify(
+                        ch.getEmailKey(), ch.getChallengeId(), ch.getOtpDigest(), now);
+
+                failureUpdated.countDown();
+                assertTrue(resendStarted.await(5, TimeUnit.SECONDS));
+                Thread.sleep(50);
+
+                transactionManager.commit(status1);
+                return failRes;
+            } catch (Exception e) {
+                transactionManager.rollback(status1);
+                throw e;
+            }
+        });
+
+        // Transaction 2: Concurrently attempts resend while tx1 is in-flight
+        Future<Optional<SignupOtpChallenge>> resendFuture = executor.submit(() -> {
+            assertTrue(failureUpdated.await(5, TimeUnit.SECONDS));
+
+            var status2 = transactionManager.getTransaction(def2);
+            try {
+                resendStarted.countDown();
+
+                // Blocks on row lock held by tx1, then re-evaluates WHERE clause
+                Optional<SignupOtpChallenge> resend = persistence.tryAtomicResend(
+                        ch.getEmailKey(), persistence.digestOtp("654321"), "op-f5r-2", "k-f5r-2", now);
+
+                transactionManager.commit(status2);
+                return resend;
+            } catch (Exception e) {
+                transactionManager.rollback(status2);
+                throw e;
+            }
+        });
+
+        Optional<SignupOtpChallenge> failRes = failFuture.get();
+        Optional<SignupOtpChallenge> resendRes = resendFuture.get();
+        executor.shutdown();
+
+        // Transaction 1 must have claimed the 5th attempt and atomically transitioned to LOCKED
+        assertTrue(failRes.isPresent());
+        assertEquals(5, failRes.get().getFailedVerifyAttempts());
+        assertEquals(OtpChallengeStatus.LOCKED, failRes.get().getStatus());
+
+        // Transaction 2 must have failed because the challenge was locked and failedVerifyAttempts reached 5
+        assertTrue(resendRes.isEmpty());
+        assertEquals(ResendDenialReason.CHALLENGE_LOCKED, persistence.diagnoseResendDenial(ch.getEmailKey(), now));
+
+        SignupOtpChallenge finalState = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(OtpChallengeStatus.LOCKED, finalState.getStatus());
+        assertEquals(5, finalState.getFailedVerifyAttempts());
+        assertEquals(0, finalState.getResendCount()); // Resend must not have occurred
+    }
 }
