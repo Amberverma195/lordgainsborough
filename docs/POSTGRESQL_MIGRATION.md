@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-25T22:24:30-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-25T22:31:30-04:00 (America/Toronto)  
 
 ---
 
@@ -354,7 +354,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-004` | Phase 5 | Create core domain JPA entities (`JpaUser`, `JpaCategory`, `JpaMenuItem`, `JpaCatalogMigration`, `JpaStoreSettings`) | `COMPLETED` | 2026-10-25T21:02:53-04:00 | 2026-10-25T21:08:45-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 7/7 JPA integration tests passed |
 | `PG-005` | Phase 6 | Create operational JPA entities (`CustomerOrder`, `OrderItem`, `OrderMessage`) | `COMPLETED` | 2026-10-25T21:37:01-04:00 | 2026-10-25T21:43:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 18/18 JPA integration tests passed |
 | `PG-006` | Phase 6 | Create cart and review JPA entities (`Cart`, `CartItem`, `OrderReview`, `OrderReviewItem`, `Reservation`) | `COMPLETED` | 2026-10-25T22:04:44-04:00 | 2026-10-25T22:12:00-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 20/20 JPA integration tests passed |
-| `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `NOT STARTED` | — | — | Entity validation tests |
+| `PG-007` | Phase 7 | Create security and rate-limiting JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`) | `COMPLETED` | 2026-10-25T22:25:30-04:00 | 2026-10-25T22:31:30-04:00 | Hibernate 7 `ddl-auto=validate` PASSED against Flyway V1 schema; 25/25 security integration tests passed |
 | `PG-008` | Phase 7 | Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`) | `NOT STARTED` | — | — | Entity validation tests |
 | `PG-009` | Phase 8 | Implement Spring Data JPA repositories for core and catalog models | `NOT STARTED` | — | — | Repository compilation and method checks |
 | `PG-010` | Phase 8 | Implement Spring Data JPA repositories for orders, carts, reviews, and reservations | `NOT STARTED` | — | — | Repository query method tests |
@@ -764,6 +764,65 @@ Hardened cart timestamp tracking, entity lifecycle dirtying, Jackson serializati
 
 **Next Task:**  
 `PG-007` — Create security challenge JPA entities (`SignupOtpChallenge`, `PasswordResetOtpChallenge`).
+
+### [2026-10-25T22:31:30-04:00] — Task PG-007: PostgreSQL Security Challenge JPA Entities
+
+**Task:** PG-007 — Create security challenge JPA entities (`JpaSignupOtpChallenge`, `JpaPasswordResetOtpChallenge`)  
+**Status:** COMPLETED  
+**Started At:** 2026-10-25T22:25:30-04:00  
+**Completed At:** 2026-10-25T22:31:30-04:00  
+
+**Implementation Summary:**  
+Implemented the two operational security challenge JPA entities under `com.lordgainsborough.restaurant.persistence.jpa.entity` matching the PostgreSQL V1 schema:
+1. **`JpaSignupOtpChallenge` (`signup_otp_challenges`):**
+   - Mapped `emailKey` (primary key `VARCHAR(64)`), an assigned SHA-256 identifier preserving existing hex format without auto-generating UUIDs.
+   - Mapped `normalizedEmail`, `challengeId`, `status` (`@Enumerated(EnumType.STRING)` for `OtpChallengeStatus`), `otpDigest` (BCrypt hash), `resendCount`, `failedVerifyAttempts`, `nextResendAt`, `otpExpiresAt`, `challengeExpiresAt`, `createdAt`, `updatedAt`, `sendOperationId`, `sendStatus` (`@Enumerated(EnumType.STRING)` for `OtpSendStatus`), `sendLeaseUntil`, `clientIdempotencyKey`, and `lastSendWasInitial`.
+   - Applied defensive `@JsonIgnore` to `normalizedEmail`, `otpDigest`, `clientIdempotencyKey`, and `sendOperationId`. Custom `toString()` deliberately excludes contact details and digest material.
+   - Model-level boundary helper methods: `isChallengeExpired()`, `isOtpExpired()`, `isSendLeaseActive()`, and `isResendAllowed()`.
+2. **`JpaPasswordResetOtpChallenge` (`password_reset_otp_challenges`):**
+   - Mapped `emailKey` (primary key `VARCHAR(64)`), `challengeId` (`VARCHAR(64)` with `unique = true` matching `uq_pwd_reset_challenge_id`).
+   - Mapped `user` via `@ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "user_id", nullable = false) @JsonIgnore` referencing `JpaUser` without cascade operations, ensuring challenge deletion does not remove the user while PostgreSQL `ON DELETE CASCADE` from user deletion is respected. Exposes safe `@JsonProperty("userId") public String getUserId()`.
+   - Mapped `purpose` (`@Enumerated(EnumType.STRING)` for `PasswordResetOtpChallenge.Purpose`), `status` (`@Enumerated(EnumType.STRING)` for `PasswordResetChallengeStatus`), `codeDigest` (nullable `VARCHAR(255)`), `codeExpiresAt`, `challengeExpiresAt`, `nextResendAt`, `resendCount`, `failedVerificationAttempts`, `clientIdempotencyKey`, `sendOperationId`, `sendStatus`, `sendLeaseUntil`, `resetOperationId`, `passwordUpdated`, `consumedAt`, `createdAt`, and `updatedAt`.
+   - Applied defensive `@JsonIgnore` to `user`, `codeDigest`, `resetOperationId`, `clientIdempotencyKey`, and `sendOperationId`. Custom `toString()` excludes digests and tokens.
+   - Model-level boundary helper methods: `isChallengeExpired()`, `isCodeExpired()`, `isSendLeaseActive()`, and `isResendAllowed()`.
+
+**Verification:**  
+- Created integration test suite `backend/src/test/java/com/lordgainsborough/restaurant/persistence/jpa/SecurityChallengeJpaIntegrationTest.java` (25 tests) executed against a disposable PostgreSQL 17.11 instance initialized via Flyway V1:
+  1. Hibernate `ddl-auto=validate` passed against the expanded 15-entity JPA metamodel.
+  2. Signup challenge insertion and retrieval verified with all fields matching.
+  3. Assigned SHA-256 `emailKey` preserved exactly in PostgreSQL without alteration.
+  4. All `OtpChallengeStatus` enum values (`ACTIVE`, `VERIFIED`, `LOCKED`) round-trip as database strings.
+  5. All `OtpSendStatus` enum values (`RESERVED`, `SENT`, `DEFINITELY_FAILED`, `DELIVERY_UNKNOWN`, `null`) round-trip correctly.
+  6. OTP digest survives persistence internally but is completely excluded from Jackson JSON serialization.
+  7. Resend counters and failed verification attempt counters persist accurately.
+  8. Negative counter values are rejected by PostgreSQL check constraints (`chk_signup_otp_resend_count`, `chk_signup_otp_failed_verify`).
+  9. Signup challenge expiry, OTP expiry, resend cooldown, and lease timestamps round-trip with Instant precision.
+  10. Nullable signup challenge fields persist and reload as null.
+  11. Client idempotency key persists without truncation or modification.
+  12. Password-reset challenge insertion and retrieval verified against existing `JpaUser`.
+  13. `JpaUser` relationship resolves lazily and `getUserId()` derives safely.
+  14. Invalid or non-existent `user_id` is rejected by PostgreSQL foreign key constraint `fk_pwd_reset_user`.
+  15. Deleting a password-reset challenge does not delete its referenced user.
+  16. Deleting a user cascades to delete associated password-reset challenges via `ON DELETE CASCADE`.
+  17. Unique `challenge_id` constraint `uq_pwd_reset_challenge_id` rejects duplicate challenge IDs.
+  18. `PasswordResetChallengeStatus` enum values (`ACTIVE`, `PROCESSING`, `LOCKED`, `CONSUMED`) round-trip correctly.
+  19. `Purpose` enum persists and reloads as exact string `"PASSWORD_RESET"`.
+  20. Nullable `code_digest` supports consumed challenge state (`code_digest IS NULL`, `status = CONSUMED`).
+  21. `password_updated` and `consumed_at` fields persist accurately.
+  22. `reset_operation_id` and `send_operation_id` persist correctly.
+  23. Challenge and code expiration boundaries are respected at exact instant edges.
+  24. Sensitive fields (`codeDigest`, `resetOperationId`, `clientIdempotencyKey`, `user`, `password`, `tokenVersion`) are excluded from JSON output.
+  25. Spring Boot context boots with all 15 JPA entities validated against PostgreSQL schema.
+- Full regression suite execution across all 6 test suites (`PostgresConfigurationSmokeTest`, `FlywayMigrationIntegrationTest`, `CoreJpaEntityIntegrationTest`, `OrderJpaEntityIntegrationTest`, `CartReviewReservationJpaIntegrationTest`, `SecurityChallengeJpaIntegrationTest`):
+  - Command: `mvn test -Dtest=PostgresConfigurationSmokeTest,FlywayMigrationIntegrationTest,CoreJpaEntityIntegrationTest,OrderJpaEntityIntegrationTest,CartReviewReservationJpaIntegrationTest,SecurityChallengeJpaIntegrationTest -Dtest.postgres.port=54337`
+  - Results: 83 tests run, 0 failures, 0 errors, 0 skipped (`BUILD SUCCESS`, 21.800s).
+- Clean compilation: `mvn clean compile -DskipTests` (`BUILD SUCCESS`, 114 source files compiled cleanly).
+
+**MongoDB Compatibility:**  
+- Confirmed intact: existing MongoDB model classes (`SignupOtpChallenge`, `PasswordResetOtpChallenge`), repositories, security services, and controllers remain untouched and operational.
+
+**Next Task:**  
+`PG-008` — Create abuse and failure state JPA entities (`SignupAbuseLimit`, `LoginFailureState`).
 
 ---
 
