@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T03:26:00-04:00 (America/Toronto)  
+> **Last Updated:** 2026-10-26T03:42:00-04:00 (America/Toronto)  
 
 ---
 
@@ -361,7 +361,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-011` | Phase 8 | Implement Spring Data JPA repositories for security challenges and abuse limits | `COMPLETED` | 2026-10-26T00:35:00-04:00 | 2026-10-26T00:49:00-04:00 | 4 Spring Data JPA repos implemented; 34/34 security repository integration tests passed; full 10-suite regression passed (199/199 tests) |
 | `PG-012` | Phase 9 | Adapt `DataInitializer.java` to use JPA repositories and relational catalog synchronization | `COMPLETED` | 2026-10-26T01:06:00-04:00 | 2026-10-26T02:18:00-04:00 | Shared `CatalogSeedSpecifications` extracted; `DataInitializerTest` passed (4/4); 41/41 PostgreSQL seeding & startup activation tests passed; full 12-suite regression passed (240/240 tests) |
 | `PG-013` | Phase 10 | Implement `PostgresAbuseCounterStore` using atomic PostgreSQL upsert queries | `COMPLETED` | 2026-10-26T02:40:00-04:00 | 2026-10-26T03:26:00-04:00 | Concurrency-safe atomic `INSERT ... ON CONFLICT DO UPDATE RETURNING count`; simplified arithmetic increment without redundant CASE; BIGINT overflow handling; `getCount` exact boundaries; production-safe verified disposable db `clear()`; explicit backend selection via `@Primary`; independent fallback `transactionManager` bean; real Logback appender log verification; 40/40 tests passed; full 13-suite regression passed |
-| `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `NOT STARTED` | — | — | Concurrency and cooldown tests |
+| `PG-014` | Phase 10 | Refactor `LoginRateLimiter` to use relational transactional locking | `COMPLETED` | 2026-10-26T03:30:00-04:00 | 2026-10-26T03:42:00-04:00 | Extracted `LoginFailureStateStore` SPI; implemented `PostgresLoginFailureStateStore` with atomic upsert + `SELECT ... FOR UPDATE` row-level locking; fail-closed `Integer.MAX_VALUE` overflow guard; exact millisecond active cooldown boundaries; targeted `clearFailures`; 38/38 new tests; 14-suite regression passed (318/318 tests) |
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `NOT STARTED` | — | — | Challenge lifecycle and idempotency tests |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `NOT STARTED` | — | — | Password reset transactional tests |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `NOT STARTED` | — | — | `OrderControllerTest` pass |
@@ -1617,8 +1617,77 @@ Implemented **PG-013: Atomic PostgreSQL Abuse Counter Store**, introducing `Post
      - Added `test39_springTransactionalProxyWithIndependentTransactionManagerWorks` in `PostgresAbuseCounterStoreIntegrationTest`.
      - Verifies Spring context creation with independent fallback `transactionManager` alongside `MongoTransactionManager`, confirms `AopUtils.isAopProxy(proxyStore) == true`, and executes transactional `incrementAndGet` and `getCount` through the proxy.
 
+---
+
+### [2026-10-26T03:42:00-04:00] PG-014: Concurrency-Safe PostgreSQL Login Rate Limiting With Transactional Row-Level Locking
+
+**Overview & Objective:**
+Implemented **PG-014: PostgreSQL Login Rate Limiter With Transactional Locking**, transitioning failed authentication attempt persistence from MongoDB compare-and-set loops (`findAndModify`) to PostgreSQL relational persistence with ACID transaction boundaries and row-level locking (`SELECT ... FOR UPDATE`), strictly preserving existing API contracts and default MongoDB runtime safety.
+
+**Key Architecture & Implementation Decisions:**
+1. **Separation of Concerns via `LoginFailureStateStore` SPI:**
+   - Created `LoginFailureStateStore` interface defining persistence operations: `activeCooldown(id, now)`, `recordFailure(id, subjectHash, now, properties)`, and `clearFailures(id)`.
+   - Extracted `MongoLoginFailureStateStore` implementing the interface using existing MongoDB compare-and-set logic, registered as `@Component("mongoLoginFailureStateStore")`.
+   - Maintained full binary and source compatibility for `LoginRateLimiter`: retained existing constructors and added an SPI constructor `(counterStore, failureStore, properties, hasher, clock)`. `AuthController` injection remains untouched.
+2. **PostgreSQL Relational Storage & Row-Level Locking (`PostgresLoginFailureStateStore`):**
+   - Implemented an atomic insert-or-lock strategy to resolve the critical missing-row race condition:
+     - `INSERT INTO login_failure_states (...) VALUES (...) ON CONFLICT (id) DO NOTHING`.
+     - If insert succeeds (1 row affected), creates failure #1 immediately.
+     - If row already exists (0 rows affected), executes `SELECT ... FOR UPDATE` to acquire an exclusive row lock.
+     - Operates inside `TransactionTemplate` and `@Transactional(transactionManager = "transactionManager")`, guaranteeing the lock is held across the entire transition until transaction commit.
+3. **Exact State Transition Parity (All 6 Cases):**
+   - **Case A (Fresh Insert):** Sets `failure_count = 1`, `window_started_at = now`, `blocked_until = null`, `expires_at = now + failureWindow + 5m`. Returns `FailureResult(false, 0L)`.
+   - **Case B (Expired Row):** If `!expiresAt.isAfter(now)`, resets failure count to 1, sets fresh timestamps and null cooldown.
+   - **Case C (Active Cooldown):** If `blockedUntil != null && blockedUntil.isAfter(now)`, does not increment counter, returns `FailureResult(true, retryAfter)`.
+   - **Case D (Active Window):** Increments `failureCount + 1`. If threshold reached (`>= identifierIpFailures`), sets `blockedUntil = now + cooldown`.
+   - **Case E (Window Elapsed):** If `now >= windowStartedAt + failureWindow`, resets `failureCount = 1`, sets `windowStartedAt = now`.
+   - **Case F (Expired Cooldown):** If `blockedUntil <= now`, resets `failureCount = 1` and initiates a fresh counting window.
+   - **Threshold Contract:** The 5th (threshold-reaching) failed attempt returns `FailureResult(false, 0L)` (treated as invalid credentials); subsequent attempts observe and enforce the 30-second cooldown.
+4. **Integer Overflow & Fail-Closed Hardening:**
+   - Evaluates `failureCount >= Integer.MAX_VALUE`. Fails closed with `FailureResult(true, cooldown)` and logs an error without leaking IDs or hashes.
+   - Catches database errors and connection interruptions, returning fail-closed `FailureResult(true, cooldown)`.
+5. **Exact Cooldown Boundaries:**
+   - Tested exact millisecond boundaries: 1ms before `blockedUntil` (active cooldown), exactly at `blockedUntil` (expired), and 1ms after (expired).
+6. **Targeted Deletion (`clearFailures`):**
+   - Deletes strictly `WHERE id = ?` inside a transaction; idempotent, safe on repeated calls, and leaves unrelated users and IPs untouched.
+7. **Spring Opt-In Configuration (`PostgresLoginRateLimiterConfiguration`):**
+   - Activates conditionally under `@Profile({"postgres-migration", "test"})` and `@ConditionalOnProperty("app.security.postgres-login-limiter.enabled")`.
+   - Designates `PostgresLoginFailureStateStore` as `@Primary`, ensuring unambiguous resolution when coexisting with MongoDB.
+   - Includes independent fallback `PlatformTransactionManager` bean.
+
+**Verification Results:**
+- **Compilation:** `mvn clean test-compile` passed cleanly with 0 errors.
+- **Dedicated PG-014 Integration Suite (`PostgresLoginRateLimiterIntegrationTest`):**
+  - **38 tests run, 0 failures, 0 errors, 0 skipped** (7.889s).
+  - High contention: 20 concurrent threads under threshold (no lost increments, count = 20).
+  - Extreme contention: 100 concurrent threads under high threshold (no lost increments, count = 100).
+  - 30 concurrent active-cooldown threads (all denied, count remains 5).
+  - Multi-user independence: 5 concurrent users with 10 threads each (all reached exactly 10).
+  - Interleaved concurrent `recordFailure` and `clearFailures` (no deadlocks).
+- **Existing Security Unit Tests:**
+  - `SignupAbuseLimiterTest`: **9 tests run, 0 failures, 0 errors, 0 skipped** (0.023s).
+  - `PasswordResetSupportServicesTest`: **3 tests run, 0 failures, 0 errors, 0 skipped** (0.039s).
+  - `DataInitializerTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (0.756s).
+- **Full 14-Suite PostgreSQL Regression:**
+  1. `PostgresConfigurationSmokeTest`: **3** tests
+  2. `FlywayMigrationIntegrationTest`: **4** tests
+  3. `CoreJpaEntityIntegrationTest`: **7** tests
+  4. `OrderJpaEntityIntegrationTest`: **18** tests
+  5. `CartReviewReservationJpaIntegrationTest`: **26** tests
+  6. `SecurityChallengeJpaIntegrationTest`: **26** tests
+  7. `AbuseAndLoginFailureJpaIntegrationTest`: **25** tests
+  8. `CoreJpaRepositoryIntegrationTest`: **25** tests
+  9. `OperationalJpaRepositoryIntegrationTest`: **31** tests
+  10. `SecurityJpaRepositoryIntegrationTest`: **34** tests
+  11. `PostgresCatalogInitializerIntegrationTest`: **36** tests
+  12. `PostgresCatalogStartupActivationIntegrationTest`: **5** tests
+  13. `PostgresAbuseCounterStoreIntegrationTest`: **40** tests
+  14. `PostgresLoginRateLimiterIntegrationTest`: **38** tests
+  - **Full 14-Suite Regression Total:** **318 tests run, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESS`, 1m 20s).
+- **Combined Test Total:** **334 tests passing cleanly**.
+
 **Next Task:**  
-`PG-014` — Refactor `LoginRateLimiter` to use relational transactional locking (`NOT STARTED`).
+`PG-015` — Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence (`NOT STARTED`).
 
 ---
 
