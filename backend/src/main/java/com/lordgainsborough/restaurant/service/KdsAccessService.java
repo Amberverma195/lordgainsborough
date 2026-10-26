@@ -15,13 +15,20 @@ import java.util.List;
 @Service
 public class KdsAccessService {
 
-    private final StoreSettingsService storeSettingsService;
+    private final KdsSettingsSource settingsSource;
     private final ClientIpResolver clientIpResolver;
 
     public KdsAccessService(StoreSettingsService storeSettingsService, ClientIpResolver clientIpResolver) {
-        this.storeSettingsService = storeSettingsService;
+        this(new MongoKdsSettingsSource(storeSettingsService), clientIpResolver);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public KdsAccessService(KdsSettingsSource settingsSource, ClientIpResolver clientIpResolver) {
+        this.settingsSource = settingsSource;
         this.clientIpResolver = clientIpResolver;
     }
+
+    public KdsSettingsSource getSettingsSource() { return settingsSource; }
 
     public boolean isRequestAllowed(HttpServletRequest request) {
         String clientIp = clientIpResolver.resolve(
@@ -37,7 +44,7 @@ public class KdsAccessService {
             return false;
         }
 
-        List<String> allowed = parseAllowedIps(storeSettingsService.getSettings().getKdsAllowedIp());
+        List<String> allowed = parseAllowedIps(settingsSource.allowedIps());
         if (allowed.isEmpty()) {
             return false;
         }
@@ -120,6 +127,7 @@ public class KdsAccessService {
             if (targetBytes.length != networkBytes.length) {
                 return false;
             }
+            if (prefix < 0 || prefix > targetBytes.length * 8) return false;
             int fullBytes = prefix / 8;
             int remainingBits = prefix % 8;
             for (int i = 0; i < fullBytes; i++) {

@@ -16,6 +16,19 @@ import java.util.Optional;
 @Repository
 public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
 
+    /** Counter-only write: never rewrite password, role, token version or profile columns. */
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.data.jpa.repository.Query("update JpaUser u set u.noShowCount = :count where u.id = :id")
+    int updateNoShowCount(@org.springframework.data.repository.query.Param("id") String id,
+            @org.springframework.data.repository.query.Param("count") int count);
+
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select u from JpaUser u where lower(u.email) = lower(:email)")
+    Optional<JpaUser> findForNoShowByEmailIgnoreCase(@org.springframework.data.repository.query.Param("email") String email);
+
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    Optional<JpaUser> findFirstByPhoneNormalizedOrderByIdAsc(String phoneNormalized);
+
     /** All PG-018 operations lock this stable owner row, even before the user's first cart exists. */
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @org.springframework.data.jpa.repository.Query("select u from JpaUser u where lower(u.email) = lower(:email)")

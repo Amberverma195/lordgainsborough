@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T19:34:18-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-26T19:53:17-04:00 (America/Toronto)
 
 ---
 
@@ -365,8 +365,8 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-015` | Phase 10 | Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence | `COMPLETED` | 2026-10-26T04:19:00-04:00 | 2026-10-26T05:35:00-04:00 | Extracted `SignupOtpChallengeStore` SPI; implemented `PostgresSignupOtpChallengeStore` with atomic SQL transitions; hardened with 5-finding resolution (atomic locking, deprecated unguarded overloads, fail-closed resend cooldown, Flyway disposable DB lifecycle with CI skip/fail controls, JPA timestamp integrity); 63/63 integration tests passed; full regression passed |
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T17:53:00-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 48/48 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` executed against live disposable PostgreSQL; full 16-suite PostgreSQL regression passed (438/438 tests, 0 skipped); MongoDB unit & support tests passed (11/11) |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `BLOCKED` | 2026-10-26T18:30:37-04:00 | — | Implemented and PostgreSQL verified: 47 live order integration tests including required contact validation; 438 existing PostgreSQL tests; available regression 654/654, no skips. Full closeout BLOCKED by unavailable Docker for 3 Mongo container suites |
-| `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T18:58:11-04:00 | — | Production and test sources compile; no tests executed per explicit user override; PostgreSQL cart activation remains isolated pending PG-022 |
-| `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `IN PROGRESS` | 2026-10-26T19:33:54-04:00 | — | Current baseline exposed missing JWT fixture properties in PG-018 tests; preliminary correction in progress |
+| `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T18:58:11-04:00 | — | Focused runtime coverage now passed 22 cases during PG-019, including 16 live PostgreSQL cart cases; included in 717-case available regression; live Mongo verification remains unavailable; activation isolated pending PG-022 |
+| `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T19:33:54-04:00 | — | 26 live PostgreSQL KDS cases and 717 available regression tests passed; required live Mongo suites blocked by unavailable Docker; production activation remains guarded |
 | `PG-020` | Phase 11 | Adapt `ReviewController` and `ReservationController` for JPA persistence | `NOT STARTED` | — | — | `ReviewControllerTest` pass |
 | `PG-021` | Phase 11 | Adapt `AdminCustomerSearchService` and `AdminCustomerController` for JPA queries | `NOT STARTED` | — | — | `AdminCustomerSearchServiceTest` pass |
 | `PG-022` | Phase 11 | Adapt `AuthController` user registration and authentication logic for JPA | `NOT STARTED` | — | — | `AuthControllerTest` pass |
@@ -2162,3 +2162,49 @@ Existing KDS accepts the five statuses with unrestricted transitions, stamps lif
 ### [2026-10-26T19:34:18-04:00] PG-019 preflight correction verified
 
 Added isolated jwt.secret and jwt.expiration fixture properties to PostgresCartPersistenceConfigurationTest and PostgresCartControllerIntegrationTest; no cart production behavior changed. Command (backend): `.\mvnw.cmd test '-Dtest=PostgresCartControllerIntegrationTest,PostgresCartPersistenceConfigurationTest,CartControllerTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'`. Observed: 22 tests, 0 failures, 0 errors, 0 skips; BUILD SUCCESS (16 real PostgreSQL cart cases, 4 configuration cases, 2 default-Mongo unit cases). PG-018's previously unexecuted focused coverage now ran successfully, but its status remains unchanged; full current regression and the existing live-Mongo blocker are separate requirements. Preliminary fixture correction is committed separately from PG-019 implementation.
+
+---
+
+### [2026-10-26T19:53:17-04:00] PG-019 implementation and runtime verification
+
+**Status:** IMPLEMENTED (UNVERIFIED). Implementation batch finished at this entry's timestamp; Completed At remains unset because required live Mongo verification is unavailable. Starting main HEAD was `a6a97d00245988ba2026f2d4664cdcde0dc3bf9c`; preliminary PG-018 fixture correction is commit `5afbd5e`. PG-017 remains BLOCKED; PG-018 remains IMPLEMENTED (UNVERIFIED), with its newly executed runtime evidence reflected in the current tracker. Historical entries are retained.
+
+**Storage selection and compatibility:** Introduced KdsOrderStore, CustomerNoShowStore, CustomerOrderCountStore and KdsSettingsSource with default Mongo components and explicit PostgreSQL adapters. KdsController and CustomerNoShowService delegate to these abstractions; legacy constructors remain for existing callers. Mongo remains the application default, preserving status/message response fields, original first-no-show counter behavior and default history enrichment behavior. PostgreSQL selection requires the test/postgres-migration profile plus app.kds.postgres.enabled=true (default false) and actual PostgreSQL checkout. No schema, frontend, dependency or pricing/tracking-token changes.
+
+**Transactions and identity:** PostgreSQL checkout and KDS share JpaCustomerOrderRepository and the actual orderJpaTransactionManager. Every KDS mutation locks the parent order using the same pessimistic lock as customer message append. NO_SHOW entry, repeat and exit reconcile the registered customer's active canonical NO_SHOW count inside that same transaction, after the order flush and under a user-row lock. Lock order is parent order then selected user; count queries do not lock other orders. Status/timestamps/counter all commit or roll back together. Only the noShowCount user column is updated, followed by managed-entity refresh; passwords, roles, token versions and profile data cannot be overwritten by reconciliation. Guest orders never create user records. Email lookup is case-insensitive and preferred, with deterministic normalized-phone lookup fallback. Counts retain canonical user email precedence and raw-phone fallback only when canonical email is absent; mismatched-email identities are not silently merged. Checkout retains PG-017's fail-closed cached-counter OR authoritative-count threshold of three. Leaving NO_SHOW reconciles the PostgreSQL cache; default Mongo's historical first-event behavior is retained.
+
+**KDS reads and messages:** Date/default-today filtering, five existing status values and first-write lifecycle timestamps remain. PostgreSQL rows sort by createdAt descending, then ID; children load inside the transaction using separate item/message graphs, messages in chunks of 256. Presentation caches count lookups by identity: the 12-order same-customer test measures at most four SQL statements including both count queries. Mutations change managed scalar fields or append children rather than merge detached snapshots. KDS ready-time numeric values and arbitrarily large integer strings safely clamp to 5..120. Ordered-message append initializes the existing collection under the parent lock before appending, preserving index/history integrity with concurrent customer and KDS sends. The initial new-suite run exposed null message slots after an uninitialized ordered append; this production bug was fixed, not hidden by null filtering.
+
+**Realtime, authorization and guards:** Persisted snapshots are published only after successful commit; failed flush/commit emits nothing. Socket callback failures cannot convert a committed write into an API failure. Existing event names, rooms, sender fields and single-delivery behavior remain. PostgreSQL KDS allowlists read only relational store_settings; missing/empty settings deny access, with no Mongo fallback. Existing proxy/CIDR/loopback/max-three-entry behavior remains; malformed negative CIDR prefixes are rejected. Operational KDS routes retain IP authorization and /orders/all retains its admin-JWT restriction. Startup validates actual injected store types and matching EntityManagerFactory objects across KDS, no-show, presentation, settings and checkout; arbitrary flags cannot bypass it. Real legacy ReviewController, AuthController and SocketIoConfig still reject mixed PostgreSQL order activation early. Full review/reservation, registration/authentication and Socket.IO migration remain deferred to PG-020 through PG-023.
+
+**Runtime evidence:** Commands below ran from backend against PostgreSQL 17.10 on the previously owned disposable loopback cluster at 127.0.0.1:54353. Each PostgreSQL suite creates/drops its uniquely owned synthetic database and applies Flyway V1. Java 25.0.3 compiled release target 21. Counts are observed per invocation, not additive unique-case totals.
+
+| Command / iteration | Tests | Failures | Errors | Skips | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Initial available baseline (command in start entry) | 661 | 3 | 1 | 0 | FAILURE; missing PG-018 JWT fixture properties |
+| PG-018 focused correction (command in preflight entry) | 22 | 0 | 0 | 0 | SUCCESS |
+| Existing affected suites, command A | 85 | 0 | 0 | 0 | SUCCESS |
+| Initial new integration suite, command B | 23 | 0 | 3 | 0 | FAILURE; ordered append issue subsequently fixed |
+| First corrected targeted group, command C | 105 | 0 | 0 | 0 | SUCCESS |
+| Final targeted group, command D | 114 | 0 | 0 | 0 | SUCCESS |
+| Docker-dependent retry, command E | 18 | 0 | 2 | 16 | FAILURE; Docker unavailable |
+| Final full available regression, command F | 717 | 0 | 0 | 0 | SUCCESS; 3m14s, finished 2026-10-26T19:50:01-04:00 |
+
+```powershell
+# A
+.\mvnw.cmd test '-Dtest=CustomerNoShowServiceTest,KdsAccessServiceTest,AdminAuthInterceptorTest,OrderControllerTest,PostgresOrderControllerIntegrationTest,PostgresOrderPersistenceConfigurationTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'
+# B
+.\mvnw.cmd test '-Dtest=PostgresKdsControllerIntegrationTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'
+# C
+.\mvnw.cmd clean test '-Dtest=PostgresKdsControllerIntegrationTest,PostgresKdsPersistenceConfigurationTest,CustomerNoShowServiceTest,KdsAccessServiceTest,AdminAuthInterceptorTest,PostgresOrderPersistenceConfigurationTest,PostgresOrderControllerIntegrationTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'
+# D
+.\mvnw.cmd clean test '-Dtest=PostgresKdsControllerIntegrationTest,PostgresKdsPersistenceConfigurationTest,KdsControllerTest,CustomerNoShowServiceTest,KdsAccessServiceTest,AdminAuthInterceptorTest,PostgresOrderPersistenceConfigurationTest,PostgresOrderControllerIntegrationTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'
+# E
+.\mvnw.cmd test '-Dtest=LoginRateLimiterMongoTest,SignupOtpChallengeMongoConcurrencyTest,PasswordResetMongoTest'
+# F
+.\mvnw.cmd test '-Dtest=*Test,!LoginRateLimiterMongoTest,!SignupOtpChallengeMongoConcurrencyTest,!PasswordResetMongoTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'
+```
+
+A clean test-compile with -DskipTests also succeeded; it is not counted as runtime verification. Final targeted coverage includes 26 real PostgreSQL KDS integration cases, nine actual Spring selection/guard cases and six default-Mongo KDS unit cases. Integration assertions cover exact JSON and security-field exclusion, shared checkout visibility, status/timestamp behavior, threshold and canonical identities, repeated/concurrent no-shows and transition-away reconciliation, user-update rollback, ordered concurrent message writers, a demonstrably waiting PostgreSQL row lock, no precommit event, deferred commit failure, socket failure, query bounds and IP authorization. The full available run also executed the corrected 16-case PG-018 integration suite and the 47-case PG-017 order suite, with zero skips.
+
+**Remaining blocker and scope:** LoginRateLimiterMongoTest and SignupOtpChallengeMongoConcurrencyTest each errored at Docker container initialization; PasswordResetMongoTest skipped 16 cases under its existing disabledWithoutDocker policy. These were separately retried and explicitly excluded from command F, not counted as passing. Default-path unit regressions passed, but required live Mongo compatibility remains unverified. No production deploy or PostgreSQL activation occurred; no PG-020+ implementation started. Review/authentication/full Socket.IO consumers remain guarded pending their separately authorized phases. Commit and push this implementation to main, then verify remote HEAD; final SHA is reported in the engineering handoff.

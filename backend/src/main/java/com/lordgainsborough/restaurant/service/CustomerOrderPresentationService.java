@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.service;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.HashMap;
 import java.util.List;
@@ -12,11 +13,15 @@ import java.util.Map;
 public class CustomerOrderPresentationService {
     private static final String NO_SHOW_STATUS = "NO_SHOW";
 
-    private final CustomerOrderRepository orderRepository;
+    private final CustomerOrderCountStore counts;
 
     public CustomerOrderPresentationService(CustomerOrderRepository orderRepository) {
-        this.orderRepository = orderRepository;
+        this(new MongoCustomerOrderCountStore(orderRepository));
     }
+
+    @Autowired
+    public CustomerOrderPresentationService(CustomerOrderCountStore counts) { this.counts = counts; }
+    public CustomerOrderCountStore getCountStore() { return counts; }
 
     public CustomerOrder attachCustomerOrderCount(CustomerOrder order) {
         order.setCustomerOrderCount(resolveCustomerOrderCount(order));
@@ -49,22 +54,20 @@ public class CustomerOrderPresentationService {
 
     private int resolveCustomerOrderCount(CustomerOrder order) {
         if (order.getCustomerEmail() != null && !order.getCustomerEmail().isBlank()) {
-            return (int) orderRepository.countByCustomerEmailIgnoreCase(order.getCustomerEmail().trim());
+            return (int) counts.byEmail(order.getCustomerEmail().trim(), false);
         }
         if (order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank()) {
-            return (int) orderRepository.countByCustomerPhone(order.getCustomerPhone().trim());
+            return (int) counts.byPhone(order.getCustomerPhone().trim(), false);
         }
         return 1;
     }
 
     private int resolveCustomerNoShowCount(CustomerOrder order) {
         if (order.getCustomerEmail() != null && !order.getCustomerEmail().isBlank()) {
-            return (int) orderRepository.countByCustomerEmailIgnoreCaseAndStatus(
-                    order.getCustomerEmail().trim(), NO_SHOW_STATUS);
+            return (int) counts.byEmail(order.getCustomerEmail().trim(), true);
         }
         if (order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank()) {
-            return (int) orderRepository.countByCustomerPhoneAndStatus(
-                    order.getCustomerPhone().trim(), NO_SHOW_STATUS);
+            return (int) counts.byPhone(order.getCustomerPhone().trim(), true);
         }
         return NO_SHOW_STATUS.equals(order.getStatus()) ? 1 : 0;
     }

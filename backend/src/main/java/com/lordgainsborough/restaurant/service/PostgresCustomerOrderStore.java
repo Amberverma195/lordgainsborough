@@ -22,10 +22,14 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
     private final JpaUserRepository users;
     private final CustomerOrderMapper mapper = new CustomerOrderMapper();
     private final TransactionTemplate transactions;
+    private final JpaTransactionManager manager;
+    private final PostgresCustomerNoShowStore pickupRestrictions;
 
     public PostgresCustomerOrderStore(JpaCustomerOrderRepository orders, JpaMenuItemRepository menu,
             JpaOrderReviewRepository reviews, JpaStoreSettingsRepository settings, JpaUserRepository users,
             JpaTransactionManager transactionManager) {
+        this.manager = transactionManager;
+        this.pickupRestrictions = new PostgresCustomerNoShowStore(orders,users,transactionManager);
         this.orders = orders;
         this.menu = menu;
         this.reviews = reviews;
@@ -100,16 +104,10 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
         return result;
     }
 
+    public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }
+
     public boolean pickupDisabled(String email, String phone) {
-        Optional<JpaUser> user = email == null || email.isBlank() ? Optional.empty()
-                : users.findByEmailIgnoreCase(email.trim());
-        if (user.isEmpty()) {
-            String normalized = normalizePhone(phone);
-            if (!normalized.isEmpty()) user = users.findByPhoneNormalized(normalized).stream().findFirst();
-        }
-        // Preserve the registered-customer policy. Guest orders have no implicit user association.
-        return user.map(value -> value.getNoShowCount() >= CustomerNoShowService.NO_SHOW_THRESHOLD
-                || noShows(value.getEmail(), value.getPhone()) >= CustomerNoShowService.NO_SHOW_THRESHOLD).orElse(false);
+        return pickupRestrictions.isPickupDisabledForCustomer(email,phone);
     }
 
     private long noShows(String email, String phone) {
