@@ -14,6 +14,7 @@ import jakarta.persistence.OrderColumn;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -41,6 +42,9 @@ public class JpaCart {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
+    @Transient
+    private boolean explicitTouch;
+
     @OneToMany(mappedBy = "cart", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderColumn(name = "item_index", nullable = false)
     private List<JpaCartItem> items = new ArrayList<>();
@@ -65,11 +69,13 @@ public class JpaCart {
         if (this.updatedAt == null) {
             this.updatedAt = Instant.now();
         }
+        explicitTouch = false;
     }
 
     @PreUpdate
     public void preUpdate() {
-        this.updatedAt = Instant.now();
+        if (!explicitTouch) this.updatedAt = Instant.now();
+        explicitTouch = false;
     }
 
     /**
@@ -85,15 +91,18 @@ public class JpaCart {
      */
     public void touch() {
         this.updatedAt = Instant.now();
+        explicitTouch = false;
     }
 
     /**
      * Touches the cart with a specific timestamp.
+     * The next persistence lifecycle callback preserves this caller-owned Clock value.
      *
      * @param timestamp the new instant to set
      */
     public void touch(Instant timestamp) {
         this.updatedAt = timestamp != null ? timestamp : Instant.now();
+        explicitTouch = true;
     }
 
     /**
@@ -170,7 +179,10 @@ public class JpaCart {
     public String getUserId() { return user != null ? user.getId() : null; }
 
     public Instant getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+        this.explicitTouch = false;
+    }
 
     /**
      * Returns the list of cart items.

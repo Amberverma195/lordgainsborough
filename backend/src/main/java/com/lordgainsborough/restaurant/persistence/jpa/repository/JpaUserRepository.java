@@ -16,6 +16,11 @@ import java.util.Optional;
 @Repository
 public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
 
+    /** All PG-018 operations lock this stable owner row, even before the user's first cart exists. */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select u from JpaUser u where lower(u.email) = lower(:email)")
+    Optional<JpaUser> findForCartByEmailIgnoreCase(@org.springframework.data.repository.query.Param("email") String email);
+
     Optional<JpaUser> findByEmail(String email);
 
     Optional<JpaUser> findByEmailIgnoreCase(String email);

@@ -64,14 +64,19 @@ public class JwtUtil {
         if (user == null) {
             return false;
         }
+        return validateTokenForIdentity(token, user.getId(), user.getTokenVersion());
+    }
+
+    /** Validates an identity loaded from the selected backend without converting JPA users to Mongo documents. */
+    public boolean validateTokenForIdentity(String token, String userId, long currentTokenVersion) {
         try {
             Claims claims = claims(token);
             String tokenUserId = claims.get("userId", String.class);
             Object versionClaim = claims.get("tokenVersion");
             long tokenVersion = versionClaim instanceof Number number ? number.longValue() : 0L;
-            return user.getId() != null
-                    && user.getId().equals(tokenUserId)
-                    && user.getTokenVersion() == tokenVersion;
+            return userId != null
+                    && userId.equals(tokenUserId)
+                    && currentTokenVersion == tokenVersion;
         } catch (Exception e) {
             return false;
         }

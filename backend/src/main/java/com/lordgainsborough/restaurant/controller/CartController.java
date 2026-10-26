@@ -1,111 +1,69 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.Cart;
-import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.repository.CartRepository;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
+import com.lordgainsborough.restaurant.service.CartStore;
+import com.lordgainsborough.restaurant.service.InvalidCartItemException;
+import com.lordgainsborough.restaurant.service.MongoCartStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.time.Instant;
+import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/cart")
 public class CartController {
+    private final CartStore carts;
 
-    private final CartRepository cartRepository;
-    private final UserRepository userRepository;
-    private final JwtUtil jwtUtil;
+    @Autowired
+    public CartController(CartStore carts) { this.carts = carts; }
 
-    public CartController(CartRepository cartRepository, UserRepository userRepository, JwtUtil jwtUtil) {
-        this.cartRepository = cartRepository;
-        this.userRepository = userRepository;
-        this.jwtUtil = jwtUtil;
+    /** Retained for existing direct callers; Spring selects the store-based constructor. */
+    public CartController(CartRepository carts, UserRepository users, JwtUtil jwt) {
+        this(new MongoCartStore(carts, users, jwt, Clock.systemUTC()));
     }
 
-    /**
-     * GET /api/cart — Return the authenticated user's saved cart.
-     */
     @GetMapping
     public ResponseEntity<?> getCart(@RequestHeader(value = "Authorization", required = false) String authHeader) {
-        Optional<User> userOpt = getAuthenticatedUser(authHeader);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
-        }
-
-        Optional<Cart> cartOpt = cartRepository.findByUserId(userOpt.get().getId());
-        if (cartOpt.isEmpty()) {
-            return ResponseEntity.ok(Collections.singletonMap("items", Collections.emptyList()));
-        }
-
-        Cart cart = cartOpt.get();
-        if (cart.isExpired()) {
-            cartRepository.delete(cart);
-            return ResponseEntity.ok(Collections.singletonMap("items", Collections.emptyList()));
-        }
-
-        return ResponseEntity.ok(Collections.singletonMap("items", cart.getItems()));
+        return cartResponse(carts.read(bearerToken(authHeader)));
     }
 
-    /**
-     * PUT /api/cart — Replace the user's entire cart with the provided items.
-     */
+    /** PUT still consumes a raw item array and replaces the full saved snapshot. */
     @PutMapping
     public ResponseEntity<?> saveCart(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody List<Cart.CartItem> items) {
-        Optional<User> userOpt = getAuthenticatedUser(authHeader);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
+        try {
+            return cartResponse(carts.replace(bearerToken(authHeader), items));
+        } catch (InvalidCartItemException invalid) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_CART_ITEM", "message", invalid.getMessage()));
         }
-
-        String userId = userOpt.get().getId();
-        Cart cart = cartRepository.findByUserId(userId).orElseGet(() -> {
-            Cart newCart = new Cart();
-            newCart.setUserId(userId);
-            return newCart;
-        });
-
-        cart.setItems(items != null ? items : Collections.emptyList());
-        cart.setUpdatedAt(Instant.now());
-        cartRepository.save(cart);
-
-        return ResponseEntity.ok(Collections.singletonMap("items", cart.getItems()));
     }
 
-    /**
-     * DELETE /api/cart — Clear the user's cart.
-     */
     @DeleteMapping
     public ResponseEntity<?> clearCart(@RequestHeader(value = "Authorization", required = false) String authHeader) {
-        Optional<User> userOpt = getAuthenticatedUser(authHeader);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
-        }
-
-        cartRepository.deleteByUserId(userOpt.get().getId());
-        return ResponseEntity.ok(Collections.singletonMap("message", "Cart cleared."));
+        return carts.clear(bearerToken(authHeader))
+                ? ResponseEntity.ok(Collections.singletonMap("message", "Cart cleared.")) : unauthorized();
     }
 
-    // --- Helpers ---
+    private static ResponseEntity<?> cartResponse(Optional<Cart> cart) {
+        if (cart.isEmpty()) return unauthorized();
+        return ResponseEntity.ok(Collections.singletonMap("items", cart.get().getItems()));
+    }
 
-    private Optional<User> getAuthenticatedUser(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            return Optional.empty();
-        }
+    private static ResponseEntity<?> unauthorized() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
+    }
 
-        String token = authHeader.substring(7);
-        if (!jwtUtil.validateToken(token)) {
-            return Optional.empty();
-        }
-
-        String email = jwtUtil.getEmailFromToken(token);
-        return userRepository.findByEmailIgnoreCase(email)
-                .filter(user -> jwtUtil.validateTokenForUser(token, user));
+    private static String bearerToken(String header) {
+        return header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
     }
 }
