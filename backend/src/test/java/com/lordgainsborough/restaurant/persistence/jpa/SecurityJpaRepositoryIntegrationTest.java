@@ -106,6 +106,7 @@ public class SecurityJpaRepositoryIntegrationTest {
     private String testDb;
     private String testPort;
     private static String testJdbcUrl;
+    private boolean databaseCreatedByTest = false;
 
     private AnnotationConfigApplicationContext context;
     private EntityManagerFactory entityManagerFactory;
@@ -178,7 +179,7 @@ public class SecurityJpaRepositoryIntegrationTest {
     void setUpAll() throws Exception {
         testPort = getRequiredPort();
         testDb = TEST_DB_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        ensureDatabaseExists(testDb);
+        provisionDisposableDatabaseSafely(testDb);
 
         testJdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + testDb + "?sslmode=disable";
 
@@ -207,28 +208,46 @@ public class SecurityJpaRepositoryIntegrationTest {
         if (context != null) {
             context.close();
         }
-        dropDatabaseSafely(testDb);
+        dropDisposableDatabaseSafely(testDb);
     }
 
-    private void ensureDatabaseExists(String dbName) {
+    private void assertSafeTestEnvironment(String port, String dbName) {
+        assertThat(port)
+                .withFailMessage("Test PostgreSQL port must not be blank")
+                .isNotBlank();
+        assertThat(dbName)
+                .withFailMessage("Test database name must start with expected prefix: " + TEST_DB_PREFIX)
+                .startsWith(TEST_DB_PREFIX);
+        assertThat(dbName)
+                .withFailMessage("Test database name must match expected identifier pattern")
+                .matches("^[a-z0-9_]{5,63}$");
+        assertThat(dbName)
+                .withFailMessage("Refusing to operate on system/production database")
+                .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
+    }
+
+    private void provisionDisposableDatabaseSafely(String dbName) throws Exception {
+        assertSafeTestEnvironment(testPort, dbName);
         String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
         try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("CREATE DATABASE " + dbName);
-        } catch (Exception e) {
-            // Already exists or creation logged
+            this.databaseCreatedByTest = true;
         }
     }
 
-    private void dropDatabaseSafely(String dbName) {
-        if (dbName == null || !dbName.startsWith(TEST_DB_PREFIX)) {
+    private void dropDisposableDatabaseSafely(String dbName) {
+        if (!databaseCreatedByTest || dbName == null) {
             return;
         }
+        assertSafeTestEnvironment(testPort, dbName);
         String adminUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable";
         try (Connection conn = DriverManager.getConnection(adminUrl, "postgres", "postgres");
              Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + dbName + "' AND pid <> pg_backend_pid()");
             stmt.executeUpdate("DROP DATABASE IF EXISTS " + dbName + " WITH (FORCE)");
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to drop disposable test database " + dbName + ": " + e.getMessage());
         }
     }
 

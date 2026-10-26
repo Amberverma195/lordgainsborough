@@ -1293,6 +1293,7 @@ Completed the final repository task of Phase 8, creating the four PostgreSQL sec
   - `PG-016`: `PasswordResetOtpChallengePersistence` and `PasswordResetService` (transactional reset state management).
 - Sensitive Data Protection: Verified Jackson serialization hides raw digests, secret operation IDs, idempotency keys, and user password hashes from JSON output across all security entities.
 - Timestamp & Clock Caveat: Verified that `@PreUpdate` currently evaluates `Instant.now()`. Registered requirement to support injectable `Clock` during PG-015 and PG-016 without silently mutating JPA entity definitions during PG-011.
+- Database Lifecycle & Teardown Hardening: Enforced strict test database ownership tracking (`databaseCreatedByTest`). Database creation failures are never swallowed; teardown only permits deletion when ownership was established; and drop failures are reported to `System.err` rather than silently suppressed.
 
 **Verification Results:**
 - **Targeted Integration Test Suite:** `com.lordgainsborough.restaurant.persistence.jpa.SecurityJpaRepositoryIntegrationTest`
