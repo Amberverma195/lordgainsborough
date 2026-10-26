@@ -12,6 +12,19 @@ import java.util.OptionalLong;
  * Implementations provide persistence-layer operations for tracking failed authentication attempts,
  * evaluating active lockout cooldowns, and resetting failure states upon successful authentication.
  * </p>
+ * <p>
+ * <b>Concurrent Ordering Policy (Successful Login vs Failed Login):</b>
+ * <ul>
+ *   <li><b>Linearizability:</b> {@link #clearFailures(String)} (successful login) and
+ *       {@link #recordFailure(String, String, Instant, LoginRateLimitProperties)} (failed login)
+ *       execute within transactional boundaries serialized by database row locks.</li>
+ *   <li><b>Clear Commits Last:</b> If successful authentication clears state after a failed attempt,
+ *       all previous failure counts are removed and the state record is deleted. Subsequent cooldown
+ *       evaluations return empty.</li>
+ *   <li><b>Failure Commits Last:</b> If failed authentication commits after a successful login clears state,
+ *       the failure state starts fresh as attempt #1 (count = 1). Pre-clear failure counts are never leaked.</li>
+ * </ul>
+ * </p>
  */
 public interface LoginFailureStateStore {
 

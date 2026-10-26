@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.service;
 import com.lordgainsborough.restaurant.config.LoginRateLimitProperties;
 import com.lordgainsborough.restaurant.model.SignupAbuseLimit.BucketType;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +33,7 @@ public class LoginRateLimiter {
     private final AbuseIpHasher hasher;
     private final Clock clock;
 
+    @Autowired
     public LoginRateLimiter(
             AbuseCounterStore counterStore,
             LoginFailureStateStore failureStore,

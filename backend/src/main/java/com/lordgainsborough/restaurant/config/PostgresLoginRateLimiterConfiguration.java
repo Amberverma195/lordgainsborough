@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.config;
 import com.lordgainsborough.restaurant.service.PostgresLoginFailureStateStore;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -42,8 +43,10 @@ public class PostgresLoginRateLimiterConfiguration {
 
     @Bean(name = "postgresLoginFailureStateStore")
     @Primary
-    public PostgresLoginFailureStateStore postgresLoginFailureStateStore(DataSource dataSource) {
-        return new PostgresLoginFailureStateStore(dataSource);
+    public PostgresLoginFailureStateStore postgresLoginFailureStateStore(
+            DataSource dataSource,
+            @Qualifier("transactionManager") PlatformTransactionManager transactionManager) {
+        return new PostgresLoginFailureStateStore(dataSource, transactionManager);
     }
 
     @Bean(name = "transactionManager")

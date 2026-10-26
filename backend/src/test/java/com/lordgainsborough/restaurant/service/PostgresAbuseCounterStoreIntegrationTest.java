@@ -90,7 +90,7 @@ public class PostgresAbuseCounterStoreIntegrationTest {
                 .isNotIn("postgres", "template0", "template1", "public", "lordgainsborough", "restaurant");
     }
 
-    static class DisposableDatabaseSession {
+    static class DisposableDatabaseSession implements PostgresAbuseCounterStore.DisposableDatabaseSession {
         private final String port;
         private final String dbName;
         private boolean createdAndOwned = false;
@@ -98,6 +98,11 @@ public class PostgresAbuseCounterStoreIntegrationTest {
         DisposableDatabaseSession(String port, String dbName) {
             this.port = port;
             this.dbName = dbName;
+        }
+
+        @Override
+        public boolean isVerifiedOwner(String databaseName) {
+            return createdAndOwned && dbName != null && dbName.equalsIgnoreCase(databaseName);
         }
 
         void provision() throws Exception {
@@ -157,7 +162,7 @@ public class PostgresAbuseCounterStoreIntegrationTest {
         dataSource.setPassword("postgres");
 
         jdbcTemplate = new JdbcTemplate(dataSource);
-        store = new PostgresAbuseCounterStore(dataSource, true); // test mode: allowClear = true
+        store = new PostgresAbuseCounterStore(dataSource, mainDatabaseSession);
     }
 
     @AfterAll
@@ -753,8 +758,8 @@ public class PostgresAbuseCounterStoreIntegrationTest {
             JdbcTemplate txTemplate1 = new JdbcTemplate(new org.springframework.jdbc.datasource.SingleConnectionDataSource(conn1, true));
             JdbcTemplate txTemplate2 = new JdbcTemplate(new org.springframework.jdbc.datasource.SingleConnectionDataSource(conn2, true));
 
-            PostgresAbuseCounterStore store1 = new PostgresAbuseCounterStore(txTemplate1, true);
-            PostgresAbuseCounterStore store2 = new PostgresAbuseCounterStore(txTemplate2, true);
+            PostgresAbuseCounterStore store1 = new PostgresAbuseCounterStore(txTemplate1, mainDatabaseSession);
+            PostgresAbuseCounterStore store2 = new PostgresAbuseCounterStore(txTemplate2, mainDatabaseSession);
 
             long c1 = store1.incrementAndGet(id, BucketType.INITIAL_SEND_IP, "hash-tx", ws, exp);
             conn1.commit();
@@ -861,7 +866,7 @@ public class PostgresAbuseCounterStoreIntegrationTest {
     @Order(34)
     @DisplayName("Req 34: Test-mode clear removes records safely on verified disposable test database")
     void test34_clearInTestModeRemovesRecords() throws Exception {
-        PostgresAbuseCounterStore testStore = new PostgresAbuseCounterStore(dataSource, true);
+        PostgresAbuseCounterStore testStore = new PostgresAbuseCounterStore(dataSource, mainDatabaseSession);
         Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant exp = ws.plusSeconds(300);
 
@@ -887,10 +892,22 @@ public class PostgresAbuseCounterStoreIntegrationTest {
         adminDs.setUser("postgres");
         adminDs.setPassword("postgres");
 
-        PostgresAbuseCounterStore storeOnAdminDb = new PostgresAbuseCounterStore(adminDs, true);
+        PostgresAbuseCounterStore storeOnAdminDb = new PostgresAbuseCounterStore(adminDs, mainDatabaseSession);
         assertThatThrownBy(storeOnAdminDb::clear)
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("Refusing to execute clear() on protected database: postgres");
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("Req 34c: clear() rejects execution even if database name looks like test if not owned by verified session")
+    void test34c_clearRejectsUnownedDatabaseEvenIfNameContainsTest() {
+        PostgresAbuseCounterStore.DisposableDatabaseSession unownedSession = db -> false;
+        PostgresAbuseCounterStore unownedStore = new PostgresAbuseCounterStore(dataSource, unownedSession);
+
+        assertThatThrownBy(unownedStore::clear)
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("is not owned by the active verified disposable test session");
     }
 
     // =========================================================================

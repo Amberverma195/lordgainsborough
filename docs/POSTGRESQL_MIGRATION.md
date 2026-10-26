@@ -1687,7 +1687,53 @@ Implemented **PG-014: PostgreSQL Login Rate Limiter With Transactional Locking**
 - **Combined Test Total:** **334 tests passing cleanly**.
 
 **Next Task:**  
-`PG-015` — Refactor `SignupOtpChallengePersistence` for PostgreSQL JPA persistence (`NOT STARTED`).
+`PG-014-FINAL-HARDENING` — Stage A Hardening & Code-Review Findings Resolution (`COMPLETED`).
+
+---
+
+### [2026-10-26T04:20:00-04:00] PG-014-FINAL-HARDENING: Login Rate Limiter & Abuse Counter Store Review Hardening
+
+**Overview & Objective:**
+Completed Stage A hardening resolving all code-review findings from PG-014, including Spring bean constructor ambiguity, transaction manager consistency, missing-row race conditions under concurrent deletion, linearizable clear/failure ordering semantics, and test database ownership guardrails.
+
+**Key Hardening Measures:**
+1. **LoginRateLimiter Spring Constructor Injection (Finding 1):**
+   - Added `@Autowired` to the primary SPI-based constructor:
+     `LoginRateLimiter(AbuseCounterStore, LoginFailureStateStore, LoginRateLimitProperties, AbuseIpHasher, Clock)`.
+   - Kept the legacy `LoginRateLimiter(MongoTemplate, LoginRateLimitProperties, AbuseIpHasher, Clock)` constructor intact for backwards compatibility with direct test callers.
+   - Added `test04b_springContextConstructorInjectionResolution` verifying that in both default MongoDB context and opt-in PostgreSQL context, Spring cleanly instantiates `LoginRateLimiter` with zero constructor ambiguity.
+2. **Transaction-Manager Consistency Across JPA and Spring (Finding 2):**
+   - Updated `PostgresLoginRateLimiterConfiguration` to inject `@Qualifier("transactionManager") PlatformTransactionManager` into `PostgresLoginFailureStateStore`.
+   - `PostgresLoginFailureStateStore` stores this explicit manager and initializes its internal `TransactionTemplate` from it, ensuring both declarative `@Transactional(transactionManager = "transactionManager")` and programmatic `TransactionTemplate` operate on the exact same physical transaction and connection boundary.
+   - Added `test29b_transactionalRollbackRestoresPreviousStateViaSpringProxy` and `test29c_rowLockHeldAcrossTransactionCommitViaSpringProxy` verifying real Spring AOP proxy transactional rollback and row-level lock blocking.
+3. **Missing-Row Insert/Delete Race Handling (Finding 3):**
+   - Hardened `PostgresLoginFailureStateStore.recordFailure()` with a bounded retry policy (`MAX_ROW_RACE_RETRIES = 20`).
+   - Atomically attempts `INSERT ... ON CONFLICT (id) DO NOTHING`. Checks `inserted == 1`.
+   - If `inserted == 0` (conflict with concurrent transaction), executes `SELECT ... FOR UPDATE`.
+   - If the locked row is unexpectedly absent (due to concurrent `clearFailures` committing between conflict and select), loops cleanly to reattempt insertion.
+   - For all updates, explicitly verifies `updated == 1`.
+   - Fails closed with `FailureResult(true, cooldown)` if retries exhaust, preventing false-positive authorization or unrecorded failures.
+   - Added `test35b_missingRowRaceUnderConcurrentDeleteAndReinsert` to verify bounded race recovery.
+4. **Successful-Login Clearing Semantics & Linearization Policy (Finding 4):**
+   - Formally documented the linearizability contract in `LoginFailureStateStore` and `PostgresLoginFailureStateStore`: final security state is strictly ordered by transaction commit timestamp.
+   - If `clearFailures()` commits after `recordFailure()`, 0 rows remain (clean slate upon successful authentication).
+   - If `recordFailure()` commits after `clearFailures()`, failure count resets to 1 (new failed attempt recorded, never leaking pre-clear counts like 5).
+   - Strengthened `test35` with explicit final state assertions, and added `test35c_concurrentClearAndFailureStrictOrdering` to verify concurrent transaction ordering.
+5. **Disposable Database Ownership Guard for Test Clearing (Finding 5):**
+   - Removed reliance on database naming pattern (`contains("_test_")`).
+   - Introduced `PostgresAbuseCounterStore.DisposableDatabaseSession` functional interface: `boolean isVerifiedOwner(String databaseName)`.
+   - Replaced boolean constructor flag with explicit `DisposableDatabaseSession` instance. In production/default runtime, session is absent, completely disabling global table clearing.
+   - Added `test34c_clearRejectsUnownedDatabaseEvenIfNameContainsTest` verifying that clearing an unowned database with a test-like name is strictly rejected with `IllegalStateException`.
+
+**Verification Results:**
+- `PostgresLoginRateLimiterIntegrationTest`: **43 tests run, 0 failures, 0 errors, 0 skipped** (8.423s).
+- `PostgresAbuseCounterStoreIntegrationTest`: **41 tests run, 0 failures, 0 errors, 0 skipped** (1.815s).
+- `AbuseAndLoginFailureJpaIntegrationTest`: **25 tests run, 0 failures, 0 errors, 0 skipped** (6.523s).
+- `AuthControllerLoginSecurityTest`: **4 tests run, 0 failures, 0 errors, 0 skipped** (2.308s).
+- Total tests passing in Stage A verification: **113 tests**.
+
+**Next Task:**  
+`PG-015` — PostgreSQL Signup OTP Challenge Persistence (`NOT STARTED`).
 
 ---
 

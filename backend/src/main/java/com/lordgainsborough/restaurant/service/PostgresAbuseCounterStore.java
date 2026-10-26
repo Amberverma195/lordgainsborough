@@ -60,24 +60,45 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
             SELECT count, expires_at FROM signup_abuse_limits WHERE id = ?
             """;
 
-    private final JdbcTemplate jdbcTemplate;
-    private final boolean allowClear;
-
-    public PostgresAbuseCounterStore(JdbcTemplate jdbcTemplate, boolean allowClear) {
-        this.jdbcTemplate = Objects.requireNonNull(jdbcTemplate, "jdbcTemplate must not be null");
-        this.allowClear = allowClear;
+    @FunctionalInterface
+    public interface DisposableDatabaseSession {
+        /**
+         * Verifies whether the calling session created and owns the specified database.
+         *
+         * @param databaseName the name of the database currently connected to
+         * @return true if the session created, owns, and verified the database as disposable; false otherwise
+         */
+        boolean isVerifiedOwner(String databaseName);
     }
 
-    public PostgresAbuseCounterStore(DataSource dataSource, boolean allowClear) {
-        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")), allowClear);
+    private final JdbcTemplate jdbcTemplate;
+    private final DisposableDatabaseSession disposableSession;
+
+    public PostgresAbuseCounterStore(JdbcTemplate jdbcTemplate, DisposableDatabaseSession disposableSession) {
+        this.jdbcTemplate = Objects.requireNonNull(jdbcTemplate, "jdbcTemplate must not be null");
+        this.disposableSession = disposableSession;
+    }
+
+    public PostgresAbuseCounterStore(DataSource dataSource, DisposableDatabaseSession disposableSession) {
+        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")), disposableSession);
     }
 
     public PostgresAbuseCounterStore(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, false);
+        this(jdbcTemplate, (DisposableDatabaseSession) null);
     }
 
     public PostgresAbuseCounterStore(DataSource dataSource) {
-        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")), false);
+        this(new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource must not be null")), (DisposableDatabaseSession) null);
+    }
+
+    @Deprecated
+    public PostgresAbuseCounterStore(JdbcTemplate jdbcTemplate, boolean allowClear) {
+        this(jdbcTemplate, allowClear ? (db -> false) : null);
+    }
+
+    @Deprecated
+    public PostgresAbuseCounterStore(DataSource dataSource, boolean allowClear) {
+        this(dataSource, allowClear ? (db -> false) : null);
     }
 
     @Override
@@ -152,18 +173,18 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
     @Override
     @Transactional(transactionManager = "transactionManager")
     public void clear() {
-        if (!allowClear) {
+        if (disposableSession == null) {
             throw new UnsupportedOperationException(
                     "Global clearing of PostgreSQL abuse counters is disabled in runtime code to prevent catastrophic rate-limit wipe. "
                             + "Clearing is only permitted in explicitly constructed test instances on verified disposable test databases."
             );
         }
-        assertDisposableTestDatabase();
+        assertDisposableDatabaseOwnership();
         jdbcTemplate.update("DELETE FROM signup_abuse_limits");
         log.info("Cleared all records from signup_abuse_limits on verified disposable test database.");
     }
 
-    private void assertDisposableTestDatabase() {
+    private void assertDisposableDatabaseOwnership() {
         String currentDb;
         try {
             currentDb = jdbcTemplate.queryForObject("SELECT current_database()", String.class);
@@ -180,15 +201,15 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
             throw new SecurityException("Refusing to execute clear() on protected database: " + currentDb);
         }
 
-        if (!dbLower.matches("^[a-z0-9_]{5,63}$") || (!dbLower.startsWith("pg_abuse_store_test_") && !dbLower.contains("_test_"))) {
+        if (!disposableSession.isVerifiedOwner(currentDb)) {
             throw new SecurityException(
-                    "Refusing to execute clear(): database '" + currentDb + "' is not a recognized disposable test database."
+                    "Refusing to execute clear(): database '" + currentDb + "' is not owned by the active verified disposable test session."
             );
         }
     }
 
     public boolean isAllowClear() {
-        return allowClear;
+        return disposableSession != null;
     }
 
     private boolean isOverflowException(Throwable e) {

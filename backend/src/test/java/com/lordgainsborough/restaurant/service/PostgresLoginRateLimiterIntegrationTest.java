@@ -57,6 +57,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -178,8 +179,9 @@ public class PostgresLoginRateLimiterIntegrationTest {
         dataSource.setPassword("postgres");
 
         jdbcTemplate = new JdbcTemplate(dataSource);
-        counterStore = new PostgresAbuseCounterStore(dataSource, true);
-        failureStore = new PostgresLoginFailureStateStore(dataSource);
+        PlatformTransactionManager txManager = new DataSourceTransactionManager(dataSource);
+        counterStore = new PostgresAbuseCounterStore(dataSource);
+        failureStore = new PostgresLoginFailureStateStore(dataSource, txManager);
 
         SignupAbuseProperties hashProps = new SignupAbuseProperties();
         hashProps.setIpHashSecret("pg-014-test-salt-secret-9988");
@@ -267,6 +269,80 @@ public class PostgresLoginRateLimiterIntegrationTest {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx).hasSingleBean(PostgresLoginFailureStateStore.class);
                     assertThat(ctx).hasBean("transactionManager");
+                    PostgresLoginFailureStateStore store = ctx.getBean(PostgresLoginFailureStateStore.class);
+                    PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
+                    assertThat(store.getTransactionManager()).isSameAs(txManager);
+                });
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("Req 4b: Realistic Spring context instantiates LoginRateLimiter service under both Mongo and Postgres configurations")
+    void test04b_realisticSpringContextResolvesLoginRateLimiterWithBothConfigurations() {
+        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
+
+        // 1. Verify default MongoDB Spring context instantiates LoginRateLimiter via constructor injection
+        new ApplicationContextRunner()
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
+                .withUserConfiguration(
+                        MongoAbuseCounterStore.class,
+                        MongoLoginFailureStateStore.class,
+                        LoginRateLimiter.class
+                )
+                .withBean(LoginRateLimitProperties.class, () -> properties)
+                .withBean(AbuseIpHasher.class, () -> hasher)
+                .withBean(Clock.class, Clock::systemUTC)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(LoginRateLimiter.class);
+                    assertThat(ctx.getBean(LoginRateLimiter.class)).isNotNull();
+                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
+                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
+                    assertThat(ctx).doesNotHaveBean(PostgresLoginFailureStateStore.class);
+                });
+
+        // 2. Verify opt-in PostgreSQL combined context instantiates LoginRateLimiter via @Autowired constructor
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        PostgresAbuseCounterStoreConfiguration.class,
+                        PostgresLoginRateLimiterConfiguration.class
+                ))
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
+                .withUserConfiguration(
+                        MongoAbuseCounterStore.class,
+                        MongoLoginFailureStateStore.class,
+                        LoginRateLimiter.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-abuse-store.enabled=true",
+                        "app.security.postgres-login-limiter.enabled=true"
+                )
+                .withBean(DataSource.class, () -> dataSource)
+                .withBean(LoginRateLimitProperties.class, () -> properties)
+                .withBean(AbuseIpHasher.class, () -> hasher)
+                .withBean(Clock.class, Clock::systemUTC)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(LoginRateLimiter.class);
+                    LoginRateLimiter limiter = ctx.getBean(LoginRateLimiter.class);
+                    assertThat(limiter).isNotNull();
+
+                    // Both implementations coexist
+                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
+                    assertThat(ctx).hasBean("postgresLoginFailureStateStore");
+                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
+                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
+
+                    // Unqualified lookups resolve to @Primary PostgreSQL stores
+                    assertThat(ctx.getBean(LoginFailureStateStore.class))
+                            .isInstanceOf(PostgresLoginFailureStateStore.class);
+                    assertThat(ctx.getBean(AbuseCounterStore.class))
+                            .isInstanceOf(PostgresAbuseCounterStore.class);
+
+                    PostgresLoginFailureStateStore pgStore = ctx.getBean(PostgresLoginFailureStateStore.class);
+                    PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
+                    assertThat(pgStore.getTransactionManager()).isSameAs(txManager);
                 });
     }
 
@@ -814,6 +890,166 @@ public class PostgresLoginRateLimiterIntegrationTest {
         assertThat(count).isEqualTo(1);
     }
 
+    @Test
+    @Order(29)
+    @DisplayName("Req 29b: Transaction rollback on real Spring bean restores previously committed state")
+    void test29b_rollbackThroughRealSpringBeanPreventsPartiallyPersistedTransitions() {
+        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        PostgresAbuseCounterStoreConfiguration.class,
+                        PostgresLoginRateLimiterConfiguration.class
+                ))
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
+                .withUserConfiguration(
+                        MongoAbuseCounterStore.class,
+                        MongoLoginFailureStateStore.class,
+                        LoginRateLimiter.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-abuse-store.enabled=true",
+                        "app.security.postgres-login-limiter.enabled=true"
+                )
+                .withBean(DataSource.class, () -> dataSource)
+                .withBean(LoginRateLimitProperties.class, () -> properties)
+                .withBean(AbuseIpHasher.class, () -> hasher)
+                .withBean(Clock.class, Clock::systemUTC)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+
+                    PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
+                    PostgresLoginFailureStateStore storeBean = ctx.getBean(PostgresLoginFailureStateStore.class);
+                    LoginRateLimiter limiter = ctx.getBean(LoginRateLimiter.class);
+
+                    // Confirm the real Spring bean is injected with the exact qualified transactionManager
+                    assertThat(storeBean.getTransactionManager()).isSameAs(txManager);
+
+                    String id = "real-spring-rollback-" + UUID.randomUUID() + "@example.com";
+                    String ip = "198.51.100.30";
+                    String stateId = limiter.failureStateId(id, ip);
+
+                    // 1. Initial committed failure through real Spring bean (attempt #1)
+                    limiter.recordFailure(id, ip);
+                    Integer initialCount = jdbcTemplate.queryForObject(
+                            "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                            Integer.class,
+                            stateId
+                    );
+                    assertThat(initialCount).isEqualTo(1);
+
+                    // 2. Second failure inside outer Spring transaction that gets rolled back
+                    TransactionStatus status = txManager.getTransaction(new DefaultTransactionDefinition());
+                    limiter.recordFailure(id, ip); // Would increment to 2
+                    txManager.rollback(status);
+
+                    // 3. Confirm count remains 1 because transaction rolled back atomically
+                    Integer rolledBackCount = jdbcTemplate.queryForObject(
+                            "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                            Integer.class,
+                            stateId
+                    );
+                    assertThat(rolledBackCount).isEqualTo(1);
+
+                    // 4. Test clearFailures rollback through Spring transaction manager
+                    TransactionStatus clearStatus = txManager.getTransaction(new DefaultTransactionDefinition());
+                    limiter.clearFailures(id, ip);
+                    txManager.rollback(clearStatus);
+
+                    Integer preservedCount = jdbcTemplate.queryForObject(
+                            "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                            Integer.class,
+                            stateId
+                    );
+                    assertThat(preservedCount).isEqualTo(1);
+                });
+    }
+
+    @Test
+    @Order(29)
+    @DisplayName("Req 29c: Row-level locking (SELECT ... FOR UPDATE) blocks concurrent transactions through real Spring bean until commit")
+    void test29c_rowLockBehaviorThroughRealSpringBean() throws Exception {
+        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        PostgresAbuseCounterStoreConfiguration.class,
+                        PostgresLoginRateLimiterConfiguration.class
+                ))
+                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
+                .withUserConfiguration(
+                        MongoAbuseCounterStore.class,
+                        MongoLoginFailureStateStore.class,
+                        LoginRateLimiter.class
+                )
+                .withPropertyValues(
+                        "spring.profiles.active=postgres-migration",
+                        "app.security.postgres-abuse-store.enabled=true",
+                        "app.security.postgres-login-limiter.enabled=true"
+                )
+                .withBean(DataSource.class, () -> dataSource)
+                .withBean(LoginRateLimitProperties.class, () -> properties)
+                .withBean(AbuseIpHasher.class, () -> hasher)
+                .withBean(Clock.class, Clock::systemUTC)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+
+                    PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
+                    PostgresLoginFailureStateStore storeBean = ctx.getBean(PostgresLoginFailureStateStore.class);
+                    LoginRateLimiter limiter = ctx.getBean(LoginRateLimiter.class);
+
+                    String id = "row-lock-bean-" + UUID.randomUUID() + "@example.com";
+                    String ip = "198.51.100.31";
+                    String stateId = limiter.failureStateId(id, ip);
+
+                    // Seed initial state
+                    limiter.recordFailure(id, ip);
+
+                    // Thread 1: Start transaction and hold row lock via SELECT ... FOR UPDATE
+                    TransactionStatus txStatus1 = txManager.getTransaction(new DefaultTransactionDefinition());
+                    jdbcTemplate.query(
+                            "SELECT failure_count FROM login_failure_states WHERE id = ? FOR UPDATE",
+                            (rs, rowNum) -> rs.getInt(1),
+                            stateId
+                    );
+
+                    // Thread 2: In background thread, call real Spring bean recordFailure
+                    ExecutorService executor = Executors.newSingleThreadExecutor();
+                    AtomicBoolean thread2Finished = new AtomicBoolean(false);
+                    CountDownLatch thread2Started = new CountDownLatch(1);
+
+                    Future<?> future = executor.submit(() -> {
+                        thread2Started.countDown();
+                        storeBean.recordFailure(stateId, "dummy-hash", Instant.now(), properties);
+                        thread2Finished.set(true);
+                    });
+
+                    assertThat(thread2Started.await(5, TimeUnit.SECONDS)).isTrue();
+                    // Wait a bit to ensure Thread 2 is waiting on the lock
+                    Thread.sleep(300);
+
+                    // Thread 2 must still be blocked by Thread 1's row lock
+                    assertThat(thread2Finished.get()).isFalse();
+
+                    // Thread 1 commits transaction -> releases lock
+                    txManager.commit(txStatus1);
+
+                    // Thread 2 should now finish promptly
+                    future.get(5, TimeUnit.SECONDS);
+                    assertThat(thread2Finished.get()).isTrue();
+                    executor.shutdown();
+
+                    // Verify state was updated to count 2
+                    Integer finalCount = jdbcTemplate.queryForObject(
+                            "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                            Integer.class,
+                            stateId
+                    );
+                    assertThat(finalCount).isEqualTo(2);
+                });
+    }
+
     // =========================================================================
     // 30 - 35: Concurrency and Thread Safety
     // =========================================================================
@@ -1057,6 +1293,165 @@ public class PostgresLoginRateLimiterIntegrationTest {
             f.get(20, TimeUnit.SECONDS);
         }
         executor.shutdown();
+
+        // Strong ordering assertion:
+        // Out of 30 threads, 10 executed clearFailures and 20 executed recordFailure.
+        // Under transactional serialization, the final state must be either:
+        // - Completely cleared (if clearFailures linearized last)
+        // - OR present with failure_count between 1 and 20 (if recordFailure calls linearized after the last clear)
+        String stateId = limiter.failureStateId(id, ip);
+        List<Integer> rows = jdbcTemplate.query(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                (rs, rowNum) -> rs.getInt(1),
+                stateId
+        );
+        if (rows.isEmpty()) {
+            assertThat(limiter.activeCooldown(id, ip)).isEmpty();
+        } else {
+            assertThat(rows.get(0)).isBetween(1, 20);
+        }
+    }
+
+    @Test
+    @Order(35)
+    @DisplayName("Req 35b: Missing-row race reacquires row and applies transition under concurrent clear and reinsert")
+    void test35b_missingRowRaceReacquiresAndAppliesTransitionUnderDeleteAndReinsert() throws Exception {
+        String id = "missing-row-race-" + UUID.randomUUID() + "@example.com";
+        String ip = "198.51.100.55";
+        MutableClock clock = new MutableClock(Instant.now());
+        LoginRateLimiter limiter = new LoginRateLimiter(counterStore, failureStore, properties, hasher, clock);
+        String stateId = limiter.failureStateId(id, ip);
+
+        int threads = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        List<Future<FailureResult>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threads; i++) {
+            final int index = i;
+            futures.add(executor.submit(() -> {
+                barrier.await(10, TimeUnit.SECONDS);
+                if (index == 0) {
+                    limiter.clearFailures(id, ip);
+                    return limiter.recordFailure(id, ip);
+                } else {
+                    return limiter.recordFailure(id, ip);
+                }
+            }));
+        }
+
+        for (Future<FailureResult> f : futures) {
+            FailureResult res = f.get(20, TimeUnit.SECONDS);
+            assertThat(res).isNotNull();
+        }
+        executor.shutdown();
+
+        // Must prove that a record exists and was persisted successfully
+        Integer persistedCount = jdbcTemplate.queryForObject(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                Integer.class,
+                stateId
+        );
+        assertThat(persistedCount).isNotNull().isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @Order(35)
+    @DisplayName("Req 35c: Explicit ordering policy between successful-login clear and failed-login update")
+    void test35c_explicitOrderingPolicySuccessfulLoginClearRacingWithFailedLogin() throws Exception {
+        MutableClock clock = new MutableClock(Instant.now());
+        LoginRateLimiter limiter = new LoginRateLimiter(counterStore, failureStore, properties, hasher, clock);
+
+        // --- Scenario 1: Deterministic sequencing: Failure followed by Clear ---
+        String id1 = "seq-fail-clear-" + UUID.randomUUID() + "@example.com";
+        String ip1 = "198.51.100.61";
+        String stateId1 = limiter.failureStateId(id1, ip1);
+
+        limiter.recordFailure(id1, ip1);
+        limiter.recordFailure(id1, ip1);
+        limiter.clearFailures(id1, ip1); // Successful login commits last
+
+        List<Integer> rows1 = jdbcTemplate.query(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                (rs, rowNum) -> rs.getInt(1),
+                stateId1
+        );
+        assertThat(rows1).as("Successful login after failures must leave no residual state").isEmpty();
+        assertThat(limiter.activeCooldown(id1, ip1)).isEmpty();
+
+        // --- Scenario 2: Deterministic sequencing: Clear followed by Failure ---
+        String id2 = "seq-clear-fail-" + UUID.randomUUID() + "@example.com";
+        String ip2 = "198.51.100.62";
+        String stateId2 = limiter.failureStateId(id2, ip2);
+
+        limiter.recordFailure(id2, ip2);
+        limiter.recordFailure(id2, ip2);
+        limiter.clearFailures(id2, ip2); // Clear previous failures
+        limiter.recordFailure(id2, ip2); // Fresh failure after successful login
+
+        Integer count2 = jdbcTemplate.queryForObject(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                Integer.class,
+                stateId2
+        );
+        assertThat(count2).as("Failure after successful login must start fresh at attempt #1").isEqualTo(1);
+
+        // --- Scenario 3: Concurrent race between 1 Clear and 1 Failure with pre-existing failures ---
+        // Establish 4 failures on stateId3 (threshold is 5)
+        String id3 = "race-clear-fail-" + UUID.randomUUID() + "@example.com";
+        String ip3 = "198.51.100.63";
+        String stateId3 = limiter.failureStateId(id3, ip3);
+
+        for (int i = 0; i < 4; i++) {
+            limiter.recordFailure(id3, ip3);
+        }
+        Integer initialCount3 = jdbcTemplate.queryForObject(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                Integer.class,
+                stateId3
+        );
+        assertThat(initialCount3).isEqualTo(4);
+
+        // Now race 1 clear (successful login) against 1 failure (failed login)
+        ExecutorService raceExecutor = Executors.newFixedThreadPool(2);
+        CyclicBarrier raceBarrier = new CyclicBarrier(2);
+
+        Future<?> clearFuture = raceExecutor.submit(() -> {
+            raceBarrier.await(10, TimeUnit.SECONDS);
+            limiter.clearFailures(id3, ip3);
+            return null;
+        });
+
+        Future<FailureResult> failFuture = raceExecutor.submit(() -> {
+            raceBarrier.await(10, TimeUnit.SECONDS);
+            return limiter.recordFailure(id3, ip3);
+        });
+
+        clearFuture.get(20, TimeUnit.SECONDS);
+        FailureResult failResult = failFuture.get(20, TimeUnit.SECONDS);
+        raceExecutor.shutdown();
+
+        assertThat(failResult).isNotNull();
+
+        // Explicit Ordering Policy Assertion:
+        // - If Clear commits last: state is completely deleted (no row, count 0).
+        // - If Failure commits last: pre-existing failures were deleted by Clear, so Failure started
+        //   a fresh state with count == 1.
+        // - IN NO CASE can count be 5 (pre-clear failure count must never leak across clear).
+        List<Integer> rows3 = jdbcTemplate.query(
+                "SELECT failure_count FROM login_failure_states WHERE id = ?",
+                (rs, rowNum) -> rs.getInt(1),
+                stateId3
+        );
+        if (rows3.isEmpty()) {
+            // Clear linearized last
+            assertThat(limiter.activeCooldown(id3, ip3)).isEmpty();
+        } else {
+            // Failure linearized last
+            assertThat(rows3.get(0))
+                    .as("If failure linearized after clear, it must be fresh attempt #1, never leaking prior 4 failures")
+                    .isEqualTo(1);
+        }
     }
 
     // =========================================================================
