@@ -90,7 +90,7 @@ class PostgresCartControllerIntegrationTest {
         ReflectionTestUtils.setField(jwt,"secret","pg018-isolated-jwt-fixture-secret-at-least-32-bytes");
         context = new AnnotationConfigApplicationContext();
         context.getEnvironment().setActiveProfiles("test");
-        context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("pg018", Map.of("app.cart.postgres.enabled","true")));
+        context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("pg018", Map.of("app.cart.postgres.enabled","true", "jwt.expiration","60000", "jwt.secret","pg018-isolated-jwt-fixture-secret-at-least-32-bytes")));
         context.registerBean(Clock.class, () -> clock);
         context.registerBean(JwtUtil.class, () -> jwt);
         context.register(JpaConfig.class, PostgresCartPersistenceConfiguration.class, CartController.class);

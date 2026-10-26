@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T19:07:25-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-26T19:34:18-04:00 (America/Toronto)
 
 ---
 
@@ -366,7 +366,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-016` | Phase 10 | Refactor `PasswordResetOtpChallengePersistence` and `PasswordResetService` transaction management | `COMPLETED` | 2026-10-26T06:35:00-04:00 | 2026-10-26T17:53:00-04:00 | Extracted `PasswordResetOtpChallengeStore` SPI; implemented `PostgresPasswordResetOtpChallengeStore` with atomic SQL transitions & single-transaction user update (`SELECT ... FOR UPDATE`); atomic 5th-attempt lock; cross-backend null `nextResendAt` fail-closed parity; opt-in configuration with fallback `transactionManager`; 48/48 integration tests in `PostgresPasswordResetOtpPersistenceIntegrationTest` executed against live disposable PostgreSQL; full 16-suite PostgreSQL regression passed (438/438 tests, 0 skipped); MongoDB unit & support tests passed (11/11) |
 | `PG-017` | Phase 11 | Adapt `OrderController` and `OrderAccessService` for JPA persistence and repricing | `BLOCKED` | 2026-10-26T18:30:37-04:00 | — | Implemented and PostgreSQL verified: 47 live order integration tests including required contact validation; 438 existing PostgreSQL tests; available regression 654/654, no skips. Full closeout BLOCKED by unavailable Docker for 3 Mongo container suites |
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T18:58:11-04:00 | — | Production and test sources compile; no tests executed per explicit user override; PostgreSQL cart activation remains isolated pending PG-022 |
-| `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `NOT STARTED` | — | — | KDS order and status tests |
+| `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `IN PROGRESS` | 2026-10-26T19:33:54-04:00 | — | Current baseline exposed missing JWT fixture properties in PG-018 tests; preliminary correction in progress |
 | `PG-020` | Phase 11 | Adapt `ReviewController` and `ReservationController` for JPA persistence | `NOT STARTED` | — | — | `ReviewControllerTest` pass |
 | `PG-021` | Phase 11 | Adapt `AdminCustomerSearchService` and `AdminCustomerController` for JPA queries | `NOT STARTED` | — | — | `AdminCustomerSearchServiceTest` pass |
 | `PG-022` | Phase 11 | Adapt `AuthController` user registration and authentication logic for JPA | `NOT STARTED` | — | — | `AuthControllerTest` pass |
@@ -2150,3 +2150,15 @@ Mongo expiry is strictly after seven days (null timestamp expired); JpaCart expi
 - `git diff --check` ? passed.
 
 **Verification limits:** No unit, integration, PostgreSQL, MongoDB or regression tests were executed, by explicit instruction; no test totals or passing runtime claims are asserted. PostgreSQL version/connectivity, SQL/JPA runtime mapping, lock contention, rollback, TTL boundary and startup guard behavior still require execution of the authored coverage before PG-018 can be called verified/COMPLETED. The existing PG-017 MongoDB verification blocker is unchanged. No production deployment, live infrastructure operation, MongoDB removal, frontend rewrite or PG-019+ work occurred.
+---
+
+### [2026-10-26T19:33:54-04:00] PG-019 start and current baseline
+
+Starting local/remote main HEAD: `a6a97d00245988ba2026f2d4664cdcde0dc3bf9c`; fetched origin/main and verified initially clean worktree. This directive explicitly requires runtime testing, superseding the prior PG-018-only no-test execution instruction. PG-017 remains BLOCKED and PG-018 remains IMPLEMENTED (UNVERIFIED).
+
+Current baseline command (backend): `.\mvnw.cmd test '-Dtest=*Test,!LoginRateLimiterMongoTest,!SignupOtpChallengeMongoConcurrencyTest,!PasswordResetMongoTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'`. Result: 661 tests, 3 failures, 1 error, 0 skips; BUILD FAILURE. PostgreSQL is the previously owned disposable loopback cluster, version 17.10, port 54353. Three PG-018 configuration cases and its integration suite setup failed because isolated Spring fixtures lacked jwt.expiration (field injection overrides manual JwtUtil setup). This is a test-fixture setup failure, not a demonstrated cart persistence failure. Minimal JWT fixture properties are being corrected separately before PG-019 implementation. A first wrapper invocation from the repository root failed to locate its backend-relative wrapper; subsequent commands use backend as required. Docker-dependent suites remain separately unavailable, not counted as passing.
+
+Existing KDS accepts the five statuses with unrestricted transitions, stamps lifecycle times once, clamps ready minutes, appends KDS/ Kitchen messages and uses Mongo order persistence. First NO_SHOW triggers registered-customer reconciliation only once; moving away from NO_SHOW currently leaves the Mongo cached counter unchanged. PG-019 will preserve default Mongo semantics and explicitly reconcile PostgreSQL active-status counts on entering/leaving NO_SHOW. Both paths keep the three-strike threshold. Email-first customer matching and count identity with normalized-phone lookup fallback remain unchanged. Operational REST paths use the IP interceptor, while /orders/all remains admin-JWT protected; no security layer will be removed. PostgreSQL IP reads will use store_settings, and full production activation remains blocked by real legacy review/auth/socket consumers.
+### [2026-10-26T19:34:18-04:00] PG-019 preflight correction verified
+
+Added isolated jwt.secret and jwt.expiration fixture properties to PostgresCartPersistenceConfigurationTest and PostgresCartControllerIntegrationTest; no cart production behavior changed. Command (backend): `.\mvnw.cmd test '-Dtest=PostgresCartControllerIntegrationTest,PostgresCartPersistenceConfigurationTest,CartControllerTest' '-Dtest.postgres.port=54353' '-Dtest.postgres.mandatory=true'`. Observed: 22 tests, 0 failures, 0 errors, 0 skips; BUILD SUCCESS (16 real PostgreSQL cart cases, 4 configuration cases, 2 default-Mongo unit cases). PG-018's previously unexecuted focused coverage now ran successfully, but its status remains unchanged; full current regression and the existing live-Mongo blocker are separate requirements. Preliminary fixture correction is committed separately from PG-019 implementation.

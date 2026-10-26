@@ -18,14 +18,14 @@ import static org.mockito.Mockito.*;
 /** Backend selection and fail-closed authentication activation. */
 class PostgresCartPersistenceConfigurationTest {
     private ApplicationContextRunner base() {
-        return new ApplicationContextRunner().withUserConfiguration(PostgresCartPersistenceConfiguration.class)
+        return new ApplicationContextRunner().withPropertyValues("jwt.expiration=60000", "jwt.secret=pg018-isolated-jwt-fixture-secret-at-least-32-bytes").withUserConfiguration(PostgresCartPersistenceConfiguration.class)
                 .withBean(EntityManagerFactory.class, () -> mock(EntityManagerFactory.class))
                 .withBean(JpaCartRepository.class, () -> mock(JpaCartRepository.class))
                 .withBean(JpaUserRepository.class, () -> mock(JpaUserRepository.class))
                 .withBean(Clock.class, Clock::systemUTC).withBean(JwtUtil.class, () -> mock(JwtUtil.class));
     }
     @Test void defaultRuntimeSelectsMongoWithoutPostgresInfrastructure() {
-        new ApplicationContextRunner().withUserConfiguration(PostgresCartPersistenceConfiguration.class,MongoCartStore.class,CartController.class)
+        new ApplicationContextRunner().withPropertyValues("jwt.expiration=60000", "jwt.secret=pg018-isolated-jwt-fixture-secret-at-least-32-bytes").withUserConfiguration(PostgresCartPersistenceConfiguration.class,MongoCartStore.class,CartController.class)
                 .withBean(CartRepository.class, () -> mock(CartRepository.class))
                 .withBean(UserRepository.class, () -> mock(UserRepository.class))
                 .withBean(Clock.class, Clock::systemUTC).withBean(JwtUtil.class, () -> mock(JwtUtil.class))
