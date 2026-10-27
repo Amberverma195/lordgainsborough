@@ -630,4 +630,6 @@ public class SignupOtpChallengeService {
     private String generateSixDigitOtp() {
         return String.valueOf(100000 + secureRandom.nextInt(900000));
     }
+
+    public SignupOtpChallengePersistence getPersistence() { return persistence; }
 }

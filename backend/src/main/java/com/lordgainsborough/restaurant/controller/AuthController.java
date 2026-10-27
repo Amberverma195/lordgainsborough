@@ -14,7 +14,6 @@ import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
 import com.lordgainsborough.restaurant.dto.UpdateProfileRequest;
-import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
@@ -22,6 +21,9 @@ import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.CustomerNoShowService;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
+import com.lordgainsborough.restaurant.service.MongoUserAuthStore;
+import com.lordgainsborough.restaurant.service.PostgresUserAuthStore;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
 import com.lordgainsborough.restaurant.service.LoginRateLimiter;
@@ -38,7 +40,6 @@ import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -47,11 +48,6 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -69,9 +65,7 @@ public class AuthController {
     private static final Pattern SPECIAL_CHAR_PATTERN = Pattern.compile("[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?`~]");
 
     private final EmailSenderService emailSenderService;
-    private final UserRepository userRepository;
-    private final CustomerOrderRepository orderRepository;
-    private final OrderReviewRepository reviewRepository;
+    private final UserAuthStore userAuthStore;
     private final JwtUtil jwtUtil;
     private final OtpService otpService;
     private final SignupOtpChallengeService signupOtpChallengeService;
@@ -81,10 +75,34 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final PasswordResetService passwordResetService;
     private final AuthSecurityObservability authSecurityObservability;
-    private final boolean postgresUserAuthEnabled;
     private final boolean allowIsolatedTest;
 
     @Autowired
+    public AuthController(EmailSenderService emailSenderService, UserAuthStore userAuthStore,
+            JwtUtil jwtUtil, OtpService otpService, SignupOtpChallengeService signupOtpChallengeService,
+            SignupAbuseLimiter signupAbuseLimiter, ClientIpResolver clientIpResolver,
+            SignupOtpObservability signupOtpObservability, LoginRateLimiter loginRateLimiter,
+            PasswordResetService passwordResetService, AuthSecurityObservability authSecurityObservability) {
+        this.emailSenderService = emailSenderService;
+        this.userAuthStore = userAuthStore;
+        this.jwtUtil = jwtUtil;
+        this.otpService = otpService;
+        this.signupOtpChallengeService = signupOtpChallengeService;
+        this.signupAbuseLimiter = signupAbuseLimiter;
+        this.clientIpResolver = clientIpResolver;
+        this.signupOtpObservability = signupOtpObservability;
+        this.loginRateLimiter = loginRateLimiter;
+        this.passwordResetService = passwordResetService;
+        this.authSecurityObservability = authSecurityObservability;
+        this.allowIsolatedTest = false;
+    }
+
+    public UserAuthStore getUserAuthStore() { return userAuthStore; }
+    public SignupOtpChallengeService getSignupOtpChallengeService() { return signupOtpChallengeService; }
+    public SignupAbuseLimiter getSignupAbuseLimiter() { return signupAbuseLimiter; }
+    public LoginRateLimiter getLoginRateLimiter() { return loginRateLimiter; }
+    public PasswordResetService getPasswordResetService() { return passwordResetService; }
+
     public AuthController(
             EmailSenderService emailSenderService,
             UserRepository userRepository,
@@ -102,9 +120,7 @@ public class AuthController {
             @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
             @Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
         this.emailSenderService = emailSenderService;
-        this.userRepository = userRepository;
-        this.orderRepository = orderRepository;
-        this.reviewRepository = reviewRepository;
+        this.userAuthStore = new MongoUserAuthStore(userRepository, orderRepository, reviewRepository);
         this.jwtUtil = jwtUtil;
         this.otpService = otpService;
         this.signupOtpChallengeService = signupOtpChallengeService;
@@ -114,7 +130,6 @@ public class AuthController {
         this.loginRateLimiter = loginRateLimiter;
         this.passwordResetService = passwordResetService;
         this.authSecurityObservability = authSecurityObservability;
-        this.postgresUserAuthEnabled = postgresUserAuthEnabled;
         this.allowIsolatedTest = allowIsolatedTest;
     }
 
@@ -183,19 +198,23 @@ public class AuthController {
                 false);
     }
 
-    public boolean isUsingMongoUserPersistence() {
-        return userRepository != null;
-    }
+    public boolean isUsingMongoUserPersistence() { return userAuthStore instanceof MongoUserAuthStore; }
 
-    public boolean hasPostgresUserAuthentication() {
-        // Coordinated PostgreSQL user authentication (PG-022) must supply a working
-        // PostgreSQL user persistence implementation. Until PG-022 adapts AuthController,
-        // user authentication is strictly MongoDB-backed.
-        return false;
-    }
+    public boolean hasPostgresUserAuthentication() { return userAuthStore instanceof PostgresUserAuthStore; }
 
     @PostConstruct
     public void validateAuthenticationBackendCoherence() {
+        if (isUsingMongoUserPersistence()) {
+            boolean postgresSignup = signupOtpChallengeService != null && signupOtpChallengeService.getPersistence() != null
+                    && signupOtpChallengeService.getPersistence().getStore() instanceof com.lordgainsborough.restaurant.service.PostgresSignupOtpChallengeStore;
+            boolean postgresLogin = loginRateLimiter != null
+                    && (loginRateLimiter.getCounterStore() instanceof com.lordgainsborough.restaurant.service.PostgresAbuseCounterStore
+                    || loginRateLimiter.getFailureStore() instanceof com.lordgainsborough.restaurant.service.PostgresLoginFailureStateStore);
+            boolean postgresAbuse = signupAbuseLimiter != null
+                    && signupAbuseLimiter.getStore() instanceof com.lordgainsborough.restaurant.service.PostgresAbuseCounterStore;
+            if (postgresSignup || postgresLogin || postgresAbuse)
+                throw new IllegalStateException("MongoDB authentication cannot use PostgreSQL signup/login security persistence");
+        }
         if (!allowIsolatedTest && passwordResetService != null && passwordResetService.isPostgresStore()) {
             if (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication()) {
                 throw new IllegalStateException(
@@ -251,42 +270,21 @@ public class AuthController {
                     "Unable to complete signup with the provided details."));
         }
 
-        SignupOtpChallengeService.VerifyOtpResult verifyResult =
-                signupOtpChallengeService.verifyOtp(email, request.getOtp().trim());
-        ResponseEntity<SignupOtpResponse> verifyFailure = mapVerifyFailure(verifyResult);
-        if (verifyFailure != null) {
-            return verifyFailure;
-        }
-
         User user = new User();
         user.setName(request.getName().trim());
         user.setEmail(email);
         applyPhoneToUser(user, normalizedPhone);
-        user.setPassword(PasswordUtil.hashPassword(request.getPassword()));
+        user.setMemberSince(user.getCreatedAt().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMMM yyyy");
-        user.setMemberSince(user.getCreatedAt().format(formatter));
-
-        try {
-            userRepository.save(user);
-        } catch (DuplicateKeyException ex) {
-            // OTP was already consumed (VERIFIED). Clear so it is not stranded; do not reactivate it.
-            signupOtpChallengeService.clear(email);
-            if (userRepository.findByEmailIgnoreCase(email).isPresent()) {
-                // Concurrent signup already created this account.
-                return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
-                        SignupOtpCode.OTP_INVALID,
-                        "Unable to complete signup with the provided details."));
-            }
-            // Duplicate on another unique field (e.g. phone) — allow a clean restart.
+        UserAuthStore.Registration registration = userAuthStore.register(user, request.getPassword(), request.getOtp().trim(), signupOtpChallengeService);
+        ResponseEntity<SignupOtpResponse> verifyFailure = mapVerifyFailure(registration.verification());
+        if (verifyFailure != null) return verifyFailure;
+        if (registration.conflict()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
-                    SignupOtpCode.OTP_INVALID,
-                    "Unable to complete signup with the provided details."));
+                    SignupOtpCode.OTP_INVALID, "Unable to complete signup with the provided details."));
         }
-
+        user = registration.user();
         String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
-        signupOtpChallengeService.clear(email);
-
         return ResponseEntity.status(HttpStatus.CREATED).body(createAuthResponse(user, token));
     }
 
@@ -314,7 +312,7 @@ public class AuthController {
 
         if (loginWithEmail) {
             normalizedIdentifier = normalizeEmail(identifier);
-            userOpt = userRepository.findByEmailIgnoreCase(normalizedIdentifier);
+            userOpt = userAuthStore.findByEmailIgnoreCase(normalizedIdentifier);
         } else {
             String normalizedPhone = normalizePhone(identifier);
             if (normalizedPhone.length() != 10) {
@@ -360,6 +358,17 @@ public class AuthController {
                     AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
         }
 
+        Optional<User> current = userAuthStore.confirmLogin(user);
+        if (current.isEmpty()) {
+            return invalidLoginCredentials(normalizedIdentifier, clientIp, request.getPassword(), userOpt, now);
+        }
+        user = current.get();
+        // PostgreSQL confirmation may have waited behind a password reset or profile update.
+        if (userAuthStore instanceof PostgresUserAuthStore) {
+            cooldown = loginRateLimiter.activeCooldown(normalizedIdentifier, clientIp);
+            if (cooldown.isPresent()) return loginRateLimited(cooldown.getAsLong(), now,
+                    AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
+        }
         loginRateLimiter.clearFailures(normalizedIdentifier, clientIp);
         String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         authSecurityObservability.record(
@@ -387,12 +396,8 @@ public class AuthController {
                     Instant.now()));
         }
 
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email);
-        PasswordResetService.Result result = passwordResetService.requestInitial(
-                email,
-                userOpt,
-                resolveClientIp(httpRequest),
-                idempotencyKey);
+        PasswordResetService.Result result = userAuthStore.requestPasswordReset(
+                passwordResetService, email, resolveClientIp(httpRequest), idempotencyKey);
         return passwordResetResponse(result);
     }
 
@@ -514,9 +519,7 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Expired or invalid token.");
         }
 
-        String email = jwtUtil.getEmailFromToken(token);
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email)
-                .filter(user -> jwtUtil.validateTokenForUser(token, user));
+        Optional<User> userOpt = userAuthStore.authenticate(token, jwtUtil);
 
         if (userOpt.isEmpty()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("User not found.");
@@ -532,28 +535,9 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
         }
 
-        User user = userOpt.get();
-        Map<String, CustomerOrder> byId = new LinkedHashMap<>();
-
-        orderRepository.findByCustomerEmailIgnoreCaseOrderByCreatedAtDesc(user.getEmail())
-                .forEach(order -> byId.putIfAbsent(order.getId(), order));
-
-        String normalizedPhone = user.getPhoneNormalized();
-        if (normalizedPhone == null || normalizedPhone.isBlank()) {
-            normalizedPhone = normalizePhone(user.getPhone());
-        }
-        if (normalizedPhone.length() == 10 && user.getPhone() != null && !user.getPhone().isBlank()) {
-            for (CustomerOrder order : orderRepository.findByCustomerPhoneOrderByCreatedAtDesc(user.getPhone())) {
-                if (normalizedPhone.equals(normalizePhone(order.getCustomerPhone()))) {
-                    byId.putIfAbsent(order.getId(), order);
-                }
-            }
-        }
-
-        List<CustomerOrder> orders = new ArrayList<>(byId.values());
-        orders.forEach(this::applyReviewState);
-        orders.sort(Comparator.comparing(CustomerOrder::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())).reversed());
-        return ResponseEntity.ok(orders);
+        var history = userAuthStore.history(userOpt.get(), authHeader.substring(7), jwtUtil);
+        if (history.isEmpty()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
+        return ResponseEntity.ok(history.get());
     }
 
     @PostMapping("/profile/send-verification")
@@ -590,7 +574,7 @@ public class AuthController {
             return ResponseEntity.ok(response);
         }
 
-        if (emailChanged && userRepository.existsByEmailIgnoreCase(request.getEmail().trim())) {
+        if (emailChanged && userAuthStore.existsByEmailIgnoreCase(request.getEmail().trim())) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body("An account with this email already exists.");
         }
 
@@ -641,8 +625,9 @@ public class AuthController {
             return ResponseEntity.badRequest().body("Name is required.");
         }
 
-        user.setName(request.getName().trim());
-        userRepository.save(user);
+        var updated = userAuthStore.updateName(user, authHeader.substring(7), request.getName().trim(), jwtUtil);
+        if (updated.isEmpty()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
+        user = updated.get();
 
         String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         return ResponseEntity.ok(createAuthResponse(user, token));
@@ -922,13 +907,7 @@ public class AuthController {
             return Optional.empty();
         }
 
-        String email = jwtUtil.getEmailFromToken(token);
-        return userRepository.findByEmailIgnoreCase(email)
-                .filter(user -> jwtUtil.validateTokenForUser(token, user));
-    }
-
-    private void applyReviewState(CustomerOrder order) {
-        order.setReviewed(order.isReviewed() || reviewRepository.existsByOrderId(order.getId()));
+        return userAuthStore.authenticate(token, jwtUtil);
     }
 
     private boolean canUpdateProfile(User user) {
@@ -958,21 +937,7 @@ public class AuthController {
         return identifier != null && identifier.contains("@");
     }
 
-    private Optional<User> findUserByPhone(String normalizedPhoneDigits) {
-        if (normalizedPhoneDigits == null || normalizedPhoneDigits.length() != 10) {
-            return Optional.empty();
-        }
-
-        List<User> byNormalized = userRepository.findByPhoneNormalized(normalizedPhoneDigits);
-        if (!byNormalized.isEmpty()) {
-            return Optional.of(byNormalized.get(0));
-        }
-
-        return userRepository.findByPhoneIsNotNull().stream()
-                .filter(user -> user.getPhone() != null && !user.getPhone().isBlank())
-                .filter(user -> normalizedPhoneDigits.equals(normalizePhone(user.getPhone())))
-                .findFirst();
-    }
+    private Optional<User> findUserByPhone(String digits) { return userAuthStore.findByPhone(digits); }
 
     private String normalizeEmail(String email) {
         if (email == null) {
@@ -1039,7 +1004,7 @@ public class AuthController {
     }
 
     private boolean findSignupConflict(String email, String normalizedPhoneDigits) {
-        if (email != null && !email.isBlank() && userRepository.existsByEmailIgnoreCase(email.trim())) {
+        if (email != null && !email.isBlank() && userAuthStore.existsByEmailIgnoreCase(email.trim())) {
             return true;
         }
 
@@ -1052,25 +1017,8 @@ public class AuthController {
         return phoneAlreadyRegisteredByAnotherUser(normalizedPhoneDigits, null);
     }
 
-    private boolean phoneAlreadyRegisteredByAnotherUser(String normalizedPhoneDigits, String currentUserId) {
-        if (normalizedPhoneDigits == null || normalizedPhoneDigits.length() != 10) {
-            return false;
-        }
-
-        boolean normalizedMatch = userRepository.findByPhoneNormalized(normalizedPhoneDigits).stream()
-                .anyMatch(user -> isDifferentUser(user, currentUserId));
-        if (normalizedMatch) {
-            return true;
-        }
-
-        return userRepository.findByPhoneIsNotNull().stream()
-                .filter(user -> user.getPhone() != null && !user.getPhone().isBlank())
-                .filter(user -> isDifferentUser(user, currentUserId))
-                .anyMatch(user -> normalizedPhoneDigits.equals(normalizePhone(user.getPhone())));
-    }
-
-    private boolean isDifferentUser(User user, String currentUserId) {
-        return currentUserId == null || user.getId() == null || !user.getId().equals(currentUserId);
+    private boolean phoneAlreadyRegisteredByAnotherUser(String digits, String currentId) {
+        return userAuthStore.phoneRegisteredByAnotherUser(digits, currentId);
     }
 
     private void applyPhoneToUser(User user, String normalizedPhoneDigits) {

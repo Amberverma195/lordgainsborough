@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T20:40:59-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-26T20:58:59-04:00 (America/Toronto)
 
 ---
 
@@ -368,8 +368,8 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-018` | Phase 11 | Adapt `CartController` for relational cart item persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T18:58:11-04:00 | — | Focused runtime coverage now passed 22 cases during PG-019, including 16 live PostgreSQL cart cases; included in 717-case available regression; live Mongo verification remains unavailable; activation isolated pending PG-022 |
 | `PG-019` | Phase 11 | Adapt `KdsController` and `CustomerNoShowService` for JPA persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T19:33:54-04:00 | — | 26 live PostgreSQL KDS cases and 717 available regression tests passed; required live Mongo suites blocked by unavailable Docker; production activation remains guarded |
 | `PG-020` | Phase 11 | Adapt `ReviewController` and `ReservationController` for JPA persistence | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T20:02:06-04:00 | — | 26 live review + 29 live reservation cases; 17 configuration cases; available regression 798/798, zero skips; live Mongo verification blocked by unavailable Docker |
-| `PG-021` | Phase 11 | Adapt `AdminCustomerSearchService` and `AdminCustomerController` for JPA queries | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T20:37:10-04:00 | — | Production compile succeeded; no tests authored, modified or executed by explicit instruction; isolated adapter only, HTTP activation blocked pending PG-022 |
-| `PG-022` | Phase 11 | Adapt `AuthController` user registration and authentication logic for JPA | `NOT STARTED` | — | — | `AuthControllerTest` pass |
+| `PG-021` | Phase 11 | Adapt `AdminCustomerSearchService` and `AdminCustomerController` for JPA queries | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T20:37:10-04:00 | — | Production compile succeeded; zero tests; PG-022 actual identity/interceptor integration implemented, runtime verification and Socket.IO rollout deferred |
+| `PG-022` | Phase 11 | Adapt `AuthController` user registration and authentication logic for JPA | `IMPLEMENTED (UNVERIFIED)` | 2026-10-26T20:46:09-04:00 | — | Production compile succeeded; zero tests written/modified/executed; genuine PostgreSQL identities/security coordination authored; live Socket.IO still blocks cutover pending PG-023 |
 | `PG-023` | Phase 12 | Verify `SocketIoConfig` and `OrderRealtimeService` realtime events with PostgreSQL orders | `NOT STARTED` | — | — | Socket.IO room and event verification |
 | `PG-024` | Phase 13 | Migrate integration test suites to PostgreSQL Testcontainers | `NOT STARTED` | — | — | `mvn clean test` with testcontainers |
 | `PG-025` | Phase 14 | Validate live Supabase PostgreSQL connection and Flyway migration execution | `NOT STARTED` | — | — | Actuator health endpoint `UP` |
@@ -2295,3 +2295,78 @@ Fetched origin/main. Local main and remote HEAD both match reviewed baseline 70d
 Tests written: 0. Tests modified: 0. Tests executed: 0. Runtime verification deferred by explicit user instruction.
 
 **Remaining work:** All PG-021 behavioral, query, lazy-loading, JSON, selection and security runtime verification is deferred. PG-022 must migrate real user authentication and administrator role enforcement before replacing the explicit HTTP isolation guard; PG-023 and subsequent coordinated rollout/testing phases remain separate. No fake auth-ready flag enables access. Earlier PG-017 BLOCKED and PG-018/PG-019/PG-020 IMPLEMENTED (UNVERIFIED) statuses and all historical entries are preserved. Commit/push this code-only batch to main, verify remote HEAD and stop; the final pushed SHA is reported in the handoff.
+
+
+### [2026-10-26T20:46:09-04:00] PG-022 start: preserve previously pushed PG-021 and defer all tests
+
+Actual local/remote main HEAD at preflight: 42e2f22f0174474c790859c3fde68bff2a4cfcc1, with clean working tree. Fetch confirmed it is the sole commit after the directive's older 70dda6f8bf647c0aba297561c135c87b37d9dab6 baseline. PG-021 had already been committed AND pushed under the preceding directive before this combined-batch instruction arrived. Preserve it unchanged in history, implement PG-022 on top, and push the resulting main containing both phases; do not reset, revert, force-push or rewrite the published PG-021 commit. The final Git operation cannot truthfully be described as one first-time push of two unpublished phases. Reviewed the authoritative roadmap/journal and PG-017 through PG-021 implementation patterns, complete authentication controller paths, relevant historical tests read-only, identity/security repositories and entities, password/JWT/role helpers, OTP/reset/abuse/login stores, order/cart/review consumers and activation configurations. No tests or runtime/application/database verification are authorized.
+
+### [2026-10-26T20:58:59-04:00] PG-021/PG-022 code-only integration implemented; final verification deferred
+
+**Task status:** PG-021 and PG-022 are both IMPLEMENTED (UNVERIFIED); Completed At remains unset for each. PG-017 remains BLOCKED, PG-018/PG-019/PG-020 retain IMPLEMENTED (UNVERIFIED), and all earlier chronological entries are preserved. PG-023 and later implementation have not started.
+
+**Selected identity architecture and Mongo compatibility:** UserAuthStore now owns user lookup, registration coordination, profile-name writes, account history and reset initiation. MongoUserAuthStore preserves legacy email and normalized/raw-phone lookup, generic signup conflict responses, BCrypt, current profile-name-only behavior, review enrichment and historical order sorting. AuthController retains its existing Mongo constructors, including legacy flags, while Spring explicitly injects the selected store through the new constructor. Legacy flags cannot manufacture PostgreSQL identity readiness; isUsingMongoUserPersistence/hasPostgresUserAuthentication inspect the actual store. Mongo remains the default component. app.security.postgres-user-auth.enabled defaults false and requires test/postgres-migration profile for PostgreSQL selection. No copying/backfilling of users, dual writes, frontend changes, JWT-format/key changes, role promotion, dependency changes or schema changes were made.
+
+**PostgreSQL signup and OTP consistency:** PostgresUserAuthStore uses JpaUserRepository/the existing users table and constructs server-owned JpaUser values: UUID, MEMBER role, canonical phone/email, creation timestamp/memberSince, BCrypt hash, tokenVersion zero and noShowCount zero. Client identity/security metadata is ignored. Password hashing is outside the PostgreSQL transaction; no email-provider call occurs in it. The existing SignupOtpChallengeService verification protocol and PostgreSQL conditional transitions join the exact same actual JpaTransactionManager/DataSource as the bound user INSERT. Incorrect-code outcomes return normally so attempt/lock counters commit. Correct verification, user insertion and successful challenge deletion commit together. INSERT ON CONFLICT DO NOTHING avoids poisoning the transaction on recognized uniqueness contention; zero inserts become the generic conflict only when the actual email or normalized-phone conflict is confirmed. A losing uniqueness submission leaves its challenge VERIFIED, never manually ACTIVE. Unexpected SQL/check/connection/identity-key errors propagate, rolling back the whole transaction; no partial user/OTP commit or explicit challenge reactivation is performed. Transaction enlistment, rollback and contention remain unverified until final testing. PostgreSQL-only validation rejects blank/oversized/NUL/malformed-surrogate values before persistence with HTTP 400; this is a documented database-safety correction. Existing accepted signup payload/status/DTO contracts remain.
+
+**Login, JWTs and current identity:** Email lookup remains case-insensitive. PostgreSQL phone lookup uses indexed normalized-phone equality and fails closed if the schema's uniqueness invariant is violated; it never scans all non-null phones. No historical PostgreSQL import/backfill is assumed. Existing normalization and canonical formatting remain; Mongo retains its legacy raw-phone fallback. Existing BCrypt checks, dummy checks for unknown users, abuse limits, identifier/IP cooldowns, logging/observability, generic errors, Retry-After and success JSON remain. After BCrypt, PostgreSQL confirmation locks and rereads the user, comparing password hash, email and tokenVersion with the checked snapshot; a concurrent reset causes generic authentication failure. Cooldown is rechecked after any confirmation lock wait. JWTs use persisted ID/email/current tokenVersion. Authentication resolves only the selected backend and validates signature, expiry, persistent ID and token version. No Mongo fallback exists for PostgreSQL order authorization. Reset/revocation or role changes after an authorization read follow normal in-flight request semantics; a subsequently revoked JWT fails the next validation. No claim of cross-request serializability or runtime race verification is made.
+
+**Account/profile/history:** /me returns the unchanged AuthResponse, including the PostgreSQL user's stored noShowCount and threshold-three pickupDisabled. Profile verification retains current cooldown helpers, email/phone conflict checks, OTP dispatch and existing email delivery; OtpService's existing process-local profile OTP cache remains unchanged, not migrated into Mongo/PostgreSQL. PUT /profile continues to change only name and reissue a JWT: it does not implement email/phone mutations, a new cooldown, or profile OTP consumption. PostgreSQL locks/revalidates the current user and issues a targeted name-column update, avoiding detached merges and preserving concurrent role/password/tokenVersion/noShowCount/reset metadata. No uniqueness write race is introduced because email/phone are unchanged. Account history revalidates the JWT against a fresh PostgreSQL user read, then uses the existing case-insensitive email and exact raw-phone-plus-normalized-equality fallback. Guest orders remain discoverable by established contact ownership. There is no broad phone substring attachment, new account FK or truncation. Order IDs are deduplicated and sorted descending with the legacy null-first-after-reversal behavior. Shared PostgresCustomerHistoryReader retains PG-021 contact/child queries, separate batches of 128 IDs for items/messages, complete mapping inside the read transaction and explicit tracking-hash clearing. Review existence is enriched in PostgreSQL batches, without per-order Mongo queries or read mutations.
+
+**PG-016 reset integration:** Reset initiation invokes requestInitialForJpaUser using the actual PostgreSQL record; its short identity read transaction finishes before email delivery. Resend/complete retain the existing service/DTO/idempotency/public-handle/rate-limit/expiry/lock/complexity flow. PG-016 continues to own the atomic password-hash update, tokenVersion increment and consumed challenge in one PostgreSQL transaction; no replacement reset algorithm or Mongo transaction path was introduced. Store operations and startup inspect the actual challenge implementations, transaction manager and DataSource. Existing reset activation introspection now recognizes the genuinely injected PostgresUserAuthStore. A live Mongo AuthController rejects selected PostgreSQL signup/login/abuse persistence rather than silently splitting backend security state.
+
+**Administrator access, PG-021 integration and startup safety:** AdminAuthInterceptor now authenticates through the selected UserAuthStore, reads the current persisted role/version and applies unchanged RoleAccess rules. Protected denial remains HTTP 404; OPTIONS, public reservation POST and operational KDS IP gating remain unchanged. The original Mongo constructor remains available. PG-021's blanket pre-PG-022 HTTP block is replaced with structural actual-store checks, repository and EntityManagerFactory identity checks, and verification that WebConfig registers the actual interceptor backed by the selected PostgreSQL identities. The same registration requirement now applies when PostgreSQL review/reservation/KDS controllers expose protected administrator routes; isolated HTTP fixtures must supply genuine coherent authorization. No readiness/isolation/ADMIN flag bypass exists. Cart/order/review/reservation guards recognize actual PostgreSQL AuthController/AdminAuthInterceptor injection and matching persistence units; shared repository identities are checked for checkout, cart and search. PostgreSQL order and review JWT ownership uses selected PostgreSQL ID/version/email/phone semantics, while guest SHA-256 tracking tokens and indistinguishable 404 remain. Original guest-only access overloads remain compatible. The PostgreSQL auth configuration verifies actual signup/reset/abuse/login stores, their injected service references and shared transaction/DataSource, plus JpaContext and consumer persistence-unit identity. Crucially, both existing order guards and the new auth preflight still reject actual live SocketIoConfig before server singleton startup, because its Mongo order handshake remains PG-023 work. Full production activation is still unavailable; all new feature flags remain disabled by default.
+
+**Source-only verification:** From backend, .\mvnw.cmd compile '-Dmaven.test.skip=true' succeeded after each source-review iteration. Final invocation: BUILD SUCCESS, 197 production sources, release target 21, 3.330 seconds, finished 2026-10-26T20:57:53-04:00. Existing native-access/deprecation warnings remain. No test compilation/execution, Spring context startup, database access, Flyway execution, Docker/Testcontainers, HTTP/browser request or production/deployment operation ran. Static review checked constructors, repository naming/JPQL/bound SQL, nullable values, result DTOs, source-only sensitive-field paths, actual injected dependencies, resource/transaction identities and no-show/profile concurrency structure. git diff --check passed before this journal update and will be repeated staged; final review includes both phases against 70dda6f8bf647c0aba297561c135c87b37d9dab6. Source and runtime assumptions, especially transaction enlistment/rollback, concurrent signup/reset/profile/revocation, full SQL mapping, HTTP concealment/registration and Mongo regression compatibility, remain unverified.
+
+The user explicitly directed a code-only implementation batch. No tests were written, modified or executed for PG-021 or PG-022. Runtime and security verification are deferred to the final migration testing phase.
+
+**Files preserved from the PG-021 commit** (A = created, M = modified in that phase):
+
+- A `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresAdminCustomerSearchPersistenceConfiguration.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/persistence/jpa/repository/JpaCustomerOrderRepository.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/persistence/jpa/repository/JpaUserRepository.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/AdminCustomerSearchService.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/AdminCustomerSearchStore.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/MongoAdminCustomerSearchStore.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresAdminCustomerSearchStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresCustomerOrderStore.java`
+- M `backend/src/main/resources/application.properties`
+- M `docs/POSTGRESQL_MIGRATION.md`
+
+**PG-022 file manifest** (A = created, M = modified relative to preserved PG-021 HEAD):
+
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresAdminCustomerSearchPersistenceConfiguration.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresCartPersistenceConfiguration.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresIdentityCoherence.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresOrderPersistenceConfiguration.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresReservationPersistenceConfiguration.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresReviewPersistenceConfiguration.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/config/PostgresUserAuthPersistenceConfiguration.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/config/WebConfig.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/controller/AuthController.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/controller/CartController.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/controller/OrderController.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/persistence/jpa/repository/JpaOrderReviewRepository.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/persistence/jpa/repository/JpaUserRepository.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/security/AdminAuthInterceptor.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/LoginRateLimiter.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/MongoUserAuthStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/OrderAccessService.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetAbuseLimiter.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PasswordResetService.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresAbuseCounterStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresAdminCustomerSearchStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresCartStore.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresCustomerHistoryReader.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresLoginFailureStateStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresReservationStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresReviewStore.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/PostgresUserAuthStore.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/SignupAbuseLimiter.java`
+- M `backend/src/main/java/com/lordgainsborough/restaurant/service/SignupOtpChallengeService.java`
+- A `backend/src/main/java/com/lordgainsborough/restaurant/service/UserAuthStore.java`
+- M `backend/src/main/resources/application.properties`
+- M `docs/POSTGRESQL_MIGRATION.md`
+
+**Git handoff and deferred scope:** Preserve published PG-021 commit 42e2f22f0174474c790859c3fde68bff2a4cfcc1; commit PG-022 on top, push main containing both implementations and verify the remote SHA in the final handoff. No forced or historical rewrite is authorized or needed. No tests are fabricated as passing. PG-023 Socket.IO authentication and all subsequent migration testing/live rollout/removal tasks remain separately authorized future work. Stop after this push.

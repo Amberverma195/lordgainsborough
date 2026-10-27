@@ -36,6 +36,16 @@ public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
     List<AdminSearchUser> findAdminByPhoneNormalizedContainingOrderByIdAsc(
             String phone, org.springframework.data.domain.Pageable limit);
 
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select u from JpaUser u where u.id = :id")
+    Optional<JpaUser> findForAuthById(@org.springframework.data.repository.query.Param("id") String id);
+
+    /** Profile-only update: security state and no-show counters cannot be merged from a stale snapshot. */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("update JpaUser u set u.name = :name where u.id = :id")
+    int updateProfileName(@org.springframework.data.repository.query.Param("id") String id,
+            @org.springframework.data.repository.query.Param("name") String name);
+
     /** Counter-only write: never rewrite password, role, token version or profile columns. */
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.data.jpa.repository.Query("update JpaUser u set u.noShowCount = :count where u.id = :id")

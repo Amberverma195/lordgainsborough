@@ -827,4 +827,7 @@ public class PasswordResetService {
                 AuthSecurityObservability.Outcome.DENIED,
                 AuthSecurityObservability.Reason.RESET_SEND_DENIED);
     }
+
+    public PasswordResetOtpChallengePersistence getPersistence() { return persistence; }
+    public PasswordResetAbuseLimiter getAbuseLimiter() { return abuseLimiter; }
 }

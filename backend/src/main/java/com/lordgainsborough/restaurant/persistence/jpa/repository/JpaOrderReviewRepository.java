@@ -28,6 +28,9 @@ import java.util.List;
  */
 @Repository
 public interface JpaOrderReviewRepository extends JpaRepository<JpaOrderReview, String> {
+    @Query("select r.order.id from JpaOrderReview r where r.order.id in :ids")
+    List<String> findReviewedOrderIds(@Param("ids") List<String> ids);
+
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths={"items"})
     @Query("select r from JpaOrderReview r order by r.createdAt desc, r.id asc")
     List<JpaOrderReview> findAllWithItems();

@@ -24,14 +24,14 @@ public class PostgresReviewPersistenceConfiguration {
         return factory -> {
             if (factory.getBeanNamesForType(PostgresCustomerOrderStore.class,true,false).length==0)
                 throw new IllegalStateException("Unsupported mixed-backend review activation: PostgreSQL checkout required");
-            // AdminAuthInterceptor still resolves MongoDB users. PG-022 must replace actual role authorization.
-            if (factory.getBeanNamesForType(AdminAuthInterceptor.class,true,false).length>0)
-                throw new IllegalStateException("Unsupported mixed-backend review activation: MongoDB administrator identities remain deferred to PG-022");
+            PostgresIdentityCoherence.preflight(factory, AdminAuthInterceptor.class, AuthController.class);
         };
     }
     @Bean SmartInitializingSingleton validateReviewSelection(ApplicationContext context) {
         return () -> {
             var selected=context.getBean(CustomerOrderStore.class);
+            PostgresIdentityCoherence.requireIfPresent(context, context.getBean(PostgresReviewStore.class).getEntityManagerFactory());
+            PostgresIdentityCoherence.requireAdministratorHttp(context, context.getBean(PostgresReviewStore.class).getEntityManagerFactory());
             for (ReviewController controller:context.getBeansOfType(ReviewController.class).values()) {
                 if (!(controller.getReviewStore() instanceof PostgresReviewStore review) || review.getOrderStore()!=selected)
                     throw new IllegalStateException("Unsupported mixed-backend review activation: actual injected review/order stores differ");

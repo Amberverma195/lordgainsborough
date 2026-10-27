@@ -5,6 +5,7 @@ import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -20,13 +21,19 @@ public class OrderAccessService {
     private static final int TRACKING_TOKEN_BYTES = 32;
 
     private final JwtUtil jwtUtil;
-    private final UserRepository userRepository;
+    private final UserAuthStore identityStore;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public OrderAccessService(JwtUtil jwtUtil, UserRepository userRepository) {
         this.jwtUtil = jwtUtil;
-        this.userRepository = userRepository;
+        this.identityStore = new MongoUserAuthStore(userRepository, null, null);
     }
+
+    @Autowired
+    public OrderAccessService(JwtUtil jwtUtil, UserAuthStore identityStore) {
+        this.jwtUtil = jwtUtil; this.identityStore = identityStore;
+    }
+    public UserAuthStore getIdentityStore() { return identityStore; }
 
     public String generateTrackingToken() {
         byte[] token = new byte[TRACKING_TOKEN_BYTES];
@@ -56,9 +63,16 @@ public class OrderAccessService {
                 .isPresent();
     }
 
-    /** PostgreSQL identity authentication is deferred to PG-022. Never resolve a Mongo identity here. */
+    /** Legacy signature remains guest-token-only. */
     public boolean canAccessPostgresOrder(CustomerOrder order, String trackingToken) {
         return hasValidTrackingToken(order, trackingToken);
+    }
+
+    /** PostgreSQL JWT ownership never falls back to a MongoDB identity. */
+    public boolean canAccessPostgresOrder(CustomerOrder order, String authorization, String trackingToken) {
+        if (hasValidTrackingToken(order, trackingToken)) return true;
+        return identityStore instanceof PostgresUserAuthStore
+                && getAuthenticatedUser(authorization).filter(user -> ownsOrder(user, order)).isPresent();
     }
 
     public boolean canAccessWithJwtToken(CustomerOrder order, String jwtToken, String trackingToken) {
@@ -97,8 +111,7 @@ public class OrderAccessService {
         if (token == null || token.isBlank() || !jwtUtil.validateToken(token)) {
             return Optional.empty();
         }
-        return userRepository.findByEmailIgnoreCase(jwtUtil.getEmailFromToken(token))
-                .filter(user -> jwtUtil.validateTokenForUser(token, user));
+        return identityStore.authenticate(token, jwtUtil);
     }
 
     private boolean ownsOrder(User user, CustomerOrder order) {

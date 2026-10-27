@@ -30,12 +30,13 @@ public class PostgresReviewStore implements ReviewStore {
     }
     public EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }
     public PostgresCustomerOrderStore getOrderStore() { return checkout; }
+    public OrderAccessService getOrderAccessService() { return access; }
     public boolean usesPostgres() { return true; }
     public Creation create(String id, String authorization, String token, OrderReview request, Consumer<CustomerOrder> committed) {
         return transactions.execute(tx -> orders.findForMessageAppend(id).map(order -> {
             var domain=orderMapper.fromJpa(order);
-            // PostgreSQL owner JWTs remain deferred: this never resolves an identity in MongoDB.
-            if (!access.canAccessPostgresOrder(domain,token)) return new Creation(404,null);
+            // The access service resolves only the selected PostgreSQL identity, or the guest tracking token.
+            if (!access.canAccessPostgresOrder(domain,authorization,token)) return new Creation(404,null);
             if (order.isReviewed() || reviews.existsByOrderId(id)) return new Creation(409,null);
             if (request != null && request.getItems() != null) for (var item : request.getItems()) {
                 if (item != null) PostgresInput.text(item.getDescription(),Integer.MAX_VALUE,false);

@@ -17,7 +17,7 @@ import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.JpaContext;
 import org.springframework.orm.jpa.JpaTransactionManager;
 
-/** PG-021 is available only to isolated migration contexts until real PG-022 authorization exists. */
+/** PG-021 uses structural PG-022 administrator checks; live Socket.IO remains independently guarded. */
 @Configuration(proxyBeanMethods = false)
 @Profile({"postgres-migration", "test"})
 @ConditionalOnProperty(name = "app.admin.customer-search.postgres.enabled", havingValue = "true")
@@ -32,11 +32,8 @@ public class PostgresAdminCustomerSearchPersistenceConfiguration {
     @Bean
     static BeanFactoryPostProcessor requireIsolatedAdminSearch() {
         return factory -> {
-            if (factory.getBeanNamesForType(AdminAuthInterceptor.class, true, false).length > 0)
-                throw new IllegalStateException("PostgreSQL admin search rejected: actual MongoDB AdminAuthInterceptor remains; PG-022 required");
-            if (factory.getBeanNamesForType(AdminCustomerController.class, true, false).length > 0)
-                // No public HTTP surface without real PostgreSQL admin authorization. There is no flag bypass.
-                throw new IllegalStateException("PostgreSQL admin search is isolated only: HTTP activation awaits PG-022 administrator authorization");
+            PostgresIdentityCoherence.preflight(factory, AdminAuthInterceptor.class, AdminCustomerController.class,
+                    com.lordgainsborough.restaurant.controller.AuthController.class);
             if (factory.getBeanNamesForType(PostgresCustomerOrderStore.class, true, false).length == 0)
                 throw new IllegalStateException("PostgreSQL admin search requires actual PostgreSQL checkout/user persistence");
         };
@@ -50,6 +47,13 @@ public class PostgresAdminCustomerSearchPersistenceConfiguration {
             if (!(context.getBean(CustomerOrderStore.class) instanceof PostgresCustomerOrderStore checkout))
                 throw incoherent();
             EntityManagerFactory emf = search.getEntityManagerFactory();
+            PostgresIdentityCoherence.requireIfPresent(context, emf);
+            PostgresIdentityCoherence.requireAdministratorHttp(context, emf);
+            if (!context.getBeansOfType(PostgresUserAuthStore.class).isEmpty()) {
+                var identity = PostgresIdentityCoherence.require(context, emf);
+                if (identity.getUserRepository() != search.getUserRepository()
+                        || identity.getOrderRepository() != search.getOrderRepository()) throw incoherent();
+            }
             if (checkout.getEntityManagerFactory() != emf
                     || checkout.getUserRepository() != search.getUserRepository()
                     || checkout.getOrderRepository() != search.getOrderRepository()

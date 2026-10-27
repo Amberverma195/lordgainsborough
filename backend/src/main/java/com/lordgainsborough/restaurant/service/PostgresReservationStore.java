@@ -11,10 +11,12 @@ public class PostgresReservationStore implements ReservationStore {
     private final TransactionTemplate transactions;
     private final ReservationMapper mapper=new ReservationMapper();
     private final Clock clock;
+    private final JpaTransactionManager manager;
     public PostgresReservationStore(JpaReservationRepository repository,JpaTransactionManager manager,Clock clock) {
-        this.repository=repository; this.clock=clock.withZone(ZoneId.systemDefault());
+        this.manager=manager; this.repository=repository; this.clock=clock.withZone(ZoneId.systemDefault());
         transactions=new TransactionTemplate(manager); transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
+    public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }
     public List<Reservation> all() { return transactions.execute(tx -> repository.findAllByOrderByCreatedAtDescIdAsc().stream().map(mapper::fromJpa).toList()); }
     public Reservation create(Reservation request) {
         var entity=mapper.toJpa(request); entity.setCreatedAt(LocalDateTime.now(clock).truncatedTo(java.time.temporal.ChronoUnit.MICROS));

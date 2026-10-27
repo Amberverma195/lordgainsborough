@@ -303,4 +303,6 @@ public class PostgresLoginFailureStateStore implements LoginFailureStateStore {
             Instant updatedAt,
             Instant expiresAt
     ) {}
+
+    public DataSource getDataSource() { return jdbcTemplate.getDataSource(); }
 }

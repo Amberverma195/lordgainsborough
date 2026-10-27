@@ -30,6 +30,8 @@ public class CartController {
         this(new MongoCartStore(carts, users, jwt, Clock.systemUTC()));
     }
 
+    public CartStore getCartStore() { return carts; }
+
     @GetMapping
     public ResponseEntity<?> getCart(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         return cartResponse(carts.read(bearerToken(authHeader)));

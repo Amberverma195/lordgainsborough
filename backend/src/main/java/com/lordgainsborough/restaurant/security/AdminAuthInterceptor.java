@@ -2,6 +2,9 @@ package com.lordgainsborough.restaurant.security;
 
 import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.service.KdsAccessService;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
+import com.lordgainsborough.restaurant.service.MongoUserAuthStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
@@ -14,14 +17,21 @@ import java.util.function.Predicate;
 public class AdminAuthInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
-    private final UserRepository userRepository;
+    private final UserAuthStore identityStore;
     private final KdsAccessService kdsAccessService;
 
     public AdminAuthInterceptor(JwtUtil jwtUtil, UserRepository userRepository, KdsAccessService kdsAccessService) {
         this.jwtUtil = jwtUtil;
-        this.userRepository = userRepository;
+        this.identityStore = new MongoUserAuthStore(userRepository, null, null);
         this.kdsAccessService = kdsAccessService;
     }
+
+    @Autowired
+    public AdminAuthInterceptor(JwtUtil jwtUtil, UserAuthStore identityStore, KdsAccessService kdsAccessService) {
+        this.jwtUtil = jwtUtil; this.identityStore = identityStore; this.kdsAccessService = kdsAccessService;
+    }
+
+    public UserAuthStore getIdentityStore() { return identityStore; }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -58,10 +68,8 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        String email = jwtUtil.getEmailFromToken(token);
         Predicate<String> allowedRoles = roleCheck.get();
-        return userRepository.findByEmailIgnoreCase(email)
-                .filter(user -> jwtUtil.validateTokenForUser(token, user))
+        return identityStore.authenticate(token, jwtUtil)
                 .filter(user -> allowedRoles.test(user.getRole()))
                 .map(user -> true)
                 .orElseGet(() -> {

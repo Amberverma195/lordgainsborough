@@ -26,14 +26,14 @@ public class PostgresReservationPersistenceConfiguration {
     }
     @Bean static BeanFactoryPostProcessor guardReservationIdentities() {
         return factory -> {
-            for (Class<?> legacy:new Class<?>[]{AuthController.class,AdminAuthInterceptor.class})
-                if (factory.getBeanNamesForType(legacy,true,false).length>0)
-                    throw new IllegalStateException("Unsupported mixed-backend reservation activation: MongoDB authentication/roles remain deferred to PG-022");
+            PostgresIdentityCoherence.preflight(factory, AuthController.class, AdminAuthInterceptor.class);
         };
     }
     @Bean SmartInitializingSingleton validateReservationSelection(ApplicationContext context) {
         return () -> {
             var selected=context.getBean(PostgresReservationStore.class);
+            PostgresIdentityCoherence.requireIfPresent(context, selected.getEntityManagerFactory());
+            PostgresIdentityCoherence.requireAdministratorHttp(context, selected.getEntityManagerFactory());
             for (ReservationController controller:context.getBeansOfType(ReservationController.class).values())
                 if (controller.getReservationStore()!=selected)
                     throw new IllegalStateException("Unsupported mixed-backend reservation activation: injected store differs");

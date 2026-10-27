@@ -223,4 +223,6 @@ public class PostgresAbuseCounterStore implements AbuseCounterStore {
         }
         return false;
     }
+
+    public DataSource getDataSource() { return jdbcTemplate.getDataSource(); }
 }

@@ -107,4 +107,6 @@ public class PasswordResetAbuseLimiter {
         long seconds = Math.max(1L, window.getSeconds());
         return Instant.ofEpochSecond((now.getEpochSecond() / seconds) * seconds);
     }
+
+    public AbuseCounterStore getStore() { return store; }
 }

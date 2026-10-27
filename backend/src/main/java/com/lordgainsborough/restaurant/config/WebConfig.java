@@ -27,6 +27,8 @@ public class WebConfig implements WebMvcConfigurer {
                 .toArray(String[]::new);
     }
 
+    public AdminAuthInterceptor getAdminAuthInterceptor() { return adminAuthInterceptor; }
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")

@@ -2,7 +2,6 @@ package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.dto.AdminCustomerSearchResult;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
-import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaCustomerOrder;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaCustomerOrderRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository.AdminSearchUser;
@@ -16,12 +15,10 @@ import java.util.*;
 /** Isolated PG-021 reader. Mapping finishes before the read transaction ends. */
 public class PostgresAdminCustomerSearchStore implements AdminCustomerSearchStore {
     private static final int MAX_RESULTS = 25;
-    private static final int CHILD_BATCH_SIZE = 128;
     private final JpaUserRepository users;
     private final JpaCustomerOrderRepository orders;
     private final TransactionTemplate reads;
     private final EntityManagerFactory emf;
-    private final CustomerOrderMapper mapper = new CustomerOrderMapper();
 
     public PostgresAdminCustomerSearchStore(JpaUserRepository users, JpaCustomerOrderRepository orders,
             JpaTransactionManager manager) {
@@ -62,29 +59,12 @@ public class PostgresAdminCustomerSearchStore implements AdminCustomerSearchStor
                 .filter(Objects::nonNull).distinct().toList();
         List<String> phones = matched.values().stream().filter(u -> validPhone(u))
                 .map(AdminSearchUser::getPhone).distinct().toList();
-        // Empty IN lists are avoided entirely rather than depending on dialect-specific SQL.
-        List<JpaCustomerOrder> history = new ArrayList<>();
-        if (!emails.isEmpty() || !phones.isEmpty()) {
-            // A null binding cannot equal a stored contact, including an empty string.
-            history = orders.findAdminHistoryByContacts(emails.isEmpty() ? Collections.singletonList(null) : emails,
-                    phones.isEmpty() ? Collections.singletonList(null) : phones);
-        }
         Map<String, List<CustomerOrder>> byEmail = new HashMap<>();
         Map<String, List<CustomerOrder>> byPhone = new HashMap<>();
-        for (int start = 0; start < history.size(); start += CHILD_BATCH_SIZE) {
-            List<JpaCustomerOrder> batch = history.subList(start, Math.min(start + CHILD_BATCH_SIZE, history.size()));
-            List<String> ids = batch.stream().map(JpaCustomerOrder::getId).toList();
-            // Separate collection queries preserve list ordering without items x messages multiplication.
-            orders.findAdminHistoryItemsByIds(ids);
-            orders.findKdsMessagesByIds(ids);
-            for (JpaCustomerOrder entity : batch) {
-                CustomerOrder order = mapper.fromJpa(entity);
-                // Search never needs this secret, even on its detached internal snapshots.
-                order.setTrackingTokenHash(null);
-                String key = order.getCustomerEmail() == null ? null : order.getCustomerEmail().toLowerCase(Locale.ROOT);
-                if (key != null) byEmail.computeIfAbsent(key, ignored -> new ArrayList<>()).add(order);
-                byPhone.computeIfAbsent(order.getCustomerPhone(), ignored -> new ArrayList<>()).add(order);
-            }
+        for (CustomerOrder order : new PostgresCustomerHistoryReader(orders).load(emails, phones)) {
+            String key = order.getCustomerEmail() == null ? null : order.getCustomerEmail().toLowerCase(Locale.ROOT);
+            if (key != null) byEmail.computeIfAbsent(key, ignored -> new ArrayList<>()).add(order);
+            byPhone.computeIfAbsent(order.getCustomerPhone(), ignored -> new ArrayList<>()).add(order);
         }
         List<AdminCustomerSearchResult> results = new ArrayList<>();
         for (AdminSearchUser user : matched.values()) {

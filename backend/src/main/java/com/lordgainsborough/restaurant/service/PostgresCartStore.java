@@ -22,9 +22,11 @@ public class PostgresCartStore implements CartStore {
     private final Clock clock;
     private final CartMapper mapper = new CartMapper();
     private final TransactionTemplate transactions;
+    private final JpaTransactionManager manager;
 
     public PostgresCartStore(JpaCartRepository carts, JpaUserRepository users, JwtUtil jwt,
             Clock clock, JpaTransactionManager manager) {
+        this.manager = manager;
         this.carts = carts;
         this.users = users;
         this.jwt = jwt;
@@ -32,6 +34,9 @@ public class PostgresCartStore implements CartStore {
         transactions = new TransactionTemplate(manager);
         transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
+
+    public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }
+    public JpaUserRepository getUserRepository() { return users; }
 
     private <T> Optional<T> withAuthenticatedUser(String token, Function<JpaUser, T> operation) {
         Optional<String> email = CartTokenSupport.email(jwt, token);

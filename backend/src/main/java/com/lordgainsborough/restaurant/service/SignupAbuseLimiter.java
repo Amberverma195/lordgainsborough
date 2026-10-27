@@ -188,4 +188,6 @@ public class SignupAbuseLimiter {
     AbuseCounterStore storeForTests() {
         return store;
     }
+
+    public AbuseCounterStore getStore() { return store; }
 }

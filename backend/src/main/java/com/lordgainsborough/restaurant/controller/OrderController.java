@@ -55,6 +55,9 @@ public class OrderController {
         this.orderAccessService = orderAccessService;
     }
 
+    public CustomerOrderStore getOrderStore() { return orderStore; }
+    public OrderAccessService getOrderAccessService() { return orderAccessService; }
+
     @PostMapping
     public ResponseEntity<?> createOrder(@RequestBody CustomerOrder order) {
         if (order.getItems() == null || order.getItems().isEmpty()) {
@@ -161,7 +164,7 @@ public class OrderController {
     }
 
     private boolean canAccess(CustomerOrder order, String authHeader, String trackingToken) {
-        return orderStore.usesPostgres() ? orderAccessService.canAccessPostgresOrder(order, trackingToken)
+        return orderStore.usesPostgres() ? orderAccessService.canAccessPostgresOrder(order, authHeader, trackingToken)
                 : orderAccessService.canAccess(order, authHeader, trackingToken);
     }
 

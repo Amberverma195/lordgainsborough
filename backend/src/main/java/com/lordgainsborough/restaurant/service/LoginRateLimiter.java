@@ -114,4 +114,7 @@ public class LoginRateLimiter {
     private static long retryAfterSeconds(Instant now, Instant until) {
         return Math.max(1L, Duration.between(now, until).getSeconds());
     }
+
+    public AbuseCounterStore getCounterStore() { return counterStore; }
+    public LoginFailureStateStore getFailureStore() { return failureStore; }
 }

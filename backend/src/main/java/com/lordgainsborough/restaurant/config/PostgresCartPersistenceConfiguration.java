@@ -43,12 +43,18 @@ public class PostgresCartPersistenceConfiguration {
     @Bean
     static BeanFactoryPostProcessor validateCartIdentityCoherence() {
         return factory -> {
-            // AuthController still reads/writes Mongo users. A property cannot change that.
-            // No boolean bypass: PG-022 must replace the real identity implementation.
-            if (factory.getBeanNamesForType(AuthController.class, true, false).length > 0) {
-                throw new IllegalStateException("Unsupported mixed-backend cart activation: AuthController "
-                        + "still authenticates MongoDB users. PostgreSQL carts require isolated PostgreSQL "
-                        + "identities until coordinated PG-022 authentication is implemented.");
+            PostgresIdentityCoherence.preflight(factory, AuthController.class);
+        };
+    }
+    @Bean
+    org.springframework.beans.factory.SmartInitializingSingleton validateInjectedCartIdentity(
+            org.springframework.context.ApplicationContext context, PostgresCartStore cart) {
+        return () -> {
+            PostgresIdentityCoherence.requireIfPresent(context, cart.getEntityManagerFactory());
+            for (AuthController controller : context.getBeansOfType(AuthController.class).values()) {
+                var identity = PostgresIdentityCoherence.require(context, cart.getEntityManagerFactory());
+                if (identity.getUserRepository() != cart.getUserRepository())
+                    throw PostgresIdentityCoherence.incompatible("cart/user repository mismatch");
             }
         };
     }
