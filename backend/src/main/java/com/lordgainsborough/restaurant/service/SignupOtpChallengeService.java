@@ -13,11 +13,6 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Signup OTP challenge orchestration backed by MongoDB.
- * Initial send is create-once; resend uses a single atomic findAndModify.
- * Client {@code Idempotency-Key} replays do not rotate OTP or re-call the provider.
- */
 @Service
 public class SignupOtpChallengeService {
 

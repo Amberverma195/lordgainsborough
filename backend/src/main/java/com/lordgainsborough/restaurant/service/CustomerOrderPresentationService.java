@@ -1,7 +1,6 @@
 package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -14,10 +13,6 @@ public class CustomerOrderPresentationService {
     private static final String NO_SHOW_STATUS = "NO_SHOW";
 
     private final CustomerOrderCountStore counts;
-
-    public CustomerOrderPresentationService(CustomerOrderRepository orderRepository) {
-        this(new MongoCustomerOrderCountStore(orderRepository));
-    }
 
     @Autowired
     public CustomerOrderPresentationService(CustomerOrderCountStore counts) { this.counts = counts; }

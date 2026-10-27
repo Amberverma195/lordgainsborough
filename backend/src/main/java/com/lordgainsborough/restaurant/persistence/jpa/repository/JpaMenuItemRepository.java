@@ -7,12 +7,6 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Spring Data JPA repository for {@link JpaMenuItem} entities in {@code menu_items}.
- * <p>
- * Mirrors all query methods defined on the MongoDB {@code MenuItemRepository}.
- * </p>
- */
 @Repository
 public interface JpaMenuItemRepository extends JpaRepository<JpaMenuItem, String> {
 

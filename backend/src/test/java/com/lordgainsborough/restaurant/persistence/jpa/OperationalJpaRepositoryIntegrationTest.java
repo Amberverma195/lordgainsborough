@@ -16,7 +16,6 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaReservation
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
-import jakarta.persistence.EntityTransaction;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -38,7 +37,6 @@ import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.orm.jpa.JpaTransactionManager;
@@ -93,7 +91,7 @@ public class OperationalJpaRepositoryIntegrationTest {
     private JpaReservationRepository reservationRepository;
     private JpaUserRepository userRepository;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     @EntityScan(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.entity")
     static class TestJpaRepoConfig {
@@ -129,7 +127,7 @@ public class OperationalJpaRepositoryIntegrationTest {
     }
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-010 integration tests")
                 .isNotBlank();
@@ -974,11 +972,11 @@ public class OperationalJpaRepositoryIntegrationTest {
     // Requirement 31: Isolation and No Bean Collisions
     // =========================================================================
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @AutoConfigurationPackage
     static class DefaultProfileTestConfig {}
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class DefaultProfileIsolationConfig {}
 

@@ -16,15 +16,12 @@ import com.lordgainsborough.restaurant.dto.*;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.*;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.*;
 import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -51,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PostgresKdsControllerIntegrationTest {
     private String database, adminUrl;
     private boolean owned;
-    private static String jdbcUrl;
+    private String jdbcUrl;
     private AnnotationConfigApplicationContext context;
     private PostgresCustomerOrderStore store;
     private OrderController controller;
@@ -79,17 +76,17 @@ class PostgresKdsControllerIntegrationTest {
         }
         public Instant instant() { return now; }
     }
-    private UserRepository mongoUsers;
+
     private OrderAccessService access;
     private MockMvc mvc;
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     static class JpaConfig {
-        @Bean PGSimpleDataSource dataSource() {
+        @Bean PGSimpleDataSource dataSource(org.springframework.core.env.Environment environment) {
             PGSimpleDataSource ds = new PGSimpleDataSource();
-            ds.setUrl(jdbcUrl); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
+            ds.setUrl(environment.getRequiredProperty("test.jdbc-url")); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
         }
         @Bean LocalContainerEntityManagerFactoryBean entityManagerFactory(PGSimpleDataSource ds) {
             var factory = new LocalContainerEntityManagerFactoryBean();
@@ -102,7 +99,7 @@ class PostgresKdsControllerIntegrationTest {
     }
 
     @BeforeAll void provision() throws Exception {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         boolean mandatory = Boolean.getBoolean("test.postgres.mandatory") || "true".equalsIgnoreCase(System.getenv("CI"));
         if (mandatory) assertThat(port).as("mandatory live PostgreSQL port").matches("[0-9]{1,5}");
         Assumptions.assumeTrue(port != null, "Set test.postgres.port for live PostgreSQL");
@@ -118,19 +115,22 @@ class PostgresKdsControllerIntegrationTest {
         clock = new MutableClock();
         proxyProperties = new SignupAbuseProperties();
         proxyProperties.setTrustedProxies(List.of("127.0.0.1"));
-        mongoUsers = mock(UserRepository.class);
-        access = new OrderAccessService(mock(JwtUtil.class), mongoUsers);
+
         context = new AnnotationConfigApplicationContext();
         context.getEnvironment().setActiveProfiles("test");
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
                 "pg017", Map.of("app.orders.postgres.enabled", "true", "app.kds.postgres.enabled", "true")));
+        context.registerBean(JwtUtil.class, () -> mock(JwtUtil.class));
         context.registerBean(OrderRealtimeService.class, () -> new OrderRealtimeService(sockets,context.getBean(CustomerOrderPresentationService.class)));
         context.registerBean(Clock.class, () -> clock);
         context.registerBean(ClientIpResolver.class, () -> new ClientIpResolver(proxyProperties));
-        context.registerBean(OrderAccessService.class, () -> access);
+        context.registerBean(OrderAccessService.class, () -> new OrderAccessService(context.getBean(JwtUtil.class),context.getBean(PostgresUserAuthStore.class)));
+        context.registerBean(PostgresUserAuthStore.class, () -> new PostgresUserAuthStore(context.getBean(JpaUserRepository.class),context.getBean(JpaCustomerOrderRepository.class),context.getBean(JpaOrderReviewRepository.class),context.getBean("orderJpaTransactionManager",org.springframework.orm.jpa.JpaTransactionManager.class),java.time.Clock.systemDefaultZone()));
+        context.register(com.lordgainsborough.restaurant.config.WebConfig.class,AdminAuthInterceptor.class);
         context.register(JpaConfig.class, PostgresOrderPersistenceConfiguration.class, PostgresKdsPersistenceConfiguration.class,
                 OrderController.class, KdsController.class, CustomerNoShowService.class, CustomerOrderPresentationService.class, KdsAccessService.class);
-        context.refresh();
+        context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl,"jwt.expiration","86400000","jwt.secret","fixture-only-secret-at-least-32-bytes")));
+        context.refresh(); access=context.getBean(OrderAccessService.class);
         store = context.getBean(PostgresCustomerOrderStore.class);
         controller = context.getBean(OrderController.class);
         orders = context.getBean(JpaCustomerOrderRepository.class);
@@ -143,7 +143,7 @@ class PostgresKdsControllerIntegrationTest {
         noShows = context.getBean(CustomerNoShowService.class); presentation = context.getBean(CustomerOrderPresentationService.class);
         kdsAccess = context.getBean(KdsAccessService.class);
         mvc = MockMvcBuilders.standaloneSetup(controller,kds)
-                .addInterceptors(new AdminAuthInterceptor(mock(JwtUtil.class),mongoUsers,kdsAccess)).build();
+                .addInterceptors(context.getBean(AdminAuthInterceptor.class)).build();
     }
 
     @AfterAll void dispose() throws Exception {
@@ -163,7 +163,7 @@ class PostgresKdsControllerIntegrationTest {
         menu.saveAndFlush(new JpaMenuItem("dish","Steak","",new BigDecimal("17.99"),"Mains",null));
         var user = new JpaUser("owner","Owner","owner@example.com","5195551212","MEMBER");
         user.setPassword("unchanged-password-hash"); user.setTokenVersion(7); user.setPhoneNormalized("5195551212"); users.saveAndFlush(user);
-        reset(sockets); reset(mongoUsers);
+        reset(sockets);
     }
     private CustomerOrder request() {
         var order = new CustomerOrder(); order.setCustomerName("Owner"); order.setCustomerEmail("owner@example.com");
@@ -204,7 +204,7 @@ class PostgresKdsControllerIntegrationTest {
         assertThat(order.get("id").asText()).isEqualTo(id); assertThat(order.get("items").size()).isEqualTo(1);
         assertThat(order.get("customerOrderCount").asInt()).isEqualTo(1); assertThat(order.get("customerNoShowCount").asInt()).isZero();
         assertThat(response).doesNotContain("trackingTokenHash",created.getTrackingToken(),access.hashTrackingToken(created.getTrackingToken()));
-        verifyNoInteractions(mongoUsers);
+
         // History remains admin-JWT gated, unlike the operational IP-only board.
         mvc.perform(get("/api/kds/orders/all")).andExpect(status().isNotFound());
         assertThat(kds.getAllOrders()).extracting(CustomerOrder::getId).containsExactly(id);
@@ -406,7 +406,7 @@ class PostgresKdsControllerIntegrationTest {
                 .andExpect(status().isOk());
         allow("0.0.0.0/-1"); assertThat(kdsAccess.isIpAllowed("10.1.2.3")).isFalse();
         assertThat(KdsAccessService.parseAllowedIps("1.1.1.1;2.2.2.2;3.3.3.3;4.4.4.4")).hasSize(3);
-        verifyNoInteractions(mongoUsers);
+
     }
     @Test void realtimeUsesExpectedRoomsAndCommittedPayloadWithoutDuplicates() {
         String id=create().getOrder().getId(); reset(sockets);

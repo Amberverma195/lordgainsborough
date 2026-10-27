@@ -67,7 +67,6 @@ public class JwtUtil {
         return validateTokenForIdentity(token, user.getId(), user.getTokenVersion());
     }
 
-    /** Validates an identity loaded from the selected backend without converting JPA users to Mongo documents. */
     public boolean validateTokenForIdentity(String token, String userId, long currentTokenVersion) {
         try {
             Claims claims = claims(token);

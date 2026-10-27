@@ -11,7 +11,6 @@ import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 
-/** Structural guards shared by opt-in persistence modules; flags never certify identities. */
 final class PostgresIdentityCoherence {
     private PostgresIdentityCoherence() {}
     static void preflight(ConfigurableListableBeanFactory factory, Class<?>... consumers) {

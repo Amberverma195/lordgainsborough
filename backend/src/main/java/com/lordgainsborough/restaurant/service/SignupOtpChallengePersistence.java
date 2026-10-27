@@ -3,10 +3,8 @@ package com.lordgainsborough.restaurant.service;
 import com.lordgainsborough.restaurant.model.OtpChallengeStatus;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
-import com.lordgainsborough.restaurant.repository.SignupOtpChallengeRepository;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -20,11 +18,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Persistence facade for signup OTP challenges.
- * Delegates database storage operations to {@link SignupOtpChallengeStore}, supporting
- * MongoDB (default) and PostgreSQL with identical business semantics.
- */
 @Service
 public class SignupOtpChallengePersistence {
 
@@ -47,12 +40,6 @@ public class SignupOtpChallengePersistence {
     /**
      * Backward-compatible constructor for existing callers and tests.
      */
-    public SignupOtpChallengePersistence(
-            SignupOtpChallengeRepository repository,
-            MongoTemplate mongoTemplate,
-            Clock clock) {
-        this(new MongoSignupOtpChallengeStore(repository, mongoTemplate), clock);
-    }
 
     public SignupOtpChallengeStore getStore() {
         return store;
@@ -112,10 +99,6 @@ public class SignupOtpChallengePersistence {
                 || !now.isBefore(challenge.getOtpExpiresAt());
     }
 
-    /**
-     * Loads a challenge only if it is ACTIVE and {@code challengeExpiresAt} is still in the future.
-     * Does not rely on Mongo TTL cleanup.
-     */
     public Optional<SignupOtpChallenge> findActiveUnexpiredByEmail(String email) {
         Instant now = clock.instant();
         String emailKey = emailKeyFromRawEmail(email);
@@ -263,15 +246,6 @@ public class SignupOtpChallengePersistence {
         return clock.instant();
     }
 
-    /**
-     * Atomically claims one resend slot, rotates the OTP digest, and reserves a send operation.
-     * Returns the updated challenge when this request won; empty when the query matched nothing.
-     * <p>
-     * <b>Cooldown Policy & Parity Invariant:</b> Resend requires {@code nextResendAt <= now}.
-     * If {@code nextResendAt} is null or uninitialized, resend fails closed (denies resend),
-     * ensuring strict cross-backend behavioral parity between PostgreSQL and MongoDB.
-     * </p>
-     */
     public Optional<SignupOtpChallenge> tryAtomicResend(
             String emailKey,
             String newOtpDigest,

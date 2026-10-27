@@ -23,7 +23,6 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
@@ -50,19 +49,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class OrderJpaEntityIntegrationTest {
 
-    private static final String TEST_DB = "order_jpa_test";
+    private static final String TEST_DB = "order_jpa_test" + "_" + java.util.UUID.randomUUID().toString().replace("-", "");
     private String testPort;
     private String jdbcUrl;
     private PGSimpleDataSource dataSource;
     private LocalContainerEntityManagerFactoryBean emfBean;
     private EntityManagerFactory emf;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EntityScan(basePackageClasses = {JpaCustomerOrder.class, JpaUser.class})
     static class TestEntityScanConfig {}
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-005 PostgreSQL integration tests")
                 .isNotBlank();

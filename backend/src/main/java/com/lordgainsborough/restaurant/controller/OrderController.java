@@ -4,15 +4,10 @@ import com.lordgainsborough.restaurant.dto.OrderCreationResponse;
 import com.lordgainsborough.restaurant.dto.OrderStatusResponse;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.model.MenuItem;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.MenuItemRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
 import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.OrderAccessService;
 import com.lordgainsborough.restaurant.service.OrderRealtimeService;
-import com.lordgainsborough.restaurant.service.StoreSettingsService;
 import com.lordgainsborough.restaurant.service.CustomerOrderStore;
-import com.lordgainsborough.restaurant.service.MongoCustomerOrderStore;
 import com.lordgainsborough.restaurant.service.OrderMoney;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -22,7 +17,6 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,19 +27,6 @@ public class OrderController {
     private final CustomerOrderStore orderStore;
     private final OrderRealtimeService realtimeService;
     private final OrderAccessService orderAccessService;
-
-
-    public OrderController(
-            CustomerOrderRepository orderRepository,
-            OrderReviewRepository reviewRepository,
-            MenuItemRepository menuItemRepository,
-            OrderRealtimeService realtimeService,
-            OrderAccessService orderAccessService,
-            StoreSettingsService storeSettingsService,
-            CustomerNoShowService customerNoShowService) {
-        this(new MongoCustomerOrderStore(orderRepository, menuItemRepository, reviewRepository,
-                storeSettingsService, customerNoShowService), realtimeService, orderAccessService);
-    }
 
     @Autowired
     public OrderController(CustomerOrderStore orderStore, OrderRealtimeService realtimeService,

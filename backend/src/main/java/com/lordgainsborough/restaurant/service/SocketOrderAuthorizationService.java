@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import java.util.Optional;
 
-/** Selected checkout/identity/KDS dependencies only; no Mongo fallback or room subscription API. */
 @Service
 public class SocketOrderAuthorizationService {
     private static final Logger log = LoggerFactory.getLogger(SocketOrderAuthorizationService.class);
@@ -58,12 +57,7 @@ public class SocketOrderAuthorizationService {
                     || kitchen.getNoShowStore().getUserRepository() != checkout.getUserRepository()
                     || kitchen.getNoShowStore().getOrderRepository() != checkout.getOrderRepository())
                 throw incoherent("PostgreSQL orders, users, KDS settings and count persistence unit/repositories");
-        } else if (!(orders instanceof MongoCustomerOrderStore) || !(identities instanceof MongoUserAuthStore)
-                || !(kitchenOrders instanceof MongoKdsOrderStore)
-                || !(kitchenAccess.getSettingsSource() instanceof MongoKdsSettingsSource)
-                || !(presentation.getCountStore() instanceof MongoCustomerOrderCountStore)) {
-            throw incoherent("default MongoDB dependencies");
-        }
+        } else { throw incoherent("PostgreSQL checkout required"); }
     }
 
     public Optional<RoomGrant> authorize(String orderId, String role, String jwt, String trackingToken, String clientIp) {
@@ -75,9 +69,7 @@ public class SocketOrderAuthorizationService {
             if (!validOrderId(orderId)) return Optional.empty();
             return orders.findById(orderId)
                     .filter(order -> orderId.equals(order.getId()))
-                    .filter(order -> orders instanceof PostgresCustomerOrderStore
-                            ? access.canAccessPostgresOrder(order, jwt == null ? null : "Bearer " + jwt, trackingToken)
-                            : access.canAccessWithJwtToken(order, jwt, trackingToken))
+                    .filter(order -> access.canAccessPostgresOrder(order, jwt == null ? null : "Bearer " + jwt, trackingToken))
                     .map(order -> new RoomGrant(orderId, kitchen));
         } catch (RuntimeException failure) {
             // Never reveal database errors, credentials, claims, order existence or exception payloads.

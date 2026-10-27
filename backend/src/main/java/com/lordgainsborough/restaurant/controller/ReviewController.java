@@ -1,6 +1,5 @@
 package com.lordgainsborough.restaurant.controller;
 import com.lordgainsborough.restaurant.model.OrderReview;
-import com.lordgainsborough.restaurant.repository.*;
 import com.lordgainsborough.restaurant.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -11,9 +10,7 @@ public class ReviewController {
     private final ReviewStore store;
     private final OrderRealtimeService realtime;
     @Autowired public ReviewController(ReviewStore store, OrderRealtimeService realtime) { this.store=store; this.realtime=realtime; }
-    public ReviewController(CustomerOrderRepository orders, OrderReviewRepository reviews, OrderRealtimeService realtime, OrderAccessService access) {
-        this(new MongoReviewStore(orders,reviews,access),realtime);
-    }
+
     public ReviewStore getReviewStore() { return store; }
     @PostMapping("/api/orders/{orderId}/reviews")
     public ResponseEntity<OrderReview> createReview(@PathVariable String orderId,

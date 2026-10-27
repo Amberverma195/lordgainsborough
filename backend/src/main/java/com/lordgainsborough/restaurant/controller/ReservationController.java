@@ -1,6 +1,5 @@
 package com.lordgainsborough.restaurant.controller;
 import com.lordgainsborough.restaurant.model.Reservation;
-import com.lordgainsborough.restaurant.repository.ReservationRepository;
 import com.lordgainsborough.restaurant.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -12,7 +11,7 @@ import java.util.*;
 public class ReservationController {
     private final ReservationStore store;
     @Autowired public ReservationController(ReservationStore store) { this.store=store; }
-    public ReservationController(ReservationRepository repository) { this(new MongoReservationStore(repository)); }
+
     public ReservationStore getReservationStore() { return store; }
     @GetMapping public List<Reservation> getAllReservations() { return store.all(); }
     @PostMapping public Reservation createReservation(@RequestBody Reservation request) { return store.create(request); }

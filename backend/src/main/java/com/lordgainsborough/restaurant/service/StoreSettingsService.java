@@ -1,24 +1,24 @@
 package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.StoreSettings;
-import com.lordgainsborough.restaurant.repository.StoreSettingsRepository;
+
 import org.springframework.stereotype.Service;
 
 @Service
 public class StoreSettingsService {
-    private final StoreSettingsRepository storeSettingsRepository;
+    private final PostgresCatalogStore storeSettingsRepository;
 
-    public StoreSettingsService(StoreSettingsRepository storeSettingsRepository) {
+    public StoreSettingsService(PostgresCatalogStore storeSettingsRepository) {
         this.storeSettingsRepository = storeSettingsRepository;
     }
 
     public StoreSettings getSettings() {
-        return storeSettingsRepository.findById(StoreSettings.DEFAULT_ID)
+        return storeSettingsRepository.settings()
                 .orElseGet(this::createDefault);
     }
 
     public StoreSettings saveSettings(StoreSettings incoming) {
-        StoreSettings settings = storeSettingsRepository.findById(StoreSettings.DEFAULT_ID)
+        StoreSettings settings = storeSettingsRepository.settings()
                 .orElseGet(this::createDefault);
 
         settings.setTaxRate(normalizeTaxRate(incoming.getTaxRate()));
@@ -29,13 +29,13 @@ public class StoreSettingsService {
         settings.setPickupOrdersEnabled(incoming.getPickupOrdersEnabled());
         settings.setKdsAllowedIp(KdsAccessService.normalizeAllowedIpInput(incoming.getKdsAllowedIp()));
 
-        return storeSettingsRepository.save(settings);
+        return storeSettingsRepository.saveSettings(settings);
     }
 
     private StoreSettings createDefault() {
         StoreSettings settings = new StoreSettings();
         settings.setId(StoreSettings.DEFAULT_ID);
-        return storeSettingsRepository.save(settings);
+        return storeSettingsRepository.saveSettings(settings);
     }
 
     private double normalizeTaxRate(double taxRate) {

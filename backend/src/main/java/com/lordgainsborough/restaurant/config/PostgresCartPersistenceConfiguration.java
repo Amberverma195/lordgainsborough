@@ -5,33 +5,18 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaCartReposit
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.PostgresCartStore;
-import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.context.annotation.Profile;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 
-/** PG-018 is available to isolated migration fixtures, never a mixed live Mongo authentication flow. */
+/** PostgreSQL persistence for the application. */
 @Configuration(proxyBeanMethods = false)
-@Profile({"postgres-migration", "test"})
-@ConditionalOnProperty(name = "app.cart.postgres.enabled", havingValue = "true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresCartPersistenceConfiguration {
-    @Bean("transactionManager")
-    @ConditionalOnMissingBean(name = "transactionManager")
-    JpaTransactionManager repositoryTransactionManager(EntityManagerFactory emf) {
-        return new JpaTransactionManager(emf);
-    }
-
-    @Bean("cartJpaTransactionManager")
-    JpaTransactionManager cartJpaTransactionManager(EntityManagerFactory emf) {
-        return new JpaTransactionManager(emf);
-    }
 
     @Bean
     @Primary

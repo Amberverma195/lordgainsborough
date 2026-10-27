@@ -1,12 +1,7 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
-
 import java.time.Instant;
 
-@Document(collection = "signup_abuse_limits")
 public class SignupAbuseLimit {
 
     public enum BucketType {
@@ -22,7 +17,6 @@ public class SignupAbuseLimit {
         RESET_IDEMPOTENCY
     }
 
-    @Id
     private String id;
 
     private BucketType bucketType;
@@ -34,7 +28,6 @@ public class SignupAbuseLimit {
 
     private Instant windowStart;
 
-    @Indexed(name = "signup_abuse_limit_ttl", expireAfterSeconds = 0)
     private Instant expiresAt;
 
     public String getId() {

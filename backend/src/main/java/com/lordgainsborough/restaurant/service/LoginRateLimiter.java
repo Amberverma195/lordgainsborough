@@ -4,7 +4,6 @@ import com.lordgainsborough.restaurant.config.LoginRateLimitProperties;
 import com.lordgainsborough.restaurant.model.SignupAbuseLimit.BucketType;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -45,18 +44,6 @@ public class LoginRateLimiter {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.hasher = Objects.requireNonNull(hasher, "hasher must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
-    }
-
-    /**
-     * Backward-compatible constructor for existing MongoDB-backed instantiations.
-     */
-    public LoginRateLimiter(
-            AbuseCounterStore counterStore,
-            MongoTemplate mongoTemplate,
-            LoginRateLimitProperties properties,
-            AbuseIpHasher hasher,
-            Clock clock) {
-        this(counterStore, new MongoLoginFailureStateStore(mongoTemplate), properties, hasher, clock);
     }
 
     public OptionalLong consumeIpRequest(String clientIp) {

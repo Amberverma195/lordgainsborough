@@ -10,7 +10,6 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaCategoryRep
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaMenuItemRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaStoreSettingsRepository;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaUserRepository;
-import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -23,10 +22,8 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.orm.jpa.JpaTransactionManager;
@@ -38,7 +35,6 @@ import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -80,7 +76,7 @@ public class CoreJpaRepositoryIntegrationTest {
     private JpaCatalogMigrationRepository catalogMigrationRepository;
     private JpaStoreSettingsRepository storeSettingsRepository;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     @EntityScan(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.entity")
     static class TestJpaRepoConfig {
@@ -116,7 +112,7 @@ public class CoreJpaRepositoryIntegrationTest {
     }
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-009 integration tests")
                 .isNotBlank();
@@ -209,20 +205,6 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(menuItemRepository).isNotNull();
         assertThat(catalogMigrationRepository).isNotNull();
         assertThat(storeSettingsRepository).isNotNull();
-    }
-
-    @Test
-    @Order(2)
-    @DisplayName("Req 2: No MongoDB repository is registered as a JPA repository")
-    void test02_noMongoRepositoriesRegisteredInJpaContext() {
-        String[] mongoRepoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.UserRepository.class);
-        assertThat(mongoRepoBeans).isEmpty();
-
-        String[] categoryMongoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.CategoryRepository.class);
-        assertThat(categoryMongoBeans).isEmpty();
-
-        String[] menuItemMongoBeans = context.getBeanNamesForType(com.lordgainsborough.restaurant.repository.MenuItemRepository.class);
-        assertThat(menuItemMongoBeans).isEmpty();
     }
 
     @Test
@@ -758,48 +740,4 @@ public class CoreJpaRepositoryIntegrationTest {
         assertThat(context.containsBean("storeSettingsRepository")).isFalse();
     }
 
-    @Test
-    @Order(25)
-    @DisplayName("Req 25: The default MongoDB configuration remains isolated from JPA repository activation")
-    void test25_defaultMongoConfigurationRemainsIsolated() {
-        // 1. Assert package boundary separation between legacy Mongo and relational JPA packages
-        assertThat(com.lordgainsborough.restaurant.repository.UserRepository.class.getPackage().getName())
-                .isEqualTo("com.lordgainsborough.restaurant.repository");
-        assertThat(JpaUserRepository.class.getPackage().getName())
-                .isEqualTo("com.lordgainsborough.restaurant.persistence.jpa.repository");
-
-        // 2. Prove that default application configuration starts cleanly without PostgreSQL
-        // and that no JPA repository beans or relational persistence infrastructure activate
-        ApplicationContextRunner runner = new ApplicationContextRunner()
-                .withPropertyValues(
-                        "spring.autoconfigure.exclude="
-                                + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
-                                + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration,"
-                                + "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration,"
-                                + "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
-                        "spring.flyway.enabled=false"
-                );
-
-        runner.run(ctx -> {
-            assertThat(ctx).hasNotFailed();
-
-            // Verify no relational infrastructure beans are activated
-            assertThat(ctx.containsBean("dataSource")).isFalse();
-            assertThat(ctx.containsBean("entityManagerFactory")).isFalse();
-            assertThat(ctx.containsBean("flyway")).isFalse();
-
-            // Verify NO JPA repositories are registered or activated as beans
-            assertThat(ctx.containsBean("jpaUserRepository")).isFalse();
-            assertThat(ctx.containsBean("jpaCategoryRepository")).isFalse();
-            assertThat(ctx.containsBean("jpaMenuItemRepository")).isFalse();
-            assertThat(ctx.containsBean("jpaCatalogMigrationRepository")).isFalse();
-            assertThat(ctx.containsBean("jpaStoreSettingsRepository")).isFalse();
-
-            assertThat(ctx.getBeanNamesForType(JpaUserRepository.class)).isEmpty();
-            assertThat(ctx.getBeanNamesForType(JpaCategoryRepository.class)).isEmpty();
-            assertThat(ctx.getBeanNamesForType(JpaMenuItemRepository.class)).isEmpty();
-            assertThat(ctx.getBeanNamesForType(JpaCatalogMigrationRepository.class)).isEmpty();
-            assertThat(ctx.getBeanNamesForType(JpaStoreSettingsRepository.class)).isEmpty();
-        });
-    }
 }

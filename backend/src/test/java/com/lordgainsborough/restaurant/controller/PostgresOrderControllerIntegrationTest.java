@@ -8,10 +8,8 @@ import com.lordgainsborough.restaurant.dto.*;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.*;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.*;
-import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -43,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PostgresOrderControllerIntegrationTest {
     private String database, adminUrl;
     private boolean owned;
-    private static String jdbcUrl;
+    private String jdbcUrl;
     private AnnotationConfigApplicationContext context;
     private PostgresCustomerOrderStore store;
     private OrderController controller;
@@ -54,18 +52,18 @@ class PostgresOrderControllerIntegrationTest {
     private JdbcTemplate jdbc;
     private TransactionTemplate transactions;
     private SocketIOServer sockets;
-    private CustomerOrderPresentationService mongoPresentation;
-    private UserRepository mongoUsers;
+    private CustomerOrderPresentationService unusedPresentation;
+
     private OrderAccessService access;
     private MockMvc mvc;
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     static class JpaConfig {
-        @Bean PGSimpleDataSource dataSource() {
+        @Bean PGSimpleDataSource dataSource(org.springframework.core.env.Environment environment) {
             PGSimpleDataSource ds = new PGSimpleDataSource();
-            ds.setUrl(jdbcUrl); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
+            ds.setUrl(environment.getRequiredProperty("test.jdbc-url")); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
         }
         @Bean LocalContainerEntityManagerFactoryBean entityManagerFactory(PGSimpleDataSource ds) {
             var factory = new LocalContainerEntityManagerFactoryBean();
@@ -78,7 +76,7 @@ class PostgresOrderControllerIntegrationTest {
     }
 
     @BeforeAll void provision() throws Exception {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         boolean mandatory = Boolean.getBoolean("test.postgres.mandatory") || "true".equalsIgnoreCase(System.getenv("CI"));
         if (mandatory) assertThat(port).as("mandatory live PostgreSQL port").matches("[0-9]{1,5}");
         Assumptions.assumeTrue(port != null, "Set test.postgres.port for live PostgreSQL");
@@ -91,17 +89,19 @@ class PostgresOrderControllerIntegrationTest {
         jdbcUrl = "jdbc:postgresql://127.0.0.1:" + port + "/" + database + "?sslmode=disable";
         Flyway.configure().dataSource(jdbcUrl, "postgres", "postgres").cleanDisabled(true).load().migrate();
         sockets = mock(SocketIOServer.class, RETURNS_DEEP_STUBS);
-        mongoPresentation = mock(CustomerOrderPresentationService.class);
-        mongoUsers = mock(UserRepository.class);
-        access = new OrderAccessService(mock(JwtUtil.class), mongoUsers);
+        unusedPresentation = mock(CustomerOrderPresentationService.class);
+
         context = new AnnotationConfigApplicationContext();
         context.getEnvironment().setActiveProfiles("test");
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
                 "pg017", Map.of("app.orders.postgres.enabled", "true")));
-        context.registerBean(OrderRealtimeService.class, () -> new OrderRealtimeService(sockets, mongoPresentation));
-        context.registerBean(OrderAccessService.class, () -> access);
+        context.registerBean(JwtUtil.class, () -> mock(JwtUtil.class));
+        context.registerBean(OrderRealtimeService.class, () -> new OrderRealtimeService(sockets, unusedPresentation));
+        context.registerBean(OrderAccessService.class, () -> new OrderAccessService(context.getBean(JwtUtil.class),context.getBean(PostgresUserAuthStore.class)));
+        context.registerBean(PostgresUserAuthStore.class, () -> new PostgresUserAuthStore(context.getBean(JpaUserRepository.class),context.getBean(JpaCustomerOrderRepository.class),context.getBean(JpaOrderReviewRepository.class),context.getBean("orderJpaTransactionManager",org.springframework.orm.jpa.JpaTransactionManager.class),java.time.Clock.systemDefaultZone()));
         context.register(JpaConfig.class, PostgresOrderPersistenceConfiguration.class, OrderController.class);
-        context.refresh();
+        context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl,"jwt.expiration","86400000","jwt.secret","fixture-only-secret-at-least-32-bytes")));
+        context.refresh(); access=context.getBean(OrderAccessService.class);
         store = context.getBean(PostgresCustomerOrderStore.class);
         controller = context.getBean(OrderController.class);
         orders = context.getBean(JpaCustomerOrderRepository.class);
@@ -128,7 +128,7 @@ class PostgresOrderControllerIntegrationTest {
         settings.saveAndFlush(new JpaStoreSettings());
         menu.saveAndFlush(new JpaMenuItem("dish", "Steak", "", new BigDecimal("17.99"), "Mains", null));
         clearInvocations(sockets.getRoomOperations("kds"), sockets);
-        reset(mongoUsers, mongoPresentation);
+        reset(unusedPresentation);
     }
 
     private CustomerOrder request() {
@@ -194,7 +194,7 @@ class PostgresOrderControllerIntegrationTest {
                 .containsExactly(0, 1);
         assertThat(jdbc.queryForObject("SELECT subtotal FROM customer_orders WHERE id=?", BigDecimal.class, id))
                 .isEqualByComparingTo("89.95");
-        verifyNoInteractions(mongoUsers, mongoPresentation);
+        verifyNoInteractions(unusedPresentation);
     }
 
     @Test void resetsAllPrivilegedStateAndBoundsInstructionsAndReadyTime() {
@@ -238,7 +238,7 @@ class PostgresOrderControllerIntegrationTest {
         JpaUser user = new JpaUser("member","Guest","guest@example.com","5195551212","MEMBER");
         user.setNoShowCount(3); users.saveAndFlush(user);
         error(request(),403,"PICKUP_DISABLED_NO_SHOW",CustomerNoShowService.PICKUP_DISABLED_MESSAGE);
-        verifyNoInteractions(mongoUsers);
+
     }
     @Test void relationalOrderNoShowCountsCannotBeBypassedByStaleUserCounter() {
         users.saveAndFlush(new JpaUser("member","Guest","guest@example.com","5195551212","MEMBER"));
@@ -320,7 +320,7 @@ class PostgresOrderControllerIntegrationTest {
     @Test void legacyJwtCannotAuthorizePostgresOrder() {
         var response=create();
         assertThat(controller.getOrder(response.getOrder().getId(),"Bearer valid-looking-legacy-token",null).getStatusCode().value()).isEqualTo(404);
-        verifyNoInteractions(mongoUsers);
+
     }
     @Test void rawTokenOnlyInCreationEnvelopeAndHashOnlyInDatabase() throws Exception {
         var response=create(); var saved=store.findById(response.getOrder().getId()).orElseThrow();
@@ -497,6 +497,6 @@ class PostgresOrderControllerIntegrationTest {
         verify(sockets.getRoomOperations("kds"),times(1)).sendEvent("chat.message",Map.of("orderId",id,"message",message));
         verify(sockets.getRoomOperations("order:"+id),times(1)).sendEvent("chat.message",Map.of("orderId",id,"message",message));
         verify(sockets.getRoomOperations("kds"),times(1)).sendEvent(eq("order.updated"),any());
-        verifyNoInteractions(mongoPresentation,mongoUsers);
+        verifyNoInteractions(unusedPresentation);
     }
 }

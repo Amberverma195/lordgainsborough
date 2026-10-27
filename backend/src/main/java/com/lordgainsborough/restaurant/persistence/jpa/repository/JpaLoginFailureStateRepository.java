@@ -9,25 +9,6 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Spring Data JPA repository for {@link JpaLoginFailureState} entities in {@code login_failure_states}.
- * <p>
- * <b>Architectural Note:</b>
- * In the legacy MongoDB architecture, failed login state was managed directly via {@code MongoTemplate}
- * without a dedicated {@code MongoRepository} interface. {@link JpaLoginFailureStateRepository} is an
- * original PostgreSQL repository introduced to establish typed Spring Data JPA persistence for
- * login failure tracking.
- * </p>
- * <p>
- * Primary key is an application-assigned keyed hash string (VARCHAR(128)).
- * Subject hashes are keyed cryptographic digests of the client IP and normalized login identifier.
- * Raw IP addresses and plaintext credentials must never be passed to query methods.
- * </p>
- * <p>
- * <b>Concurrency & Locking Note:</b>
- * Atomic CAS increments, cooldown mutations, and lockout transitions are explicitly deferred to PG-014.
- * </p>
- */
 @Repository
 public interface JpaLoginFailureStateRepository extends JpaRepository<JpaLoginFailureState, String> {
 

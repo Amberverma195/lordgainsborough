@@ -23,26 +23,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * PG-012: Transactional PostgreSQL catalog synchronization service.
- * <p>
- * Synchronizes the restaurant category and menu item catalog against PostgreSQL
- * using Spring Data JPA repositories and a transaction-scoped advisory lock for
- * concurrent startup safety.
- * </p>
- * <p>
- * Adheres to strict operational invariants:
- * <ul>
- *   <li>Single source of truth shared with MongoDB initializer via {@link CatalogSeedSpecifications}.</li>
- *   <li>Idempotent execution gated by migration marker {@value CatalogSeedSpecifications#MIGRATION_ID}.</li>
- *   <li>Preserves existing menu item IDs, images, availability, and most-loved status.</li>
- *   <li>Converts monetary amounts using {@link BigDecimal#valueOf(double)} with scale 2.</li>
- *   <li>Safe alias resolution and unambiguous matching protection.</li>
- *   <li>All-or-nothing transactional atomicity with automatic rollback on error.</li>
- *   <li>Zero modification or deletion of unrelated database entities.</li>
- * </ul>
- * </p>
- */
 public class PostgresCatalogSynchronizationService {
 
     private static final Logger log = LoggerFactory.getLogger(PostgresCatalogSynchronizationService.class);

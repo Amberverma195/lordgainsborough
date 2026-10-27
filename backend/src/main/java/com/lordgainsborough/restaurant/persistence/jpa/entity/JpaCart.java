@@ -27,7 +27,6 @@ import java.util.UUID;
 @Table(name = "carts")
 public class JpaCart {
 
-    /** Carts expire 7 days after the last update (matching original MongoDB TTL). */
     public static final int TTL_SECONDS = 7 * 24 * 60 * 60;
 
     @Id

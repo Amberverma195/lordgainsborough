@@ -2,7 +2,6 @@ package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,11 +22,6 @@ public class OrderAccessService {
     private final JwtUtil jwtUtil;
     private final UserAuthStore identityStore;
     private final SecureRandom secureRandom = new SecureRandom();
-
-    public OrderAccessService(JwtUtil jwtUtil, UserRepository userRepository) {
-        this.jwtUtil = jwtUtil;
-        this.identityStore = new MongoUserAuthStore(userRepository, null, null);
-    }
 
     @Autowired
     public OrderAccessService(JwtUtil jwtUtil, UserAuthStore identityStore) {
@@ -68,7 +62,6 @@ public class OrderAccessService {
         return hasValidTrackingToken(order, trackingToken);
     }
 
-    /** PostgreSQL JWT ownership never falls back to a MongoDB identity. */
     public boolean canAccessPostgresOrder(CustomerOrder order, String authorization, String trackingToken) {
         if (hasValidTrackingToken(order, trackingToken)) return true;
         return identityStore instanceof PostgresUserAuthStore

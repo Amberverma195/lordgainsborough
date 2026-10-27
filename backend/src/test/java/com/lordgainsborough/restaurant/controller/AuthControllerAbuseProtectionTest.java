@@ -5,9 +5,7 @@ import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
 import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
@@ -25,7 +23,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.time.Instant;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -45,9 +42,7 @@ class AuthControllerAbuseProtectionTest {
     private static final Instant NOW = Instant.parse("2026-07-13T10:00:00Z");
 
     private final EmailSenderService emailSenderService = mock(EmailSenderService.class);
-    private final UserRepository userRepository = mock(UserRepository.class);
-    private final CustomerOrderRepository orderRepository = mock(CustomerOrderRepository.class);
-    private final OrderReviewRepository reviewRepository = mock(OrderReviewRepository.class);
+    private final UserAuthStore userRepository = mock(UserAuthStore.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private final OtpService otpService = mock(OtpService.class);
     private final SignupOtpChallengeService signupOtpChallengeService = mock(SignupOtpChallengeService.class);
@@ -63,8 +58,6 @@ class AuthControllerAbuseProtectionTest {
     private final AuthController controller = new AuthController(
             emailSenderService,
             userRepository,
-            orderRepository,
-            reviewRepository,
             jwtUtil,
             otpService,
             signupOtpChallengeService,
@@ -80,8 +73,6 @@ class AuthControllerAbuseProtectionTest {
         org.mockito.Mockito.reset(
                 emailSenderService,
                 userRepository,
-                orderRepository,
-                reviewRepository,
                 jwtUtil,
                 otpService,
                 signupOtpChallengeService,
@@ -92,8 +83,6 @@ class AuthControllerAbuseProtectionTest {
                 passwordResetService,
                 authSecurityObservability);
         when(userRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
-        when(userRepository.findByPhoneNormalized(anyString())).thenReturn(List.of());
-        when(userRepository.findByPhoneIsNotNull()).thenReturn(List.of());
         when(signupOtpChallengeService.looksLikeInitialSend(anyString())).thenReturn(true);
         when(clientIpResolver.resolve(anyString(), nullable(String.class), nullable(String.class)))
                 .thenAnswer(inv -> inv.getArgument(0));

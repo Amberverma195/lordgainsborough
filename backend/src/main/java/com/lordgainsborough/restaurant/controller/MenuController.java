@@ -1,7 +1,6 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.MenuItem;
-import com.lordgainsborough.restaurant.repository.MenuItemRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,28 +18,28 @@ import java.util.UUID;
 public class MenuController {
 
     @Autowired
-    private MenuItemRepository menuItemRepository;
+    private com.lordgainsborough.restaurant.service.PostgresCatalogStore catalog;
 
     @GetMapping
     public List<MenuItem> getAllMenuItems() {
-        return menuItemRepository.findAll();
+        return catalog.menu();
     }
 
     @GetMapping("/category/{category}")
     public List<MenuItem> getMenuItemsByCategory(@PathVariable String category) {
-        return menuItemRepository.findByCategory(category);
+        return catalog.menuByCategory(category);
     }
 
     @GetMapping("/most-loved")
     public List<MenuItem> getMostLovedMenuItems() {
-        return menuItemRepository.findAll().stream()
+        return catalog.menu().stream()
                 .filter(MenuItem::isMostLoved)
                 .toList();
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<MenuItem> getMenuItemById(@PathVariable String id) {
-        return menuItemRepository.findById(id)
+        return catalog.menuItem(id)
             .map(ResponseEntity::ok)
             .orElse(ResponseEntity.notFound().build());
     }
@@ -50,12 +49,12 @@ public class MenuController {
         if (menuItem.isAvailable() == false && menuItem.getName() != null) {
             // default to available if not explicitly set
         }
-        return menuItemRepository.save(menuItem);
+        return catalog.saveMenuItem(menuItem);
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<MenuItem> updateMenuItem(@PathVariable String id, @RequestBody MenuItem menuItem) {
-        return menuItemRepository.findById(id)
+        return catalog.menuItem(id)
             .map(existing -> {
                 existing.setName(menuItem.getName());
                 existing.setDescription(menuItem.getDescription());
@@ -63,35 +62,35 @@ public class MenuController {
                 existing.setCategory(menuItem.getCategory());
                 existing.setImage(menuItem.getImage());
                 existing.setAvailable(menuItem.isAvailable());
-                return ResponseEntity.ok(menuItemRepository.save(existing));
+                return ResponseEntity.ok(catalog.saveMenuItem(existing));
             })
             .orElse(ResponseEntity.notFound().build());
     }
 
     @PatchMapping("/{id}/availability")
     public ResponseEntity<MenuItem> toggleAvailability(@PathVariable String id) {
-        return menuItemRepository.findById(id)
+        return catalog.menuItem(id)
             .map(existing -> {
                 existing.setAvailable(!existing.isAvailable());
-                return ResponseEntity.ok(menuItemRepository.save(existing));
+                return ResponseEntity.ok(catalog.saveMenuItem(existing));
             })
             .orElse(ResponseEntity.notFound().build());
     }
 
     @PatchMapping("/{id}/most-loved")
     public ResponseEntity<MenuItem> toggleMostLoved(@PathVariable String id) {
-        return menuItemRepository.findById(id)
+        return catalog.menuItem(id)
             .map(existing -> {
                 existing.setMostLoved(!existing.isMostLoved());
-                return ResponseEntity.ok(menuItemRepository.save(existing));
+                return ResponseEntity.ok(catalog.saveMenuItem(existing));
             })
             .orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteMenuItem(@PathVariable String id) {
-        if (menuItemRepository.existsById(id)) {
-            menuItemRepository.deleteById(id);
+        if (catalog.menuItemExists(id)) {
+            catalog.deleteMenuItem(id);
             return ResponseEntity.ok().build();
         }
         return ResponseEntity.notFound().build();

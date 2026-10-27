@@ -6,11 +6,6 @@ import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import java.time.Instant;
 import java.util.Optional;
 
-/**
- * Storage SPI for signup OTP challenge persistence.
- * Implementations provide atomic persistence operations for MongoDB (default)
- * and PostgreSQL.
- */
 public interface SignupOtpChallengeStore {
 
     /**
@@ -40,14 +35,6 @@ public interface SignupOtpChallengeStore {
      */
     void deleteById(String emailKey);
 
-    /**
-     * Atomically claims one resend slot, rotates the OTP digest, and reserves a send operation.
-     * <p>
-     * <b>Cooldown Policy & Parity Invariant:</b> Resend requires {@code nextResendAt <= now}.
-     * If {@code nextResendAt} is null or uninitialized, resend fails closed (denies resend),
-     * ensuring strict cross-backend behavioral parity between PostgreSQL and MongoDB.
-     * </p>
-     */
     Optional<SignupOtpChallenge> tryAtomicResend(
             String emailKey,
             String newOtpDigest,

@@ -7,12 +7,6 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Spring Data JPA repository for {@link JpaUser} entities in {@code users}.
- * <p>
- * Mirrors all query methods defined on the MongoDB {@code UserRepository}.
- * </p>
- */
 @Repository
 public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
 

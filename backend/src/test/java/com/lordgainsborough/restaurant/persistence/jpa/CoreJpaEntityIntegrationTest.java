@@ -24,7 +24,6 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
@@ -32,7 +31,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -55,12 +53,12 @@ public class CoreJpaEntityIntegrationTest {
     private LocalContainerEntityManagerFactoryBean emfBean;
     private EntityManagerFactory emf;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EntityScan(basePackageClasses = JpaUser.class)
     static class TestEntityScanConfig {}
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-004 PostgreSQL integration tests")
                 .isNotBlank();

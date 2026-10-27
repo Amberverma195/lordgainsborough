@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
-/** Isolated relational cart path. Never resolves a Mongo identity or creates a user. */
 public class PostgresCartStore implements CartStore {
     private final JpaCartRepository carts;
     private final JpaUserRepository users;

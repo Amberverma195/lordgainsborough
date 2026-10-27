@@ -1,17 +1,8 @@
 package com.lordgainsborough.restaurant.config;
 
-import com.lordgainsborough.restaurant.controller.CategoryController;
-import com.lordgainsborough.restaurant.controller.MenuController;
-import com.lordgainsborough.restaurant.controller.OrderController;
-import com.lordgainsborough.restaurant.model.CustomerOrder;
-import com.lordgainsborough.restaurant.model.StoreSettings;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.MenuItemRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
 import com.lordgainsborough.restaurant.service.*;
 import static org.mockito.Mockito.*;
 import com.lordgainsborough.restaurant.model.Category;
-import com.lordgainsborough.restaurant.model.MenuItem;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaCatalogMigration;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaCategory;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaMenuItem;
@@ -31,10 +22,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration;
-import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -52,7 +40,6 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.sql.Connection;
@@ -62,7 +49,6 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
@@ -212,7 +198,7 @@ public class PostgresCatalogInitializerIntegrationTest {
         }
     }
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EnableTransactionManagement
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     @EntityScan(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.entity")
@@ -265,7 +251,7 @@ public class PostgresCatalogInitializerIntegrationTest {
     }
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-012 integration tests")
                 .isNotBlank();
@@ -322,33 +308,6 @@ public class PostgresCatalogInitializerIntegrationTest {
     }
 
     @Test
-    @Order(2)
-    @DisplayName("Req 2: Default MongoDB profile does not activate PostgreSQL seeding")
-    void test02_defaultMongoProfileDoesNotActivatePostgresSeeding() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(PostgresCatalogInitializerConfiguration.class)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(PostgresCatalogSynchronizationService.class);
-                    assertThat(ctx).doesNotHaveBean("postgresCatalogCommandLineRunner");
-                });
-    }
-
-    @Test
-    @Order(3)
-    @DisplayName("Req 3: PostgreSQL seeding does not activate without explicit opt-in property")
-    void test03_postgresSeedingDoesNotActivateWithoutExplicitOptIn() {
-        new ApplicationContextRunner()
-                .withPropertyValues("spring.profiles.active=postgres-migration")
-                .withUserConfiguration(PostgresCatalogInitializerConfiguration.class)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(PostgresCatalogSynchronizationService.class);
-                    assertThat(ctx).doesNotHaveBean("postgresCatalogCommandLineRunner");
-                });
-    }
-
-    @Test
     @Order(4)
     @DisplayName("Req 4: Explicit test activation invokes PostgreSQL initializer configuration")
     void test04_explicitTestActivationInvokesPostgresInitializerCorrectly() {
@@ -357,6 +316,9 @@ public class PostgresCatalogInitializerIntegrationTest {
                         "spring.profiles.active=test",
                         "app.catalog.postgres-seed.enabled=true"
                 )
+                .withBean("transactionManager", org.springframework.transaction.PlatformTransactionManager.class,
+                        () -> new org.springframework.orm.jpa.JpaTransactionManager(entityManagerFactory))
+                .withBean(DataSource.class, () -> { var ds=new PGSimpleDataSource(); ds.setUrl(testJdbcUrl); ds.setUser("postgres"); ds.setPassword("postgres"); return ds; })
                 .withBean(JpaCategoryRepository.class, () -> categoryRepository)
                 .withBean(JpaMenuItemRepository.class, () -> menuItemRepository)
                 .withBean(JpaCatalogMigrationRepository.class, () -> migrationRepository)
@@ -889,95 +851,6 @@ public class PostgresCatalogInitializerIntegrationTest {
     }
 
     @Test
-    @Order(31)
-    @DisplayName("Req 31: Existing MongoDB DataInitializer still functions with shared specifications")
-    void test31_existingMongoDataInitializerStillFunctions() {
-        DataInitializer mongoInitializer = new DataInitializer();
-        List<Category> savedCategories = new ArrayList<>();
-        List<MenuItem> savedItems = new ArrayList<>();
-
-        com.lordgainsborough.restaurant.repository.CategoryRepository mockCatRepo =
-                org.mockito.Mockito.mock(com.lordgainsborough.restaurant.repository.CategoryRepository.class);
-        org.mockito.Mockito.when(mockCatRepo.save(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
-            savedCategories.add(invocation.getArgument(0));
-            return invocation.getArgument(0);
-        });
-
-        com.lordgainsborough.restaurant.repository.MenuItemRepository mockMenuRepo =
-                org.mockito.Mockito.mock(com.lordgainsborough.restaurant.repository.MenuItemRepository.class);
-        org.mockito.Mockito.when(mockMenuRepo.save(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
-            savedItems.add(invocation.getArgument(0));
-            return invocation.getArgument(0);
-        });
-
-        mongoInitializer.syncCategories(mockCatRepo);
-        mongoInitializer.syncMenu(mockMenuRepo);
-
-        assertThat(savedCategories).hasSize(14);
-        assertThat(savedItems).hasSize(119);
-    }
-
-    @Test
-    @Order(32)
-    @DisplayName("Req 32: No existing controller or service is switched to PostgreSQL")
-    void test32_noExistingControllerOrServiceIsSwitchedToPostgres() {
-        // MenuController must still declare com.lordgainsborough.restaurant.repository.MenuItemRepository (MongoDB)
-        Field[] menuFields = MenuController.class.getDeclaredFields();
-        boolean hasMongoMenuRepo = false;
-        boolean hasJpaMenuRepo = false;
-        for (Field f : menuFields) {
-            if (f.getType().equals(com.lordgainsborough.restaurant.repository.MenuItemRepository.class)) {
-                hasMongoMenuRepo = true;
-            }
-            if (f.getType().equals(JpaMenuItemRepository.class)) {
-                hasJpaMenuRepo = true;
-            }
-        }
-        assertThat(hasMongoMenuRepo).isTrue();
-        assertThat(hasJpaMenuRepo).isFalse();
-
-        // CategoryController must still declare com.lordgainsborough.restaurant.repository.CategoryRepository (MongoDB)
-        Field[] catFields = CategoryController.class.getDeclaredFields();
-        boolean hasMongoCatRepo = false;
-        boolean hasJpaCatRepo = false;
-        for (Field f : catFields) {
-            if (f.getType().equals(com.lordgainsborough.restaurant.repository.CategoryRepository.class)) {
-                hasMongoCatRepo = true;
-            }
-            if (f.getType().equals(JpaCategoryRepository.class)) {
-                hasJpaCatRepo = true;
-            }
-        }
-        assertThat(hasMongoCatRepo).isTrue();
-        assertThat(hasJpaCatRepo).isFalse();
-
-        // PG-017 moves menu access behind an SPI. Prove default runtime still queries Mongo,
-        // rather than freezing a private field layout that prevents an opt-in adapter.
-        var mongoMenu = mock(MenuItemRepository.class);
-        var storeSettings = mock(StoreSettingsService.class);
-        when(storeSettings.getSettings()).thenReturn(new StoreSettings());
-        new ApplicationContextRunner()
-                .withUserConfiguration(PostgresOrderPersistenceConfiguration.class, MongoCustomerOrderStore.class, OrderController.class)
-                .withBean(CustomerOrderRepository.class, () -> mock(CustomerOrderRepository.class))
-                .withBean(MenuItemRepository.class, () -> mongoMenu)
-                .withBean(OrderReviewRepository.class, () -> mock(OrderReviewRepository.class))
-                .withBean(StoreSettingsService.class, () -> storeSettings)
-                .withBean(CustomerNoShowService.class, () -> mock(CustomerNoShowService.class))
-                .withBean(OrderAccessService.class, () -> mock(OrderAccessService.class))
-                .withBean(OrderRealtimeService.class, () -> mock(OrderRealtimeService.class))
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx.getBean(CustomerOrderStore.class)).isInstanceOf(MongoCustomerOrderStore.class);
-                    assertThat(ctx).doesNotHaveBean(PostgresCustomerOrderStore.class);
-                    CustomerOrder order = new CustomerOrder();
-                    CustomerOrder.OrderItem item = new CustomerOrder.OrderItem();
-                    item.setMenuItemId("unknown"); order.getItems().add(item);
-                    assertThat(ctx.getBean(OrderController.class).createOrder(order).getStatusCode().value()).isEqualTo(400);
-                    verify(mongoMenu).findById("unknown");
-                });
-    }
-
-    @Test
     @Order(33)
     @DisplayName("Req 33: Isolated relational test context contains correct JPA repositories and no MongoDB beans")
     void test33_isolatedRelationalTestContextContainsCorrectJpaRepositories() {
@@ -990,48 +863,13 @@ public class PostgresCatalogInitializerIntegrationTest {
         assertThat(context.containsBean("catalogMigrationRepository")).isFalse();
     }
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @AutoConfigurationPackage
     static class DefaultProfileTestPackageConfig {}
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class DefaultProfileIsolationConfig {}
-
-    @Test
-    @Order(34)
-    @DisplayName("Req 34: Default MongoDB configuration remains unaffected by relational exclusions")
-    void test34_defaultMongoConfigurationRemainsUnaffected() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(DefaultProfileTestPackageConfig.class)
-                .withConfiguration(AutoConfigurations.of(DataJpaRepositoriesAutoConfiguration.class))
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(JpaCategoryRepository.class);
-                    assertThat(ctx).doesNotHaveBean(JpaMenuItemRepository.class);
-                    assertThat(ctx).doesNotHaveBean(JpaCatalogMigrationRepository.class);
-                });
-
-        new ApplicationContextRunner()
-                .withUserConfiguration(DefaultProfileIsolationConfig.class)
-                .withPropertyValues(
-                        "spring.autoconfigure.exclude="
-                                + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
-                                + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration,"
-                                + "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration,"
-                                + "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
-                        "spring.flyway.enabled=false"
-                )
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(DataSource.class);
-                    assertThat(ctx).doesNotHaveBean(EntityManagerFactory.class);
-                    assertThat(ctx).doesNotHaveBean(PostgresCatalogSynchronizationService.class);
-                    assertThat(ctx).doesNotHaveBean(JpaCategoryRepository.class);
-                    assertThat(ctx).doesNotHaveBean(JpaMenuItemRepository.class);
-                    assertThat(ctx).doesNotHaveBean(JpaCatalogMigrationRepository.class);
-                });
-    }
 
     @Test
     @Order(35)

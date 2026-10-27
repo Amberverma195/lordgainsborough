@@ -1,7 +1,7 @@
 package com.lordgainsborough.restaurant.security;
 
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.service.KdsAccessService;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -20,7 +20,7 @@ import static org.mockito.Mockito.when;
 class AdminAuthInterceptorTest {
 
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
-    private final UserRepository userRepository = mock(UserRepository.class);
+    private final UserAuthStore userRepository = mock(UserAuthStore.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     private final KdsAccessService kdsAccessService = mock(KdsAccessService.class);
     private final AdminAuthInterceptor interceptor = new AdminAuthInterceptor(jwtUtil, userRepository, kdsAccessService);
 

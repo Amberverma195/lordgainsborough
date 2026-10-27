@@ -2,7 +2,7 @@ package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,7 +17,7 @@ import static org.mockito.Mockito.when;
 class OrderAccessServiceTest {
 
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
-    private final UserRepository userRepository = mock(UserRepository.class);
+    private final UserAuthStore userRepository = mock(UserAuthStore.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     private final OrderAccessService service = new OrderAccessService(jwtUtil, userRepository);
 
     private CustomerOrder order;

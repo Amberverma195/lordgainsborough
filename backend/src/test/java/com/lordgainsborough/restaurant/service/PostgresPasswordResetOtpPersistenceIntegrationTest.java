@@ -6,22 +6,11 @@ import ch.qos.logback.core.read.ListAppender;
 import com.lordgainsborough.restaurant.config.PasswordResetProperties;
 import com.lordgainsborough.restaurant.config.PostgresPasswordResetPersistenceConfiguration;
 import com.lordgainsborough.restaurant.config.SignupAbuseProperties;
-import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetChallengeStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetOtpChallenge;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser;
-import com.lordgainsborough.restaurant.repository.PasswordResetOtpChallengeRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
-import com.lordgainsborough.restaurant.controller.AuthController;
-import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
-import com.lordgainsborough.restaurant.dto.SendOtpRequest;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
-import com.lordgainsborough.restaurant.security.ClientIpResolver;
-import jakarta.persistence.EntityManagerFactory;
-import jakarta.servlet.http.HttpServletRequest;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.springframework.orm.jpa.JpaTransactionManager;
@@ -31,7 +20,6 @@ import java.util.Properties;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,41 +35,32 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.support.DefaultTransactionDefinition;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -205,7 +184,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @BeforeAll
     void setUpDatabase() throws Exception {
-        testPort = System.getProperty("test.postgres.port", "54353");
+        testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         boolean mandatory = Boolean.getBoolean("test.postgres.mandatory")
                 || "true".equalsIgnoreCase(System.getenv("CI_POSTGRES_MANDATORY"))
                 || "true".equalsIgnoreCase(System.getenv("CI"));
@@ -249,8 +228,6 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                     abuseLimiter,
                     handleService,
                     properties,
-                    null,
-                    null,
                     emailSenderService,
                     hasher,
                     observability
@@ -296,8 +273,6 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 abuseLimiter,
                 handleService,
                 properties,
-                null,
-                null,
                 emailSenderService,
                 hasher,
                 observability
@@ -1068,7 +1043,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     // GROUP 8: Spring Context Configuration & Selection
     // =========================================================================
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     static class MinimalSpringContextConfig {
         @Bean
         public DataSource dataSource(PostgresPasswordResetOtpPersistenceIntegrationTest testInstance) {
@@ -1090,69 +1065,9 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
             return testInstance.hasher;
         }
 
-        @Bean
-        public PasswordResetOtpChallengeRepository repository() {
-            return mock(PasswordResetOtpChallengeRepository.class);
-        }
-
-        @Bean
-        public MongoTemplate mongoTemplate() {
-            return mock(MongoTemplate.class);
-        }
-
-        @Bean
-        public UserRepository userRepository() {
-            return mock(UserRepository.class);
-        }
     }
 
-    @Configuration
-    static class MixedAuthControllerSpringContextConfig extends MinimalSpringContextConfig {
-        @Bean
-        public AuthController authController(
-                UserRepository userRepository,
-                PasswordResetService passwordResetService,
-                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
-                @org.springframework.beans.factory.annotation.Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
-            return new AuthController(
-                    mock(EmailSenderService.class),
-                    userRepository,
-                    mock(CustomerOrderRepository.class),
-                    mock(OrderReviewRepository.class),
-                    mock(JwtUtil.class),
-                    mock(OtpService.class),
-                    mock(SignupOtpChallengeService.class),
-                    mock(SignupAbuseLimiter.class),
-                    mock(ClientIpResolver.class),
-                    mock(SignupOtpObservability.class),
-                    mock(LoginRateLimiter.class),
-                    passwordResetService,
-                    mock(AuthSecurityObservability.class),
-                    postgresUserAuthEnabled,
-                    allowIsolatedTest
-            );
-        }
-
-        @Bean
-        public PasswordResetService passwordResetService(
-                PasswordResetOtpChallengePersistence persistence,
-                PasswordResetProperties properties,
-                AbuseIpHasher hasher) {
-            return new PasswordResetService(
-                    persistence,
-                    mock(PasswordResetAbuseLimiter.class),
-                    mock(PasswordResetPublicHandleService.class),
-                    properties,
-                    null,
-                    null,
-                    mock(EmailSenderService.class),
-                    hasher,
-                    mock(AuthSecurityObservability.class)
-            );
-        }
-    }
-
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     static class RealJpaSpringContextConfig extends MinimalSpringContextConfig {
         @Bean
         public LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource dataSource) {
@@ -1174,11 +1089,10 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     @DisplayName("27. Spring DI selects PostgresPasswordResetOtpChallengeStore when opted-in")
     void test27_springContextDISelectsPostgresWhenOptedIn() {
         requirePostgres();
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
                         PostgresPasswordResetPersistenceConfiguration.class,
-                        MongoPasswordResetOtpChallengeStore.class,
                         PasswordResetOtpChallengePersistence.class
                 )
                 .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-password-reset.enabled=true")
@@ -1193,31 +1107,11 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     }
 
     @Test
-    @Order(28)
-    @DisplayName("28. Spring DI selects MongoPasswordResetOtpChallengeStore by default")
-    void test28_springContextDISelectsMongoByDefault() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(
-                        MinimalSpringContextConfig.class,
-                        PostgresPasswordResetPersistenceConfiguration.class,
-                        MongoPasswordResetOtpChallengeStore.class,
-                        PasswordResetOtpChallengePersistence.class
-                )
-                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    PasswordResetOtpChallengePersistence persistenceBean = context.getBean(PasswordResetOtpChallengePersistence.class);
-                    assertNotNull(persistenceBean);
-                    assertThat(persistenceBean.getStore()).isInstanceOf(MongoPasswordResetOtpChallengeStore.class);
-                });
-    }
-
-    @Test
     @Order(29)
     @DisplayName("29. Spring transactional proxy verification for PostgresPasswordResetOtpChallengeStore")
     void test29_springTransactionalProxyVerified() {
         requirePostgres();
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
                         PostgresPasswordResetPersistenceConfiguration.class
@@ -1269,95 +1163,6 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     // =========================================================================
 
     @Test
-    @Order(32)
-    @DisplayName("32. Startup guard throws IllegalStateException when AuthController is loaded with uncoordinated Postgres reset storage")
-    void test32_startupGuardRejectsMixedBackendActivation() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(
-                        MixedAuthControllerSpringContextConfig.class,
-                        PostgresPasswordResetPersistenceConfiguration.class,
-                        MongoPasswordResetOtpChallengeStore.class,
-                        PasswordResetOtpChallengePersistence.class
-                )
-                .withPropertyValues(
-                        "spring.profiles.active=postgres-migration",
-                        "app.security.postgres-password-reset.enabled=true",
-                        "app.security.postgres-user-auth.enabled=false"
-                )
-                .withSystemProperties("test.postgres.port=" + testPort)
-                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
-                .run(context -> {
-                    assertThat(context).hasFailed();
-                    assertThat(org.springframework.core.NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessageContaining("Unsupported mixed-backend activation");
-                });
-    }
-
-    @Test
-    @Order(33)
-    @DisplayName("33. Startup guard rejects mixed-backend activation even when postgres-user-auth is enabled while MongoDB UserRepository is still injected")
-    void test33_startupGuardRejectsMixedBackendEvenWithPostgresUserAuthFlagEnabled() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(
-                        MixedAuthControllerSpringContextConfig.class,
-                        PostgresPasswordResetPersistenceConfiguration.class,
-                        MongoPasswordResetOtpChallengeStore.class,
-                        PasswordResetOtpChallengePersistence.class
-                )
-                .withPropertyValues(
-                        "spring.profiles.active=postgres-migration",
-                        "app.security.postgres-password-reset.enabled=true",
-                        "app.security.postgres-user-auth.enabled=true"
-                )
-                .withSystemProperties("test.postgres.port=" + testPort)
-                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
-                .run(context -> {
-                    assertThat(context).hasFailed();
-                    assertThat(org.springframework.core.NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
-                            .isInstanceOf(IllegalStateException.class)
-                            .hasMessageContaining("Unsupported mixed-backend activation");
-                });
-    }
-
-    @Test
-    @Order(34)
-    @DisplayName("34. Startup guard permits isolated test configuration when explicitly opted-in via allow-isolated-test")
-    void test34_startupGuardPermitsIsolatedTestOptIn() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(
-                        MixedAuthControllerSpringContextConfig.class,
-                        PostgresPasswordResetPersistenceConfiguration.class,
-                        MongoPasswordResetOtpChallengeStore.class,
-                        PasswordResetOtpChallengePersistence.class
-                )
-                .withPropertyValues(
-                        "spring.profiles.active=postgres-migration",
-                        "app.security.postgres-password-reset.enabled=true",
-                        "app.security.postgres-password-reset.allow-isolated-test=true"
-                )
-                .withSystemProperties("test.postgres.port=" + testPort)
-                .withBean(PostgresPasswordResetOtpPersistenceIntegrationTest.class, () -> this)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                });
-    }
-
-    @Test
-    @Order(34)
-    @DisplayName("34. PasswordResetService rejects requestInitial with MongoDB User when backed by PostgreSQL")
-    void test34_passwordResetServiceRejectsMongoUserWhenPostgresStoreActive() {
-        requirePostgres();
-        User mongoUser = new User();
-        mongoUser.setId("mongo-user-123");
-        mongoUser.setEmail(TEST_USER_EMAIL);
-
-        assertThatThrownBy(() -> service.requestInitial(TEST_USER_EMAIL, Optional.of(mongoUser), "127.0.0.1", "k-mixed"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Unsupported mixed-backend call");
-    }
-
-    @Test
     @Order(35)
     @DisplayName("35. PasswordResetService accepts requestInitialForJpaUser when backed by PostgreSQL")
     void test35_passwordResetServiceAcceptsJpaUserWhenPostgresStoreActive() {
@@ -1367,65 +1172,6 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         PasswordResetService.Result result = service.requestInitialForJpaUser(
                 TEST_USER_EMAIL, Optional.of(jpaUser), "127.0.0.1", "k-jpa-success");
         assertEquals(HttpStatus.ACCEPTED, result.status());
-    }
-
-    @Test
-    @Order(36)
-    @DisplayName("36. AuthController endpoints reject mixed-backend invocation when reset storage is PostgreSQL")
-    void test36_authControllerEndpointsRejectMixedBackendInvocation() {
-        AuthController authController = new AuthController(
-                mock(EmailSenderService.class),
-                mock(UserRepository.class),
-                mock(CustomerOrderRepository.class),
-                mock(OrderReviewRepository.class),
-                mock(JwtUtil.class),
-                mock(OtpService.class),
-                mock(SignupOtpChallengeService.class),
-                mock(SignupAbuseLimiter.class),
-                mock(ClientIpResolver.class),
-                mock(SignupOtpObservability.class),
-                mock(LoginRateLimiter.class),
-                service,
-                mock(AuthSecurityObservability.class),
-                false
-        );
-
-        SendOtpRequest sendReq = new SendOtpRequest();
-        sendReq.setEmail(TEST_USER_EMAIL);
-        assertThatThrownBy(() -> authController.sendPasswordResetOtp("k-send", sendReq, mock(HttpServletRequest.class)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("PostgreSQL password reset path is isolated");
-
-        ResetPasswordRequest resetReq = new ResetPasswordRequest();
-        resetReq.setEmail(TEST_USER_EMAIL);
-        resetReq.setChallengeId("ch-test");
-        resetReq.setOtp("123456");
-        resetReq.setPassword(NEW_PASSWORD);
-        assertThatThrownBy(() -> authController.resetPassword("k-reset", resetReq, mock(HttpServletRequest.class)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("PostgreSQL password reset path is isolated");
-
-        // Even with postgresUserAuthEnabled=true, if UserRepository is still MongoDB, endpoints reject invocation
-        AuthController authControllerWithFlag = new AuthController(
-                mock(EmailSenderService.class),
-                mock(UserRepository.class),
-                mock(CustomerOrderRepository.class),
-                mock(OrderReviewRepository.class),
-                mock(JwtUtil.class),
-                mock(OtpService.class),
-                mock(SignupOtpChallengeService.class),
-                mock(SignupAbuseLimiter.class),
-                mock(ClientIpResolver.class),
-                mock(SignupOtpObservability.class),
-                mock(LoginRateLimiter.class),
-                service,
-                mock(AuthSecurityObservability.class),
-                true
-        );
-
-        assertThatThrownBy(() -> authControllerWithFlag.sendPasswordResetOtp("k-send-flag", sendReq, mock(HttpServletRequest.class)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("PostgreSQL password reset path is isolated");
     }
 
     // =========================================================================
@@ -1899,7 +1645,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     @DisplayName("47. Production-style JpaTransactionManager configuration selection and real reset execution")
     void test47_productionStyleJpaTransactionManagerSelectionAndResetExecution() {
         requirePostgres();
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withUserConfiguration(
                         RealJpaSpringContextConfig.class,
                         PostgresPasswordResetPersistenceConfiguration.class,

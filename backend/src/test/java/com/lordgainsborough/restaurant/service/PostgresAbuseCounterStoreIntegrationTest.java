@@ -1,7 +1,6 @@
 package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.config.PostgresAbuseCounterStoreConfiguration;
-import com.lordgainsborough.restaurant.model.SignupAbuseLimit;
 import com.lordgainsborough.restaurant.model.SignupAbuseLimit.BucketType;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -15,34 +14,24 @@ import org.junit.jupiter.api.TestMethodOrder;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import org.mockito.Mockito;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.data.mongodb.MongoDatabaseFactory;
-import org.springframework.data.mongodb.MongoTransactionManager;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -133,7 +122,7 @@ public class PostgresAbuseCounterStoreIntegrationTest {
     }
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-013 integration tests")
                 .isNotBlank();
@@ -915,22 +904,10 @@ public class PostgresAbuseCounterStoreIntegrationTest {
     // =========================================================================
 
     @Test
-    @Order(35)
-    @DisplayName("Req 35: Default MongoDB context does not register PostgresAbuseCounterStore")
-    void test35_defaultContextInjectsMongoAbuseCounterStoreAndNotPostgres() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(PostgresAbuseCounterStore.class);
-                });
-    }
-
-    @Test
     @Order(36)
     @DisplayName("Req 36: Opt-in profile and property activates PostgresAbuseCounterStore")
     void test36_optInProfileAndPropertyActivatesPostgresAbuseCounterStore() {
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
                 .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-abuse-store.enabled=true")
                 .withBean(DataSource.class, () -> dataSource)
@@ -950,98 +927,6 @@ public class PostgresAbuseCounterStoreIntegrationTest {
         AbuseCounterStore getStore() {
             return store;
         }
-    }
-
-    @Test
-    @Order(37)
-    @DisplayName("Req 37: Combined context with both Mongo and Postgres stores resolves unambiguously to Postgres @Primary")
-    void test37_combinedContextWithBothStoresResolvesUnambiguouslyToPostgres() {
-        MongoTemplate mockMongoTemplate = Mockito.mock(MongoTemplate.class);
-
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongoTemplate)
-                .withUserConfiguration(MongoAbuseCounterStore.class, TestAbuseConsumer.class)
-                .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-abuse-store.enabled=true")
-                .withBean(DataSource.class, () -> dataSource)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-
-                    // Both implementations exist simultaneously in the same Spring context
-                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
-                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
-
-                    // Unqualified injection resolves explicitly and unambiguously to Postgres (@Primary)
-                    assertThat(ctx.getBean(AbuseCounterStore.class))
-                            .isInstanceOf(PostgresAbuseCounterStore.class);
-                    assertThat(ctx.getBean(TestAbuseConsumer.class).getStore())
-                            .isInstanceOf(PostgresAbuseCounterStore.class);
-
-                    // Named qualifier lookups work for both implementations
-                    assertThat(ctx.getBean("mongoAbuseCounterStore", AbuseCounterStore.class))
-                            .isInstanceOf(MongoAbuseCounterStore.class);
-                    assertThat(ctx.getBean("postgresAbuseCounterStore", AbuseCounterStore.class))
-                            .isInstanceOf(PostgresAbuseCounterStore.class);
-                });
-    }
-
-    @Test
-    @Order(38)
-    @DisplayName("Req 38: Default context with MongoAbuseCounterStore resolves unambiguously to Mongo")
-    void test38_defaultContextWithMongoStoreResolvesToMongo() {
-        MongoTemplate mockMongoTemplate = Mockito.mock(MongoTemplate.class);
-
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongoTemplate)
-                .withUserConfiguration(MongoAbuseCounterStore.class, TestAbuseConsumer.class)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-
-                    // Postgres store is not loaded under default settings
-                    assertThat(ctx).doesNotHaveBean(PostgresAbuseCounterStore.class);
-                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
-
-                    // Unqualified injection resolves strictly to MongoAbuseCounterStore
-                    assertThat(ctx.getBean(AbuseCounterStore.class))
-                            .isInstanceOf(MongoAbuseCounterStore.class);
-                    assertThat(ctx.getBean(TestAbuseConsumer.class).getStore())
-                            .isInstanceOf(MongoAbuseCounterStore.class);
-                });
-    }
-
-    @Test
-    @Order(39)
-    @DisplayName("Req 39: Spring transactional proxy operates with independent fallback transactionManager and coexisting Mongo")
-    void test39_springTransactionalProxyWithIndependentTransactionManagerWorks() {
-        MongoDatabaseFactory mockMongoDbFactory = Mockito.mock(MongoDatabaseFactory.class);
-        MongoTransactionManager mockMongoTxManager = new MongoTransactionManager(mockMongoDbFactory);
-
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresAbuseCounterStoreConfiguration.class))
-                .withBean("mongoTransactionManager", PlatformTransactionManager.class, () -> mockMongoTxManager)
-                .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-abuse-store.enabled=true")
-                .withBean(DataSource.class, () -> dataSource)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).hasBean("transactionManager");
-                    assertThat(ctx).hasBean("mongoTransactionManager");
-                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
-
-                    AbuseCounterStore proxyStore = ctx.getBean(AbuseCounterStore.class);
-                    // Verify proxy is created and transaction interception works
-                    assertThat(AopUtils.isAopProxy(proxyStore)).isTrue();
-
-                    String proxyTestId = "proxy-tx-test-" + UUID.randomUUID();
-                    Instant ws = Instant.now().truncatedTo(ChronoUnit.SECONDS);
-                    Instant exp = ws.plusSeconds(300);
-
-                    long count = proxyStore.incrementAndGet(proxyTestId, BucketType.INITIAL_SEND_IP, "hash-proxy-tx", ws, exp);
-                    assertThat(count).isEqualTo(1L);
-
-                    long fetched = proxyStore.getCount(proxyTestId, Instant.now());
-                    assertThat(fetched).isEqualTo(1L);
-                });
     }
 
     // =========================================================================

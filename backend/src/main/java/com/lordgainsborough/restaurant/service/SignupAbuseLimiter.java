@@ -10,10 +10,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 
-/**
- * Fixed-window counters for signup OTP secondary abuse limits.
- * Documents use keyed IP hashes and TTL via {@code expiresAt} (Mongo store).
- */
 @Service
 public class SignupAbuseLimiter {
 

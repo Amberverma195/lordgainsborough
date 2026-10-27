@@ -10,10 +10,6 @@ import com.lordgainsborough.restaurant.service.SignupOtpObservability;
 
 import java.util.Map;
 
-/**
- * Ensures auth clients never receive stack traces, Mongo errors, provider details,
- * or internal class names.
- */
 @RestControllerAdvice(assignableTypes = AuthController.class)
 public class AuthExceptionHandler {
 

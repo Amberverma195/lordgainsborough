@@ -4,7 +4,6 @@ import com.lordgainsborough.restaurant.controller.ReservationController;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.JpaReservationRepository;
 import com.lordgainsborough.restaurant.security.AdminAuthInterceptor;
 import com.lordgainsborough.restaurant.service.*;
-import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -14,12 +13,9 @@ import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 @Configuration(proxyBeanMethods=false)
-@Profile({"postgres-migration","test"})
-@ConditionalOnProperty(name="app.reservations.postgres.enabled",havingValue="true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresReservationPersistenceConfiguration {
-    @Bean("reservationJpaTransactionManager") JpaTransactionManager reservationJpaTransactionManager(EntityManagerFactory emf) { return new JpaTransactionManager(emf); }
-    @Bean("transactionManager") @ConditionalOnMissingBean(name="transactionManager")
-    JpaTransactionManager reservationRepositoryTransactionManager(EntityManagerFactory emf) { return new JpaTransactionManager(emf); }
+
     @Bean @Primary PostgresReservationStore postgresReservationStore(JpaReservationRepository repository, Clock clock,
             @Qualifier("reservationJpaTransactionManager") JpaTransactionManager manager) {
         return new PostgresReservationStore(repository,manager,clock);

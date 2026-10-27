@@ -6,14 +6,12 @@ import com.lordgainsborough.restaurant.service.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.SmartInitializingSingleton;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 @Configuration(proxyBeanMethods=false)
-@Profile({"postgres-migration","test"})
-@ConditionalOnProperty(name="app.reviews.postgres.enabled",havingValue="true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresReviewPersistenceConfiguration {
     @Bean @Primary PostgresReviewStore postgresReviewStore(JpaCustomerOrderRepository orders, JpaOrderReviewRepository reviews,
             PostgresCustomerOrderStore checkout, OrderAccessService access, Clock clock,

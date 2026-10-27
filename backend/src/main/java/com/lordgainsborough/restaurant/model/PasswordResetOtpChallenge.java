@@ -1,20 +1,13 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
-
 import java.time.Instant;
 
-@Document(collection = "password_reset_otp_challenges")
 public class PasswordResetOtpChallenge {
 
     public enum Purpose { PASSWORD_RESET }
 
-    @Id
     private String emailKey;
 
-    @Indexed(name = "password_reset_challenge_id_unique", unique = true)
     private String challengeId;
 
     private String userId;
@@ -23,7 +16,6 @@ public class PasswordResetOtpChallenge {
     private String codeDigest;
     private Instant codeExpiresAt;
 
-    @Indexed(name = "password_reset_challenge_ttl", expireAfterSeconds = 0)
     private Instant challengeExpiresAt;
 
     private Instant nextResendAt;

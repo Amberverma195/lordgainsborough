@@ -65,7 +65,7 @@ public class SocketIoConfig {
         });
 
         SocketIOServer server = new SocketIOServer(config);
-        server.addNamespace("/").addAuthTokenListener((authToken, client) -> {
+        server.getNamespace(com.corundumstudio.socketio.namespace.Namespace.DEFAULT_NAME).addAuthTokenListener((authToken, client) -> {
             synchronized (client) {
                 try {
                     revoke(client);
@@ -74,7 +74,9 @@ public class SocketIoConfig {
                             handshake.getSingleUrlParam("role"), authValue(authToken, "token", 8192),
                             authValue(authToken, "trackingToken", 43), resolveHandshakeIp(handshake, clientIpResolver));
                     if (grant.isEmpty()) return deniedAuthorization();
-                    client.set(ROOM_GRANT, grant.get());
+                    // Engine.IO can invoke connect listeners before namespace authentication.
+                    // Admit rooms here after the real auth payload has been validated.
+                    admit(client, grant.get());
                     return AuthTokenResult.AuthTokenResultSuccess;
                 } catch (RuntimeException failure) {
                     safelyRevoke(client);
@@ -87,7 +89,6 @@ public class SocketIoConfig {
             synchronized (client) {
                 try {
                     SocketOrderAuthorizationService.RoomGrant grant = client.get(ROOM_GRANT);
-                    client.del(ROOM_GRANT); // A reconnect/namespace authentication cannot reuse this permission.
                     clearProtectedRooms(client);
                     var handshake = client.getHandshakeData();
                     String orderId = handshake.getSingleUrlParam("orderId");
@@ -96,7 +97,17 @@ public class SocketIoConfig {
                     // netty-socketio 2.0.14 skips namespace auth for a null auth payload (and older Engine.IO).
                     // Such a path can enter no order room; kitchen-only connections still pass the real IP gate.
                     if (grant == null) {
-                        if (orderId != null) { denyConnection(client); return; }
+                        if (orderId != null) {
+                            // This is provisional transport connectivity, not an order-room grant.
+                            // The library skips namespace authentication for an absent auth payload.
+                            java.util.concurrent.CompletableFuture.delayedExecutor(3, java.util.concurrent.TimeUnit.SECONDS)
+                                    .execute(() -> {
+                                        synchronized (client) {
+                                            if (client.isChannelOpen() && client.get(ROOM_GRANT) == null) denyConnection(client);
+                                        }
+                                    });
+                            return;
+                        }
                         grant = authorization.authorize(null, role, null, null, ip).orElse(null);
                     }
                     if (grant == null || !Objects.equals(grant.orderId(), orderId)
@@ -105,8 +116,7 @@ public class SocketIoConfig {
                         denyConnection(client);
                         return;
                     }
-                    if (grant.orderId() != null) client.joinRoom("order:" + grant.orderId());
-                    if (grant.kitchen()) client.joinRoom("kds");
+                    admit(client, grant);
                 } catch (RuntimeException failure) {
                     denyConnection(client);
                 }
@@ -120,6 +130,13 @@ public class SocketIoConfig {
         });
 
         return server;
+    }
+
+    private static void admit(SocketIOClient client, SocketOrderAuthorizationService.RoomGrant grant) {
+        clearProtectedRooms(client);
+        if (grant.orderId() != null) client.joinRoom("order:" + grant.orderId());
+        if (grant.kitchen()) client.joinRoom("kds");
+        client.set(ROOM_GRANT, grant);
     }
 
     private static AuthTokenResult deniedAuthorization() {

@@ -20,7 +20,7 @@ class PostgresReviewControllerIntegrationTest extends PostgresPg020IntegrationSu
         assertThat(response.getStatusCode().value()).isEqualTo(200);return response.getBody();
     }
     @Test void completeHttpFlowPreservesSafeJsonStateItemsAndModeration() throws Exception {
-        var order=createOrder();String id=order.getOrder().getId();reset(sockets);clearInvocations(mongoUsers);
+        var order=createOrder();String id=order.getOrder().getId();reset(sockets);
         var request=requestReview();request.setId("forged");request.setOrderId("other");request.setCustomerName("forged");request.setCustomerEmail("forged");request.setCustomerPhone("forged");request.setStatus("PUBLISHED");request.setCreatedAt(java.time.LocalDateTime.MIN);request.setUpdatedAt(java.time.LocalDateTime.MIN);
         String body=mvc.perform(post("/api/orders/"+id+"/reviews").header(OrderAccessService.TRACKING_TOKEN_HEADER,order.getTrackingToken()).contentType("application/json").content(json.writeValueAsString(request)))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.customerName").value("Guest"))
@@ -34,7 +34,7 @@ class PostgresReviewControllerIntegrationTest extends PostgresPg020IntegrationSu
         mvc.perform(get("/api/orders/"+id).header(OrderAccessService.TRACKING_TOKEN_HEADER,order.getTrackingToken())).andExpect(status().isOk()).andExpect(jsonPath("$.reviewed").value(true));
         assertThat(kds.getAllOrders().getFirst().isReviewed()).isTrue();
         assertThat(reviewController.createReview(id,null,order.getTrackingToken(),request).getStatusCode().value()).isEqualTo(409);
-        verifyNoInteractions(mongoUsers);
+
         verify(sockets.getRoomOperations("kds"),times(1)).sendEvent(eq("order.updated"),any(CustomerOrder.class));
         verify(sockets.getRoomOperations("order:"+id),times(1)).sendEvent(eq("order.updated"),any(CustomerOrder.class));
         var payload=org.mockito.ArgumentCaptor.forClass(CustomerOrder.class);verify(sockets.getRoomOperations("kds")).sendEvent(eq("order.updated"),payload.capture());
@@ -50,7 +50,7 @@ class PostgresReviewControllerIntegrationTest extends PostgresPg020IntegrationSu
         if(kind.equals("wrong"))token=access.generateTrackingToken();if(kind.equals("cross"))token=createOrder().getTrackingToken();
         var request=post("/api/orders/"+id+"/reviews").contentType("application/json").content(json.writeValueAsString(requestReview()));
         if(token!=null)request.header(OrderAccessService.TRACKING_TOKEN_HEADER,token);if(kind.equals("jwt"))request.header("Authorization","Bearer admin-fixture");
-        clearInvocations(mongoUsers);mvc.perform(request).andExpect(status().isNotFound()).andExpect(content().string(""));verifyNoInteractions(mongoUsers);
+        mvc.perform(request).andExpect(status().isNotFound()).andExpect(content().string(""));
         assertThat(count("order_reviews")).isZero();
     }
     @Test void legacyNormalizationPreservesZeroRatingsDuplicatesFallbackAndClientOrder() {
@@ -130,7 +130,7 @@ class PostgresReviewControllerIntegrationTest extends PostgresPg020IntegrationSu
     @Test void adminEndpointsRemainHiddenFromPublicInvalidAndMemberIdentities() throws Exception {
         mvc.perform(get("/api/kds/reviews")).andExpect(status().isNotFound());
         mvc.perform(patch("/api/kds/reviews/missing/status").contentType("application/json").content(json.writeValueAsString(Map.of("status","HIDDEN")))).andExpect(status().isNotFound());
-        var member=new User();member.setRole("MEMBER");when(mongoUsers.findByEmailIgnoreCase("fixture-admin@example.com")).thenReturn(Optional.of(member));when(jwt.validateTokenForUser("admin-fixture",member)).thenReturn(true);
+        jdbc.update("UPDATE users SET role='MEMBER' WHERE id='fixture-admin'");
         mvc.perform(get("/api/kds/reviews").header("Authorization","Bearer admin-fixture")).andExpect(status().isNotFound());
     }
     @Test void callbackObservesCommittedBothRecordsAndSocketFailureStillReturnsSuccess() {

@@ -3,11 +3,9 @@ package com.lordgainsborough.restaurant.service;
 import com.lordgainsborough.restaurant.config.PasswordResetProperties;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetOtpChallenge;
-import com.lordgainsborough.restaurant.repository.PasswordResetOtpChallengeRepository;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -15,11 +13,6 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * Persistence facade for password reset OTP challenges.
- * Delegates storage operations to {@link PasswordResetOtpChallengeStore}, supporting
- * MongoDB (default) and PostgreSQL with identical business semantics.
- */
 @Component
 public class PasswordResetOtpChallengePersistence {
 
@@ -43,14 +36,6 @@ public class PasswordResetOtpChallengePersistence {
     /**
      * Backward-compatible constructor for existing callers and tests.
      */
-    public PasswordResetOtpChallengePersistence(
-            PasswordResetOtpChallengeRepository repository,
-            MongoTemplate mongoTemplate,
-            PasswordResetProperties properties,
-            AbuseIpHasher hasher,
-            Clock clock) {
-        this(new MongoPasswordResetOtpChallengeStore(repository, mongoTemplate, properties), properties, hasher, clock);
-    }
 
     public PasswordResetOtpChallengeStore getStore() {
         return store;

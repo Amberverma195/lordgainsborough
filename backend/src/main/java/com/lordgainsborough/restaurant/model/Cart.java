@@ -1,27 +1,19 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-@Document(collection = "carts")
 public class Cart {
-    /** Carts expire 7 days after the last update (MongoDB TTL index). */
+
     public static final int TTL_SECONDS = 7 * 24 * 60 * 60;
 
-    @Id
     private String id;
 
-    @Indexed(unique = true)
     private String userId;
 
     private List<CartItem> items = new ArrayList<>();
 
-    @Indexed(name = "cart_updated_at_ttl", expireAfterSeconds = TTL_SECONDS)
     private Instant updatedAt = Instant.now();
 
     public String getId() { return id; }

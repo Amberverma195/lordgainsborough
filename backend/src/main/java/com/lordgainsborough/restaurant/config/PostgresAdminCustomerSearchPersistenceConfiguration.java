@@ -11,16 +11,14 @@ import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.JpaContext;
 import org.springframework.orm.jpa.JpaTransactionManager;
 
-/** PG-021 uses structural PG-022 administrator checks; live Socket.IO remains independently guarded. */
+/** PostgreSQL persistence for the application. */
 @Configuration(proxyBeanMethods = false)
-@Profile({"postgres-migration", "test"})
-@ConditionalOnProperty(name = "app.admin.customer-search.postgres.enabled", havingValue = "true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresAdminCustomerSearchPersistenceConfiguration {
     @Bean @Primary
     PostgresAdminCustomerSearchStore postgresAdminCustomerSearchStore(JpaUserRepository users,

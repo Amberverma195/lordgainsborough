@@ -4,14 +4,12 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
 import com.lordgainsborough.restaurant.service.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 
 @Configuration(proxyBeanMethods=false)
-@Profile({"postgres-migration","test"})
-@ConditionalOnProperty(name="app.kds.postgres.enabled",havingValue="true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresKdsPersistenceConfiguration {
     @Bean @Primary
     PostgresCustomerNoShowStore postgresCustomerNoShowStore(JpaCustomerOrderRepository orders, JpaUserRepository users,

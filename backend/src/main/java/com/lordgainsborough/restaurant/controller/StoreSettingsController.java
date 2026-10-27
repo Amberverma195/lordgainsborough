@@ -1,8 +1,7 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.StoreSettings;
-import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.RoleAccess;
 import com.lordgainsborough.restaurant.service.StoreSettingsService;
@@ -11,22 +10,21 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/store-settings")
 public class StoreSettingsController {
     private final StoreSettingsService storeSettingsService;
     private final JwtUtil jwtUtil;
-    private final UserRepository userRepository;
+    private final UserAuthStore identities;
 
     public StoreSettingsController(
             StoreSettingsService storeSettingsService,
             JwtUtil jwtUtil,
-            UserRepository userRepository) {
+            UserAuthStore identities) {
         this.storeSettingsService = storeSettingsService;
         this.jwtUtil = jwtUtil;
-        this.userRepository = userRepository;
+        this.identities = identities;
     }
 
     @GetMapping
@@ -72,14 +70,8 @@ public class StoreSettingsController {
             return false;
         }
         String token = authHeader.substring(7);
-        if (!jwtUtil.validateToken(token)) {
-            return false;
-        }
-        String email = jwtUtil.getEmailFromToken(token);
-        Optional<User> user = userRepository.findByEmailIgnoreCase(email);
-        return user.filter(value -> jwtUtil.validateTokenForUser(token, value))
-                .filter(value -> RoleAccess.isAdmin(value.getRole()))
-                .isPresent();
+        return identities.authenticate(token, jwtUtil)
+                .filter(value -> RoleAccess.isAdmin(value.getRole())).isPresent();
     }
 
     private double toDouble(Object value, double fallback) {

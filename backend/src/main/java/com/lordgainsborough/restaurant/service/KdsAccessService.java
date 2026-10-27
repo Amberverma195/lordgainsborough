@@ -1,6 +1,5 @@
 package com.lordgainsborough.restaurant.service;
 
-import com.lordgainsborough.restaurant.model.StoreSettings;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
@@ -17,10 +16,6 @@ public class KdsAccessService {
 
     private final KdsSettingsSource settingsSource;
     private final ClientIpResolver clientIpResolver;
-
-    public KdsAccessService(StoreSettingsService storeSettingsService, ClientIpResolver clientIpResolver) {
-        this(new MongoKdsSettingsSource(storeSettingsService), clientIpResolver);
-    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public KdsAccessService(KdsSettingsSource settingsSource, ClientIpResolver clientIpResolver) {

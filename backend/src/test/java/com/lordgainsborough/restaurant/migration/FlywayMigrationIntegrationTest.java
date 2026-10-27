@@ -65,7 +65,7 @@ public class FlywayMigrationIntegrationTest {
     private static String springDbName;
 
     private String getTestPort() {
-        return System.getProperty("test.postgres.port");
+        return com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
     }
 
     private String getRequiredTestPort(String testName) {

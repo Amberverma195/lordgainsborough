@@ -1,15 +1,9 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
-
 import java.time.Instant;
 
-@Document(collection = "signup_otp_challenges")
 public class SignupOtpChallenge {
 
-    @Id
     private String emailKey;
 
     private String normalizedEmail;
@@ -25,11 +19,6 @@ public class SignupOtpChallenge {
     private Instant nextResendAt;
     private Instant otpExpiresAt;
 
-    /**
-     * Absolute challenge lifetime. MongoDB TTL deletes after this instant (async).
-     * Authorization must still compare against Clock.instant() explicitly.
-     */
-    @Indexed(name = "signup_otp_challenge_ttl", expireAfterSeconds = 0)
     private Instant challengeExpiresAt;
 
     private Instant createdAt;

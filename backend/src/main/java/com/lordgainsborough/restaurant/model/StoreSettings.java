@@ -1,13 +1,8 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
-
-@Document(collection = "store_settings")
 public class StoreSettings {
     public static final String DEFAULT_ID = "default";
 
-    @Id
     private String id = DEFAULT_ID;
     private double taxRate = 0.13;
     private int defaultReadyMinutes = 25;

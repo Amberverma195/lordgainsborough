@@ -5,9 +5,7 @@ import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
 import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
@@ -28,7 +26,6 @@ import org.springframework.http.ResponseEntity;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,9 +51,7 @@ class AuthControllerSignupOtpResponseTest {
     private static final Instant NOW = Instant.parse("2026-07-13T10:00:00Z");
 
     private final EmailSenderService emailSenderService = mock(EmailSenderService.class);
-    private final UserRepository userRepository = mock(UserRepository.class);
-    private final CustomerOrderRepository orderRepository = mock(CustomerOrderRepository.class);
-    private final OrderReviewRepository reviewRepository = mock(OrderReviewRepository.class);
+    private final UserAuthStore userRepository = mock(UserAuthStore.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private final OtpService otpService = mock(OtpService.class);
     private final SignupOtpChallengeService signupOtpChallengeService = mock(SignupOtpChallengeService.class);
@@ -72,8 +67,6 @@ class AuthControllerSignupOtpResponseTest {
     private final AuthController controller = new AuthController(
             emailSenderService,
             userRepository,
-            orderRepository,
-            reviewRepository,
             jwtUtil,
             otpService,
             signupOtpChallengeService,
@@ -89,8 +82,6 @@ class AuthControllerSignupOtpResponseTest {
         org.mockito.Mockito.reset(
                 emailSenderService,
                 userRepository,
-                orderRepository,
-                reviewRepository,
                 jwtUtil,
                 otpService,
                 signupOtpChallengeService,
@@ -108,8 +99,6 @@ class AuthControllerSignupOtpResponseTest {
                 .thenReturn(new SignupAbuseLimiter.Decision.Allowed());
         when(signupOtpChallengeService.looksLikeInitialSend(anyString())).thenReturn(true);
         when(userRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
-        when(userRepository.findByPhoneNormalized(anyString())).thenReturn(List.of());
-        when(userRepository.findByPhoneIsNotNull()).thenReturn(List.of());
         when(signupOtpChallengeService.requestSignupOtp(anyString(), org.mockito.ArgumentMatchers.nullable(String.class)))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
     }
@@ -134,7 +123,7 @@ class AuthControllerSignupOtpResponseTest {
     void sendSignupOtpConflictUsesGenericWordingWithoutRevealingEmailOrPhone() {
         User existing = new User();
         existing.setPhoneNormalized("5551234567");
-        when(userRepository.findByPhoneNormalized("5551234567")).thenReturn(List.of(existing));
+        when(userRepository.phoneRegisteredByAnotherUser("5551234567", null)).thenReturn(true);
 
         ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, signupOtpRequest("new@example.com", "+1 (555)-123-4567"), httpRequest);
 

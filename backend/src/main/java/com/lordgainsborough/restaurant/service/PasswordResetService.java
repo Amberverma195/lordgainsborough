@@ -6,20 +6,10 @@ import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetChallengeStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetOtpChallenge;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.MongoTransactionManager;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -47,92 +37,18 @@ public class PasswordResetService {
     private final PasswordResetAbuseLimiter abuseLimiter;
     private final PasswordResetPublicHandleService handleService;
     private final PasswordResetProperties properties;
-    private final UserRepository userRepository;
-    private final MongoTemplate mongoTemplate;
     private final EmailSenderService emailSenderService;
     private final AbuseIpHasher hasher;
     private final AuthSecurityObservability observability;
-    private TransactionTemplate transactionTemplate;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    @Autowired
-    public PasswordResetService(
-            PasswordResetOtpChallengePersistence persistence,
-            PasswordResetAbuseLimiter abuseLimiter,
-            PasswordResetPublicHandleService handleService,
-            PasswordResetProperties properties,
-            ObjectProvider<UserRepository> userRepositoryProvider,
-            ObjectProvider<MongoTemplate> mongoTemplateProvider,
-            EmailSenderService emailSenderService,
-            AbuseIpHasher hasher,
-            AuthSecurityObservability observability,
-            ObjectProvider<MongoTransactionManager> transactionManagerProvider) {
-        this(
-                persistence,
-                abuseLimiter,
-                handleService,
-                properties,
-                userRepositoryProvider != null ? userRepositoryProvider.getIfAvailable() : null,
-                mongoTemplateProvider != null ? mongoTemplateProvider.getIfAvailable() : null,
-                emailSenderService,
-                hasher,
-                observability);
-        MongoTransactionManager tm = transactionManagerProvider != null ? transactionManagerProvider.getIfAvailable() : null;
-        if (tm != null) {
-            this.transactionTemplate = new TransactionTemplate(tm);
-        }
-    }
-
-    public PasswordResetService(
-            PasswordResetOtpChallengePersistence persistence,
-            PasswordResetAbuseLimiter abuseLimiter,
-            PasswordResetPublicHandleService handleService,
-            PasswordResetProperties properties,
-            UserRepository userRepository,
-            MongoTemplate mongoTemplate,
-            EmailSenderService emailSenderService,
-            AbuseIpHasher hasher,
-            AuthSecurityObservability observability,
-            MongoTransactionManager transactionManager) {
-        this(
-                persistence,
-                abuseLimiter,
-                handleService,
-                properties,
-                userRepository,
-                mongoTemplate,
-                emailSenderService,
-                hasher,
-                observability);
-        if (transactionManager != null) {
-            this.transactionTemplate = new TransactionTemplate(transactionManager);
-        }
-    }
-
-    /**
-     * Explicit non-transactional constructor used by focused unit tests and the safe
-     * claim/update/finalize fallback.
-     */
-    public PasswordResetService(
-            PasswordResetOtpChallengePersistence persistence,
-            PasswordResetAbuseLimiter abuseLimiter,
-            PasswordResetPublicHandleService handleService,
-            PasswordResetProperties properties,
-            UserRepository userRepository,
-            MongoTemplate mongoTemplate,
-            EmailSenderService emailSenderService,
-            AbuseIpHasher hasher,
-            AuthSecurityObservability observability) {
-        this.persistence = persistence;
-        this.abuseLimiter = abuseLimiter;
-        this.handleService = handleService;
-        this.properties = properties;
-        this.userRepository = userRepository;
-        this.mongoTemplate = mongoTemplate;
-        this.emailSenderService = emailSenderService;
-        this.hasher = hasher;
-        this.observability = observability;
-        this.transactionTemplate = null;
+    public PasswordResetService(PasswordResetOtpChallengePersistence persistence,
+            PasswordResetAbuseLimiter abuseLimiter, PasswordResetPublicHandleService handleService,
+            PasswordResetProperties properties, EmailSenderService emailSenderService,
+            AbuseIpHasher hasher, AuthSecurityObservability observability) {
+        this.persistence = persistence; this.abuseLimiter = abuseLimiter; this.handleService = handleService;
+        this.properties = properties; this.emailSenderService = emailSenderService;
+        this.hasher = hasher; this.observability = observability;
     }
 
     public boolean isPostgresStore() {
@@ -144,11 +60,6 @@ public class PasswordResetService {
             Optional<User> user,
             String clientIp,
             String idempotencyKey) {
-        if (isPostgresStore()) {
-            throw new IllegalStateException(
-                    "Unsupported mixed-backend call: cannot initiate PostgreSQL password reset challenge using MongoDB User. " +
-                    "Use requestInitialForJpaUser or coordinated PostgreSQL user authentication (PG-022).");
-        }
         return requestInitial(
                 normalizedEmail,
                 user.map(User::getId).orElse(null),
@@ -295,13 +206,7 @@ public class PasswordResetService {
             return denial == null ? cooldown(latest, now) : denial;
         }
 
-        String recipientEmail = null;
-        if (userRepository != null) {
-            recipientEmail = userRepository.findById(reserved.get().getUserId()).map(User::getEmail).orElse(null);
-        }
-        if (recipientEmail == null) {
-            recipientEmail = persistence.findUserEmailById(reserved.get().getUserId()).orElse(null);
-        }
+        String recipientEmail = persistence.findUserEmailById(reserved.get().getUserId()).orElse(null);
         if (recipientEmail != null) {
             deliver(recipientEmail, rawCode, reserved.get());
         } else {

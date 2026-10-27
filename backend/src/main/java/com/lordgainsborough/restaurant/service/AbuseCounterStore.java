@@ -4,9 +4,6 @@ import com.lordgainsborough.restaurant.model.SignupAbuseLimit.BucketType;
 
 import java.time.Instant;
 
-/**
- * Persistence for fixed-window abuse counters (Mongo in production; in-memory in unit tests).
- */
 public interface AbuseCounterStore {
 
     /**

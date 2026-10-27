@@ -1,9 +1,7 @@
 package com.lordgainsborough.restaurant.security;
 
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.service.KdsAccessService;
 import com.lordgainsborough.restaurant.service.UserAuthStore;
-import com.lordgainsborough.restaurant.service.MongoUserAuthStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -19,12 +17,6 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
     private final JwtUtil jwtUtil;
     private final UserAuthStore identityStore;
     private final KdsAccessService kdsAccessService;
-
-    public AdminAuthInterceptor(JwtUtil jwtUtil, UserRepository userRepository, KdsAccessService kdsAccessService) {
-        this.jwtUtil = jwtUtil;
-        this.identityStore = new MongoUserAuthStore(userRepository, null, null);
-        this.kdsAccessService = kdsAccessService;
-    }
 
     @Autowired
     public AdminAuthInterceptor(JwtUtil jwtUtil, UserAuthStore identityStore, KdsAccessService kdsAccessService) {

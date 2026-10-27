@@ -5,9 +5,7 @@ import com.lordgainsborough.restaurant.dto.LoginResponse;
 import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
 import com.lordgainsborough.restaurant.dto.SendOtpRequest;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
+import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
@@ -33,7 +31,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -44,7 +41,7 @@ class AuthControllerLoginSecurityTest {
 
     private static final String IP = "203.0.113.30";
 
-    private final UserRepository userRepository = mock(UserRepository.class);
+    private final UserAuthStore userRepository = mock(UserAuthStore.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private final ClientIpResolver clientIpResolver = mock(ClientIpResolver.class);
     private final LoginRateLimiter loginRateLimiter = mock(LoginRateLimiter.class);
@@ -56,8 +53,6 @@ class AuthControllerLoginSecurityTest {
     private final AuthController controller = new AuthController(
             mock(EmailSenderService.class),
             userRepository,
-            mock(CustomerOrderRepository.class),
-            mock(OrderReviewRepository.class),
             jwtUtil,
             mock(OtpService.class),
             mock(SignupOtpChallengeService.class),
@@ -162,11 +157,7 @@ class AuthControllerLoginSecurityTest {
                 "Too many reset requests. Please try again later.",
                 Instant.parse("2026-07-13T15:00:00Z"));
         body.setRetryAfterSeconds(44L);
-        when(passwordResetService.requestInitial(
-                eq("member@example.com"),
-                eq(Optional.empty()),
-                eq(IP),
-                eq("reset-request-key")))
+        when(userRepository.requestPasswordReset(passwordResetService,"member@example.com",IP,"reset-request-key"))
                 .thenReturn(new PasswordResetService.Result(
                         HttpStatus.TOO_MANY_REQUESTS,
                         body,

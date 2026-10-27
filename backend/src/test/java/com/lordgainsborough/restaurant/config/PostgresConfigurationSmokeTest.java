@@ -18,26 +18,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class PostgresConfigurationSmokeTest {
 
     @Test
-    @DisplayName("Default application.properties isolates relational database auto-configuration")
-    void testDefaultApplicationProperties_excludesRelationalAutoConfig() throws IOException {
+    @DisplayName("Default application.properties enables PostgreSQL and validates the migrated schema")
+    void testDefaultApplicationProperties_enablePostgres() throws IOException {
         StandardEnvironment env = new StandardEnvironment();
         env.getPropertySources().addLast(new ResourcePropertySource(new ClassPathResource("application.properties")));
 
-        // 1. Verify relational auto-configurations are excluded
-        String exclusions = env.getProperty("spring.autoconfigure.exclude");
-        assertThat(exclusions).isNotNull();
-        assertThat(exclusions).contains("org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration");
-        assertThat(exclusions).contains("org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration");
-        assertThat(exclusions).contains("org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration");
-        assertThat(exclusions).contains("org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration");
-
-        // 2. Verify Flyway is disabled by default
-        assertThat(env.getProperty("spring.flyway.enabled")).isEqualTo("false");
-
-        // 3. Verify PostgreSQL URL/credentials are NOT in default properties
-        assertThat(env.getProperty("spring.datasource.url")).isNull();
-        assertThat(env.getProperty("spring.datasource.username")).isNull();
-        assertThat(env.getProperty("spring.datasource.password")).isNull();
+        assertThat(env.getProperty("spring.autoconfigure.exclude")).isNull();
+        assertThat(env.getProperty("spring.flyway.enabled")).isEqualTo("true");
+        assertThat(env.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
     }
 
     @Test
@@ -50,7 +38,7 @@ public class PostgresConfigurationSmokeTest {
 
         // 1. Verify exclusion is overridden to empty
         String exclusions = env.getProperty("spring.autoconfigure.exclude");
-        assertThat(exclusions).isEmpty();
+        assertThat(exclusions).isNull();
 
         // 2. Verify Flyway properties
         assertThat(env.getProperty("spring.flyway.enabled")).isEqualTo("true");
@@ -59,7 +47,7 @@ public class PostgresConfigurationSmokeTest {
         assertThat(env.getProperty("spring.flyway.clean-disabled")).isEqualTo("true");
 
         // 3. Verify JPA / Hibernate safe defaults (no DDL manipulation)
-        assertThat(env.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("none");
+        assertThat(env.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
         assertThat(env.getProperty("spring.jpa.open-in-view")).isEqualTo("false");
         assertThat(env.getProperty("spring.jpa.database-platform")).isEqualTo("org.hibernate.dialect.PostgreSQLDialect");
 
@@ -75,8 +63,8 @@ public class PostgresConfigurationSmokeTest {
 
     @Test
     @DisplayName("HikariDataSource connects and queries PostgreSQL when local instance is running")
-    void testHikariDataSource_liveConnectivityIfAvailable() {
-        String testPort = System.getProperty("test.postgres.port");
+    void testHikariDataSource_liveConnectivity() {
+        String testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         if (testPort == null || testPort.isBlank()) {
             System.out.println("No test.postgres.port supplied; skipping live socket connection check.");
             return;
@@ -84,7 +72,7 @@ public class PostgresConfigurationSmokeTest {
 
         HikariConfig config = new HikariConfig();
         config.setPoolName("LordGainsboroughHikariPool");
-        config.setJdbcUrl("jdbc:postgresql://127.0.0.1:" + testPort + "/testdb?sslmode=disable");
+        config.setJdbcUrl("jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable");
         config.setUsername("postgres");
         config.setPassword("postgres");
         config.setDriverClassName("org.postgresql.Driver");

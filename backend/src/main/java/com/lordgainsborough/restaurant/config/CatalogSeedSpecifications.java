@@ -2,14 +2,6 @@ package com.lordgainsborough.restaurant.config;
 
 import java.util.List;
 
-/**
- * Shared single source of truth for restaurant catalog seed specifications.
- * <p>
- * Used identically by both MongoDB {@link DataInitializer} and PostgreSQL
- * {@link PostgresCatalogSynchronizationService} to guarantee deterministic,
- * non-divergent catalog initialization across persistence tiers.
- * </p>
- */
 public final class CatalogSeedSpecifications {
 
     public static final String MIGRATION_ID = "2026-08-lord-gains-menu";

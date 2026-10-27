@@ -30,7 +30,6 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
@@ -41,11 +40,8 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
 
@@ -56,19 +52,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class CartReviewReservationJpaIntegrationTest {
 
-    private static final String TEST_DB = "cart_review_res_jpa_test";
+    private static final String TEST_DB = "cart_review_res_jpa_test" + "_" + java.util.UUID.randomUUID().toString().replace("-", "");
     private String testPort;
     private String jdbcUrl;
     private PGSimpleDataSource dataSource;
     private LocalContainerEntityManagerFactoryBean emfBean;
     private EntityManagerFactory emf;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EntityScan(basePackageClasses = {JpaCart.class, JpaUser.class})
     static class TestEntityScanConfig {}
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-006 PostgreSQL integration tests")
                 .isNotBlank();

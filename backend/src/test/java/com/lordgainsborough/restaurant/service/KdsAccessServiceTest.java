@@ -19,7 +19,7 @@ class KdsAccessServiceTest {
     private final StoreSettingsService storeSettingsService = mock(StoreSettingsService.class);
     private final SignupAbuseProperties abuseProperties = new SignupAbuseProperties();
     private final ClientIpResolver clientIpResolver = new ClientIpResolver(abuseProperties);
-    private final KdsAccessService service = new KdsAccessService(storeSettingsService, clientIpResolver);
+    private final KdsAccessService service = new KdsAccessService(() -> storeSettingsService.getSettings().getKdsAllowedIp(), clientIpResolver);
 
     @BeforeEach
     void setTrustedProxies() {

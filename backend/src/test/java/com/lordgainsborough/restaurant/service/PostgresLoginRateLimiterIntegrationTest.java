@@ -4,7 +4,6 @@ import com.lordgainsborough.restaurant.config.LoginRateLimitProperties;
 import com.lordgainsborough.restaurant.config.PostgresAbuseCounterStoreConfiguration;
 import com.lordgainsborough.restaurant.config.PostgresLoginRateLimiterConfiguration;
 import com.lordgainsborough.restaurant.config.SignupAbuseProperties;
-import com.lordgainsborough.restaurant.model.SignupAbuseLimit.BucketType;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.service.LoginRateLimiter.FailureResult;
 import ch.qos.logback.classic.Logger;
@@ -19,14 +18,11 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
-import org.mockito.Mockito;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,7 +32,6 @@ import org.springframework.transaction.support.DefaultTransactionDefinition;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -49,8 +44,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -58,7 +51,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -168,7 +160,7 @@ public class PostgresLoginRateLimiterIntegrationTest {
 
     @BeforeAll
     void setUpDatabase() throws Exception {
-        testPort = System.getProperty("test.postgres.port", "54353");
+        testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         testDb = TEST_DB_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         testJdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + testDb + "?sslmode=disable";
 
@@ -225,51 +217,10 @@ public class PostgresLoginRateLimiterIntegrationTest {
     }
 
     @Test
-    @Order(2)
-    @DisplayName("Req 2: Default profile without opt-in properties does not register PostgresLoginFailureStateStore")
-    void test02_defaultMongoProfileRemainsUnchanged() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresLoginRateLimiterConfiguration.class))
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).doesNotHaveBean(PostgresLoginFailureStateStore.class);
-                });
-    }
-
-    @Test
-    @Order(3)
-    @DisplayName("Req 3: Combined context with Mongo and Postgres resolves to Postgres @Primary")
-    void test03_bothPersistenceInfrastructuresCoexistSafely() {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
-
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresLoginRateLimiterConfiguration.class))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
-                .withUserConfiguration(MongoLoginFailureStateStore.class)
-                .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-login-limiter.enabled=true")
-                .withBean(DataSource.class, () -> dataSource)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
-                    assertThat(ctx).hasBean("postgresLoginFailureStateStore");
-
-                    // Unqualified injection resolves strictly to Postgres (@Primary)
-                    assertThat(ctx.getBean(LoginFailureStateStore.class))
-                            .isInstanceOf(PostgresLoginFailureStateStore.class);
-
-                    // Named beans resolve both
-                    assertThat(ctx.getBean("mongoLoginFailureStateStore", LoginFailureStateStore.class))
-                            .isInstanceOf(MongoLoginFailureStateStore.class);
-                    assertThat(ctx.getBean("postgresLoginFailureStateStore", LoginFailureStateStore.class))
-                            .isInstanceOf(PostgresLoginFailureStateStore.class);
-                });
-    }
-
-    @Test
     @Order(4)
     @DisplayName("Req 4: No duplicate bean ambiguity for LoginFailureStateStore")
     void test04_noDuplicateSecurityBeanInjection() {
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withConfiguration(AutoConfigurations.of(PostgresLoginRateLimiterConfiguration.class))
                 .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-login-limiter.enabled=true")
                 .withBean(DataSource.class, () -> dataSource)
@@ -280,77 +231,6 @@ public class PostgresLoginRateLimiterIntegrationTest {
                     PostgresLoginFailureStateStore store = ctx.getBean(PostgresLoginFailureStateStore.class);
                     PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
                     assertThat(store.getTransactionManager()).isSameAs(txManager);
-                });
-    }
-
-    @Test
-    @Order(4)
-    @DisplayName("Req 4b: Realistic Spring context instantiates LoginRateLimiter service under both Mongo and Postgres configurations")
-    void test04b_realisticSpringContextResolvesLoginRateLimiterWithBothConfigurations() {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
-
-        // 1. Verify default MongoDB Spring context instantiates LoginRateLimiter via constructor injection
-        new ApplicationContextRunner()
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
-                .withUserConfiguration(
-                        MongoAbuseCounterStore.class,
-                        MongoLoginFailureStateStore.class,
-                        LoginRateLimiter.class
-                )
-                .withBean(LoginRateLimitProperties.class, () -> properties)
-                .withBean(AbuseIpHasher.class, () -> hasher)
-                .withBean(Clock.class, Clock::systemUTC)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).hasSingleBean(LoginRateLimiter.class);
-                    assertThat(ctx.getBean(LoginRateLimiter.class)).isNotNull();
-                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
-                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
-                    assertThat(ctx).doesNotHaveBean(PostgresLoginFailureStateStore.class);
-                });
-
-        // 2. Verify opt-in PostgreSQL combined context instantiates LoginRateLimiter via @Autowired constructor
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        PostgresAbuseCounterStoreConfiguration.class,
-                        PostgresLoginRateLimiterConfiguration.class
-                ))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
-                .withUserConfiguration(
-                        MongoAbuseCounterStore.class,
-                        MongoLoginFailureStateStore.class,
-                        LoginRateLimiter.class
-                )
-                .withPropertyValues(
-                        "spring.profiles.active=postgres-migration",
-                        "app.security.postgres-abuse-store.enabled=true",
-                        "app.security.postgres-login-limiter.enabled=true"
-                )
-                .withBean(DataSource.class, () -> dataSource)
-                .withBean(LoginRateLimitProperties.class, () -> properties)
-                .withBean(AbuseIpHasher.class, () -> hasher)
-                .withBean(Clock.class, Clock::systemUTC)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    assertThat(ctx).hasSingleBean(LoginRateLimiter.class);
-                    LoginRateLimiter limiter = ctx.getBean(LoginRateLimiter.class);
-                    assertThat(limiter).isNotNull();
-
-                    // Both implementations coexist
-                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
-                    assertThat(ctx).hasBean("postgresLoginFailureStateStore");
-                    assertThat(ctx).hasBean("mongoAbuseCounterStore");
-                    assertThat(ctx).hasBean("postgresAbuseCounterStore");
-
-                    // Unqualified lookups resolve to @Primary PostgreSQL stores
-                    assertThat(ctx.getBean(LoginFailureStateStore.class))
-                            .isInstanceOf(PostgresLoginFailureStateStore.class);
-                    assertThat(ctx.getBean(AbuseCounterStore.class))
-                            .isInstanceOf(PostgresAbuseCounterStore.class);
-
-                    PostgresLoginFailureStateStore pgStore = ctx.getBean(PostgresLoginFailureStateStore.class);
-                    PlatformTransactionManager txManager = ctx.getBean("transactionManager", PlatformTransactionManager.class);
-                    assertThat(pgStore.getTransactionManager()).isSameAs(txManager);
                 });
     }
 
@@ -902,17 +782,13 @@ public class PostgresLoginRateLimiterIntegrationTest {
     @Order(29)
     @DisplayName("Req 29b: Transaction rollback on real Spring bean restores previously committed state")
     void test29b_rollbackThroughRealSpringBeanPreventsPartiallyPersistedTransitions() {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
 
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withConfiguration(AutoConfigurations.of(
                         PostgresAbuseCounterStoreConfiguration.class,
                         PostgresLoginRateLimiterConfiguration.class
                 ))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
                 .withUserConfiguration(
-                        MongoAbuseCounterStore.class,
-                        MongoLoginFailureStateStore.class,
                         LoginRateLimiter.class
                 )
                 .withPropertyValues(
@@ -978,17 +854,13 @@ public class PostgresLoginRateLimiterIntegrationTest {
     @Order(29)
     @DisplayName("Req 29c: Row-level locking (SELECT ... FOR UPDATE) blocks concurrent transactions through real Spring bean until commit")
     void test29c_rowLockBehaviorThroughRealSpringBean() throws Exception {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
 
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withConfiguration(AutoConfigurations.of(
                         PostgresAbuseCounterStoreConfiguration.class,
                         PostgresLoginRateLimiterConfiguration.class
                 ))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
                 .withUserConfiguration(
-                        MongoAbuseCounterStore.class,
-                        MongoLoginFailureStateStore.class,
                         LoginRateLimiter.class
                 )
                 .withPropertyValues(
@@ -1495,34 +1367,4 @@ public class PostgresLoginRateLimiterIntegrationTest {
         }
     }
 
-    @Test
-    @Order(37)
-    @DisplayName("Req 37: No production service or controller switches to PostgreSQL automatically")
-    void test37_noProductionServiceOrControllerSwitchedToPostgresAutomatically() {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
-
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(PostgresLoginRateLimiterConfiguration.class))
-                .withBean("mongoTemplate", MongoTemplate.class, () -> mockMongo)
-                .withUserConfiguration(MongoLoginFailureStateStore.class)
-                .run(ctx -> {
-                    assertThat(ctx).hasNotFailed();
-                    // In default context (without opt-in property), Postgres is NOT loaded
-                    assertThat(ctx).doesNotHaveBean(PostgresLoginFailureStateStore.class);
-                    assertThat(ctx).hasBean("mongoLoginFailureStateStore");
-                });
-    }
-
-    @Test
-    @Order(38)
-    @DisplayName("Req 38: MongoLoginFailureStateStore baseline behavior functions correctly")
-    void test38_existingMongoLoginRateLimiterTestsContinuePassing() {
-        MongoTemplate mockMongo = Mockito.mock(MongoTemplate.class);
-        MongoLoginFailureStateStore mongoStore = new MongoLoginFailureStateStore(mockMongo);
-        assertThat(mongoStore).isNotNull();
-
-        // Querying non-existent returns empty
-        OptionalLong cd = mongoStore.activeCooldown("dummy", Instant.now());
-        assertThat(cd).isEmpty();
-    }
 }

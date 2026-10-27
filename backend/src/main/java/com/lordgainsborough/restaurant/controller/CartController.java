@@ -1,17 +1,12 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.Cart;
-import com.lordgainsborough.restaurant.repository.CartRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
-import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.CartStore;
 import com.lordgainsborough.restaurant.service.InvalidCartItemException;
-import com.lordgainsborough.restaurant.service.MongoCartStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -26,9 +21,6 @@ public class CartController {
     public CartController(CartStore carts) { this.carts = carts; }
 
     /** Retained for existing direct callers; Spring selects the store-based constructor. */
-    public CartController(CartRepository carts, UserRepository users, JwtUtil jwt) {
-        this(new MongoCartStore(carts, users, jwt, Clock.systemUTC()));
-    }
 
     public CartStore getCartStore() { return carts; }
 

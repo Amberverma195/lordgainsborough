@@ -17,7 +17,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-/** Genuine PostgreSQL identities. No Mongo repositories, entity merges or dual writes. */
 public class PostgresUserAuthStore implements UserAuthStore {
     private final JpaUserRepository users;
     private final JpaCustomerOrderRepository orders;

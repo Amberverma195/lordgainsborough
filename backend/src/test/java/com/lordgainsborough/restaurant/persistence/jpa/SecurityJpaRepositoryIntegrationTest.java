@@ -58,7 +58,6 @@ import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.orm.jpa.JpaTransactionManager;
@@ -121,7 +120,7 @@ public class SecurityJpaRepositoryIntegrationTest {
     // Foreign-key parent repository
     private JpaUserRepository userRepository;
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     @EntityScan(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.entity")
     static class TestJpaRepoConfig {
@@ -158,7 +157,7 @@ public class SecurityJpaRepositoryIntegrationTest {
     }
 
     private String getRequiredPort() {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         assertThat(port)
                 .withFailMessage("test.postgres.port system property is required for PG-011 integration tests")
                 .isNotBlank();
@@ -1287,11 +1286,11 @@ public class SecurityJpaRepositoryIntegrationTest {
         assertThat(context.containsBean("loginFailureStateRepository")).isFalse();
     }
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @AutoConfigurationPackage
     static class DefaultProfileTestConfig {}
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class DefaultProfileIsolationConfig {}
 

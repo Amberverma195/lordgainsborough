@@ -20,7 +20,7 @@ class PostgresReservationControllerIntegrationTest extends PostgresPg020Integrat
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.date").value("2026-11-01")).andExpect(jsonPath("$.time").value("01:30"))
             .andReturn().getResponse().getContentAsString();
         var dto=json.readValue(response,Reservation.class);assertThat(json.readTree(response).size()).isEqualTo(10);assertThat(dto.getId()).isNotEqualTo("client-id").hasSize(36);
-        assertThat(dto.getCreatedAt()).isAfter(java.time.LocalDateTime.now().minusMinutes(1));assertThat(count("users")).isZero();
+        assertThat(dto.getCreatedAt()).isAfter(java.time.LocalDateTime.now().minusMinutes(1));assertThat(count("users")).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT created_at FROM reservations WHERE id=?",java.time.LocalDateTime.class,dto.getId())).isEqualTo(dto.getCreatedAt());
         mvc.perform(get("/api/reservations").header("Authorization","Bearer admin-fixture")).andExpect(status().isOk()).andExpect(content().json("["+response+"]"));
     }
@@ -32,7 +32,7 @@ class PostgresReservationControllerIntegrationTest extends PostgresPg020Integrat
     }
     @ParameterizedTest @MethodSource("invalidInputs") void invalidInputsReturn400WithNoReservationOrOtherWrites(String field,Object value) throws Exception {
         var payload=json.convertValue(request(),new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});payload.put(field,value);
-        mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(payload))).andExpect(status().isBadRequest());assertThat(count("reservations")).isZero();assertThat(count("users")).isZero();
+        mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(payload))).andExpect(status().isBadRequest());assertThat(count("reservations")).isZero();assertThat(count("users")).isEqualTo(1);
     }
     @Test void arbitraryRepresentableDateTimeAndStatusStringsRemainAccepted() {
         var request=request();request.setDate("Sat Nov 1");request.setTime("7 PM local");var saved=reservationController.createReservation(request);

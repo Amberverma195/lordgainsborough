@@ -15,14 +15,10 @@ import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
 import com.lordgainsborough.restaurant.dto.UpdateProfileRequest;
 import com.lordgainsborough.restaurant.model.User;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
-import com.lordgainsborough.restaurant.repository.OrderReviewRepository;
-import com.lordgainsborough.restaurant.repository.UserRepository;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.CustomerNoShowService;
 import com.lordgainsborough.restaurant.service.UserAuthStore;
-import com.lordgainsborough.restaurant.service.MongoUserAuthStore;
 import com.lordgainsborough.restaurant.service.PostgresUserAuthStore;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
@@ -34,9 +30,7 @@ import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,7 +69,6 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final PasswordResetService passwordResetService;
     private final AuthSecurityObservability authSecurityObservability;
-    private final boolean allowIsolatedTest;
 
     @Autowired
     public AuthController(EmailSenderService emailSenderService, UserAuthStore userAuthStore,
@@ -94,7 +87,6 @@ public class AuthController {
         this.loginRateLimiter = loginRateLimiter;
         this.passwordResetService = passwordResetService;
         this.authSecurityObservability = authSecurityObservability;
-        this.allowIsolatedTest = false;
     }
 
     public UserAuthStore getUserAuthStore() { return userAuthStore; }
@@ -103,127 +95,7 @@ public class AuthController {
     public LoginRateLimiter getLoginRateLimiter() { return loginRateLimiter; }
     public PasswordResetService getPasswordResetService() { return passwordResetService; }
 
-    public AuthController(
-            EmailSenderService emailSenderService,
-            UserRepository userRepository,
-            CustomerOrderRepository orderRepository,
-            OrderReviewRepository reviewRepository,
-            JwtUtil jwtUtil,
-            OtpService otpService,
-            SignupOtpChallengeService signupOtpChallengeService,
-            SignupAbuseLimiter signupAbuseLimiter,
-            ClientIpResolver clientIpResolver,
-            SignupOtpObservability signupOtpObservability,
-            LoginRateLimiter loginRateLimiter,
-            PasswordResetService passwordResetService,
-            AuthSecurityObservability authSecurityObservability,
-            @Value("${app.security.postgres-user-auth.enabled:false}") boolean postgresUserAuthEnabled,
-            @Value("${app.security.postgres-password-reset.allow-isolated-test:false}") boolean allowIsolatedTest) {
-        this.emailSenderService = emailSenderService;
-        this.userAuthStore = new MongoUserAuthStore(userRepository, orderRepository, reviewRepository);
-        this.jwtUtil = jwtUtil;
-        this.otpService = otpService;
-        this.signupOtpChallengeService = signupOtpChallengeService;
-        this.signupAbuseLimiter = signupAbuseLimiter;
-        this.clientIpResolver = clientIpResolver;
-        this.signupOtpObservability = signupOtpObservability;
-        this.loginRateLimiter = loginRateLimiter;
-        this.passwordResetService = passwordResetService;
-        this.authSecurityObservability = authSecurityObservability;
-        this.allowIsolatedTest = allowIsolatedTest;
-    }
-
-    public AuthController(
-            EmailSenderService emailSenderService,
-            UserRepository userRepository,
-            CustomerOrderRepository orderRepository,
-            OrderReviewRepository reviewRepository,
-            JwtUtil jwtUtil,
-            OtpService otpService,
-            SignupOtpChallengeService signupOtpChallengeService,
-            SignupAbuseLimiter signupAbuseLimiter,
-            ClientIpResolver clientIpResolver,
-            SignupOtpObservability signupOtpObservability,
-            LoginRateLimiter loginRateLimiter,
-            PasswordResetService passwordResetService,
-            AuthSecurityObservability authSecurityObservability,
-            boolean postgresUserAuthEnabled) {
-        this(
-                emailSenderService,
-                userRepository,
-                orderRepository,
-                reviewRepository,
-                jwtUtil,
-                otpService,
-                signupOtpChallengeService,
-                signupAbuseLimiter,
-                clientIpResolver,
-                signupOtpObservability,
-                loginRateLimiter,
-                passwordResetService,
-                authSecurityObservability,
-                postgresUserAuthEnabled,
-                false);
-    }
-
-    public AuthController(
-            EmailSenderService emailSenderService,
-            UserRepository userRepository,
-            CustomerOrderRepository orderRepository,
-            OrderReviewRepository reviewRepository,
-            JwtUtil jwtUtil,
-            OtpService otpService,
-            SignupOtpChallengeService signupOtpChallengeService,
-            SignupAbuseLimiter signupAbuseLimiter,
-            ClientIpResolver clientIpResolver,
-            SignupOtpObservability signupOtpObservability,
-            LoginRateLimiter loginRateLimiter,
-            PasswordResetService passwordResetService,
-            AuthSecurityObservability authSecurityObservability) {
-        this(
-                emailSenderService,
-                userRepository,
-                orderRepository,
-                reviewRepository,
-                jwtUtil,
-                otpService,
-                signupOtpChallengeService,
-                signupAbuseLimiter,
-                clientIpResolver,
-                signupOtpObservability,
-                loginRateLimiter,
-                passwordResetService,
-                authSecurityObservability,
-                false,
-                false);
-    }
-
-    public boolean isUsingMongoUserPersistence() { return userAuthStore instanceof MongoUserAuthStore; }
-
     public boolean hasPostgresUserAuthentication() { return userAuthStore instanceof PostgresUserAuthStore; }
-
-    @PostConstruct
-    public void validateAuthenticationBackendCoherence() {
-        if (isUsingMongoUserPersistence()) {
-            boolean postgresSignup = signupOtpChallengeService != null && signupOtpChallengeService.getPersistence() != null
-                    && signupOtpChallengeService.getPersistence().getStore() instanceof com.lordgainsborough.restaurant.service.PostgresSignupOtpChallengeStore;
-            boolean postgresLogin = loginRateLimiter != null
-                    && (loginRateLimiter.getCounterStore() instanceof com.lordgainsborough.restaurant.service.PostgresAbuseCounterStore
-                    || loginRateLimiter.getFailureStore() instanceof com.lordgainsborough.restaurant.service.PostgresLoginFailureStateStore);
-            boolean postgresAbuse = signupAbuseLimiter != null
-                    && signupAbuseLimiter.getStore() instanceof com.lordgainsborough.restaurant.service.PostgresAbuseCounterStore;
-            if (postgresSignup || postgresLogin || postgresAbuse)
-                throw new IllegalStateException("MongoDB authentication cannot use PostgreSQL signup/login security persistence");
-        }
-        if (!allowIsolatedTest && passwordResetService != null && passwordResetService.isPostgresStore()) {
-            if (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication()) {
-                throw new IllegalStateException(
-                        "Unsupported mixed-backend activation: PostgreSQL password reset storage is enabled (app.security.postgres-password-reset.enabled=true), " +
-                        "but AuthController user persistence is backed by MongoDB UserRepository. Coordinated PostgreSQL user authentication (PG-022) " +
-                        "must supply a working PostgreSQL user persistence implementation before activating PostgreSQL password reset in AuthController.");
-            }
-        }
-    }
 
     @PostMapping("/signup")
     public ResponseEntity<?> signup(
@@ -384,9 +256,9 @@ public class AuthController {
             @RequestBody SendOtpRequest request,
             HttpServletRequest httpRequest) {
         if (passwordResetService != null && passwordResetService.isPostgresStore()
-                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
+                && (!hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
-                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+                    "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
@@ -407,9 +279,9 @@ public class AuthController {
             @RequestBody PasswordResetResendRequest request,
             HttpServletRequest httpRequest) {
         if (passwordResetService != null && passwordResetService.isPostgresStore()
-                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
+                && (!hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
-                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+                    "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {
@@ -432,9 +304,9 @@ public class AuthController {
             @RequestBody ResetPasswordRequest request,
             HttpServletRequest httpRequest) {
         if (passwordResetService != null && passwordResetService.isPostgresStore()
-                && (isUsingMongoUserPersistence() || !hasPostgresUserAuthentication())) {
+                && (!hasPostgresUserAuthentication())) {
             throw new IllegalStateException(
-                    "PostgreSQL password reset path is isolated and cannot be invoked from MongoDB AuthController until PG-022 coordinated activation.");
+                    "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
         String email = normalizeEmail(request.getEmail());
         if (email.isBlank()) {

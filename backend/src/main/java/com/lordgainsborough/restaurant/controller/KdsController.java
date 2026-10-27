@@ -1,7 +1,6 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +26,7 @@ public class KdsController {
     public KdsController(KdsOrderStore orders, OrderRealtimeService realtime, Clock clock) {
         this.orders = orders; this.realtime = realtime; this.clock = clock.withZone(ZoneId.systemDefault());
     }
-    public KdsController(CustomerOrderRepository orders, OrderRealtimeService realtime,
-            CustomerOrderPresentationService presentation, CustomerNoShowService noShows) {
-        this(new MongoKdsOrderStore(orders,presentation,noShows),realtime,Clock.systemDefaultZone());
-    }
+
     public KdsOrderStore getOrderStore() { return orders; }
     @GetMapping("/access")
     public ResponseEntity<Map<String,Object>> checkAccess() { return ResponseEntity.ok(Map.of("allowed",true)); }

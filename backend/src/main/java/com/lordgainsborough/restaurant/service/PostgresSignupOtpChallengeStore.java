@@ -292,14 +292,6 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         );
     }
 
-    /**
-     * {@inheritDoc}
-     * <p>
-     * <b>Parity Invariant:</b> Requires {@code next_resend_at <= ?}.
-     * If {@code next_resend_at} is NULL, the comparison evaluates to UNKNOWN (denied),
-     * matching MongoDB's fail-closed null-boundary behavior.
-     * </p>
-     */
     @Override
     @Transactional(transactionManager = "transactionManager")
     public Optional<SignupOtpChallenge> tryAtomicResend(

@@ -1,15 +1,9 @@
 package com.lordgainsborough.restaurant.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
-
 import java.time.Instant;
 
-@Document(collection = "login_failure_states")
 public class LoginFailureState {
 
-    @Id
     private String id;
     private String subjectHash;
     private int failureCount;
@@ -17,7 +11,6 @@ public class LoginFailureState {
     private Instant blockedUntil;
     private Instant updatedAt;
 
-    @Indexed(name = "login_failure_state_ttl", expireAfterSeconds = 0)
     private Instant expiresAt;
 
     public String getId() { return id; }

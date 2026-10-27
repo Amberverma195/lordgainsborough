@@ -5,29 +5,16 @@ import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
 import com.lordgainsborough.restaurant.service.*;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 
-/** No production cutover until all order consumers share PostgreSQL storage. */
+/** PostgreSQL persistence for the application. */
 @Configuration(proxyBeanMethods = false)
-@Profile({"postgres-migration", "test"})
-@ConditionalOnProperty(name = "app.orders.postgres.enabled", havingValue = "true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresOrderPersistenceConfiguration {
-    @Bean("transactionManager")
-    @ConditionalOnMissingBean(name = "transactionManager")
-    JpaTransactionManager repositoryTransactionManager(EntityManagerFactory emf) {
-        return new JpaTransactionManager(emf);
-    }
-
-    @Bean("orderJpaTransactionManager")
-    JpaTransactionManager orderJpaTransactionManager(EntityManagerFactory emf) {
-        return new JpaTransactionManager(emf);
-    }
 
     @Bean
     @Primary

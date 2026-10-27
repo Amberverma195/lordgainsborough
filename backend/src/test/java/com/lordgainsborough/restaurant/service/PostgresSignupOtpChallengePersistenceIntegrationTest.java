@@ -1,16 +1,12 @@
 package com.lordgainsborough.restaurant.service;
 
-import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.lordgainsborough.restaurant.config.PostgresSignupOtpPersistenceConfiguration;
-import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
 import com.lordgainsborough.restaurant.model.OtpChallengeStatus;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
-import com.lordgainsborough.restaurant.repository.SignupOtpChallengeRepository;
-import com.lordgainsborough.restaurant.security.PasswordUtil;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence.ResendDenialReason;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService.RequestOtpResult;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService.VerifyOtpResult;
@@ -28,24 +24,18 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.ResultSet;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -63,14 +53,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -183,7 +171,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
 
     @BeforeAll
     void setUpDatabase() throws Exception {
-        testPort = System.getProperty("test.postgres.port", "54353");
+        testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         testDb = TEST_DB_PREFIX + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         testJdbcUrl = "jdbc:postgresql://127.0.0.1:" + testPort + "/" + testDb + "?sslmode=disable";
 
@@ -1544,7 +1532,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertEquals(OtpChallengeStatus.ACTIVE, restored.getStatus());
     }
 
-    @Configuration
+    @org.springframework.boot.test.context.TestConfiguration
     static class MinimalSpringContextConfig {
         @Bean
         public DataSource dataSource(PostgresSignupOtpChallengePersistenceIntegrationTest testInstance) {
@@ -1556,26 +1544,16 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
             return testInstance.clock;
         }
 
-        @Bean
-        public SignupOtpChallengeRepository repository() {
-            return mock(SignupOtpChallengeRepository.class);
-        }
-
-        @Bean
-        public MongoTemplate mongoTemplate() {
-            return mock(MongoTemplate.class);
-        }
     }
 
     @Test
     @Order(58)
     @DisplayName("58. Spring DI selects PostgresSignupOtpChallengeStore when opted-in")
     void test58_springContextDISelectsPostgresWhenOptedIn() {
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
                         PostgresSignupOtpPersistenceConfiguration.class,
-                        MongoSignupOtpChallengeStore.class,
                         SignupOtpChallengePersistence.class
                 )
                 .withPropertyValues("spring.profiles.active=postgres-migration", "app.security.postgres-signup-otp.enabled=true")
@@ -1590,30 +1568,10 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     }
 
     @Test
-    @Order(59)
-    @DisplayName("59. Spring DI selects MongoSignupOtpChallengeStore by default")
-    void test59_springContextDISelectsMongoByDefault() {
-        new ApplicationContextRunner()
-                .withUserConfiguration(
-                        MinimalSpringContextConfig.class,
-                        PostgresSignupOtpPersistenceConfiguration.class,
-                        MongoSignupOtpChallengeStore.class,
-                        SignupOtpChallengePersistence.class
-                )
-                .withBean(PostgresSignupOtpChallengePersistenceIntegrationTest.class, () -> this)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    SignupOtpChallengePersistence persistenceBean = context.getBean(SignupOtpChallengePersistence.class);
-                    assertNotNull(persistenceBean);
-                    assertThat(persistenceBean.getStore()).isInstanceOf(MongoSignupOtpChallengeStore.class);
-                });
-    }
-
-    @Test
     @Order(60)
     @DisplayName("60. Spring transactional proxy verification")
     void test60_springTransactionalProxyVerified() {
-        new ApplicationContextRunner()
+        new ApplicationContextRunner().withUserConfiguration(com.lordgainsborough.restaurant.support.JdbcTestTransactions.class)
                 .withUserConfiguration(
                         MinimalSpringContextConfig.class,
                         PostgresSignupOtpPersistenceConfiguration.class

@@ -7,14 +7,6 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Spring Data JPA repository for {@link JpaCategory} entities in {@code categories}.
- * <p>
- * Mirrors all query methods defined on the MongoDB {@code CategoryRepository}.
- * Specifically, {@link #findByName(String)} returns {@code null} if the category is not found,
- * matching the legacy MongoDB contract.
- * </p>
- */
 @Repository
 public interface JpaCategoryRepository extends JpaRepository<JpaCategory, String> {
 

@@ -8,17 +8,15 @@ import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
 import org.springframework.data.jpa.repository.JpaContext;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 
-/** Coordinated identities and PG-023 realtime remain opt-in pending final migration verification. */
+/** PostgreSQL persistence for the application. */
 @Configuration(proxyBeanMethods = false)
-@Profile({"postgres-migration", "test"})
-@ConditionalOnProperty(name = "app.security.postgres-user-auth.enabled", havingValue = "true")
+@org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresUserAuthPersistenceConfiguration {
     @Bean @Primary
     PostgresUserAuthStore postgresUserAuthStore(JpaUserRepository users, JpaCustomerOrderRepository orders,

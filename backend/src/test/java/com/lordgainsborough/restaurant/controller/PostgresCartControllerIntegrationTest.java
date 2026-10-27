@@ -7,7 +7,6 @@ import com.lordgainsborough.restaurant.persistence.jpa.entity.*;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.*;
-import jakarta.persistence.EntityManagerFactory;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,7 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /** Real PostgreSQL cart contracts and competing transactions, without an ambient test transaction. */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PostgresCartControllerIntegrationTest {
-    private static String jdbcUrl;
+    private String jdbcUrl;
     private String database, adminUrl;
     private boolean owned;
     private AnnotationConfigApplicationContext context;
@@ -56,12 +55,12 @@ class PostgresCartControllerIntegrationTest {
         @Override public Instant instant() { return now; }
     }
 
-    @Configuration(proxyBeanMethods = false)
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     @EnableJpaRepositories(basePackages = "com.lordgainsborough.restaurant.persistence.jpa.repository")
     static class JpaConfig {
-        @Bean PGSimpleDataSource dataSource() {
+        @Bean PGSimpleDataSource dataSource(org.springframework.core.env.Environment environment) {
             var ds = new PGSimpleDataSource();
-            ds.setUrl(jdbcUrl); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
+            ds.setUrl(environment.getRequiredProperty("test.jdbc-url")); ds.setUser("postgres"); ds.setPassword("postgres"); return ds;
         }
         @Bean LocalContainerEntityManagerFactoryBean entityManagerFactory(PGSimpleDataSource ds) {
             var factory = new LocalContainerEntityManagerFactoryBean();
@@ -74,7 +73,7 @@ class PostgresCartControllerIntegrationTest {
     }
 
     @BeforeAll void provision() throws Exception {
-        String port = System.getProperty("test.postgres.port");
+        String port = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         if (Boolean.getBoolean("test.postgres.mandatory") || "true".equalsIgnoreCase(System.getenv("CI")))
             assertThat(port).as("mandatory PostgreSQL port").matches("[0-9]{1,5}");
         Assumptions.assumeTrue(port != null, "Set test.postgres.port for PostgreSQL");
@@ -94,6 +93,7 @@ class PostgresCartControllerIntegrationTest {
         context.registerBean(Clock.class, () -> clock);
         context.registerBean(JwtUtil.class, () -> jwt);
         context.register(JpaConfig.class, PostgresCartPersistenceConfiguration.class, CartController.class);
+        context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl)));
         context.refresh();
         users = context.getBean(JpaUserRepository.class); store = context.getBean(CartStore.class);
         jdbc = new JdbcTemplate(context.getBean(PGSimpleDataSource.class));

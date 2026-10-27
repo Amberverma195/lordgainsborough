@@ -2,11 +2,14 @@
 # These values are read by application.properties via ${ENV_VAR} placeholders.
 #
 # IMPORTANT: The credentials previously committed to this repo are considered
-# compromised. Rotate them (MongoDB user password, Brevo SMTP key, JWT secret)
+# compromised. Rotate them (Brevo SMTP key, JWT secret)
 # before relying on these in any shared or production environment.
 #
 # PowerShell (current shell only):
-#   $env:MONGODB_URI = "mongodb+srv://USER:PASS@cluster0.example.mongodb.net/LordGainsBorough?retryWrites=true&w=majority"
+#   $env:DB_HOST = "127.0.0.1"
+#   $env:DB_NAME = "lordgainsborough_dev"
+#   $env:DB_USER = "lordgainsborough"
+#   $env:DB_PASSWORD = "your-local-database-password"
 #   $env:MAIL_USERNAME = "your-brevo-smtp-username"
 #   $env:MAIL_PASSWORD = "your-brevo-smtp-password"
 #   $env:JWT_SECRET = "a-long-random-secret-at-least-32-bytes"
@@ -14,7 +17,10 @@
 #   .\mvnw spring-boot:run
 #
 # Required:
-MONGODB_URI=
+DB_HOST=
+DB_NAME=
+DB_USER=
+DB_PASSWORD=
 MAIL_USERNAME=
 MAIL_PASSWORD=
 JWT_SECRET=
@@ -24,7 +30,8 @@ ABUSE_IP_HASH_SECRET=
 # PORT=8082
 # APP_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 # SOCKETIO_ORIGIN=http://localhost:3000
-# MONGODB_DATABASE=LordGainsBorough
+# DB_PORT=5432
+# DB_SSL_MODE=prefer
 # MAIL_FROM=lordgainsborough5@gmail.com
 # MAIL_FROM_NAME=Lord Gainsborough
 # BREVO_API_KEY=
@@ -32,7 +39,7 @@ ABUSE_IP_HASH_SECRET=
 # MANAGEMENT_SERVER_PORT=8083
 # MANAGEMENT_SERVER_ADDRESS=127.0.0.1
 #
-# Signup OTP secondary abuse limits (keyed IP hash + Mongo TTL counters):
+# Signup OTP secondary abuse limits (keyed IP hash + PostgreSQL counters):
 # ABUSE_TRUSTED_PROXIES=127.0.0.1,::1,10.0.0.0/8
 # ABUSE_INITIAL_SENDS_PER_IP=20
 # ABUSE_INITIAL_SEND_WINDOW=PT15M
