@@ -16,4 +16,6 @@ public class PostgresCustomerOrderCountStore implements CustomerOrderCountStore 
     public long byPhone(String phone, boolean noShowsOnly) {
         return noShowsOnly ? orders.countByCustomerPhoneAndStatus(phone, "NO_SHOW") : orders.countByCustomerPhone(phone);
     }
+
+    public JpaCustomerOrderRepository getOrderRepository() { return orders; }
 }

@@ -135,4 +135,6 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
     }
 
     public boolean reviewExists(String id) { return reviews.existsByOrderId(id); }
+
+    public JpaStoreSettingsRepository getSettingsRepository() { return settings; }
 }

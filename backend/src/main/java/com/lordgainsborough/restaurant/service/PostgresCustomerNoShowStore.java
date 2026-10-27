@@ -70,4 +70,7 @@ public class PostgresCustomerNoShowStore implements CustomerNoShowStore {
         if (digits.startsWith("1") && digits.length() > 10) digits = digits.substring(1);
         return digits.length() > 10 ? digits.substring(0,10) : digits;
     }
+
+    public JpaCustomerOrderRepository getOrderRepository() { return orders; }
+    public JpaUserRepository getUserRepository() { return users; }
 }

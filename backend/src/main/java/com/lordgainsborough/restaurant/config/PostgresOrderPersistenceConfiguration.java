@@ -41,16 +41,8 @@ public class PostgresOrderPersistenceConfiguration {
     static BeanFactoryPostProcessor validateOrderStorageCoherence() {
         return factory -> {
             PostgresIdentityCoherence.preflight(factory, AuthController.class);
-            // The live Socket.IO handler still injects Mongo repositories. No boolean can make them coherent.
-            // There is deliberately no allow-isolated-test bypass when legacy consumers are present.
-            for (Class<?> legacyConsumer : new Class<?>[] {
-                    SocketIoConfig.class}) {
-                if (factory.getBeanNamesForType(legacyConsumer, true, false).length > 0) {
-                    throw new IllegalStateException("Unsupported mixed-backend order activation: "
-                            + legacyConsumer.getSimpleName() + " still uses MongoDB order state; "
-                            + "PG-017 is isolated until coordinated PG-019/PG-020/PG-022/PG-023 rollout");
-                }
-            }
+            // PG-023 validates the actual socket dependencies in its factory BEFORE initMethod=start.
+            PostgresIdentityCoherence.preflightSocket(factory);
         };
     }
 
@@ -61,6 +53,7 @@ public class PostgresOrderPersistenceConfiguration {
             if (!(selected instanceof PostgresCustomerOrderStore checkout)) throw incoherent("checkout store");
             EntityManagerFactory emf = checkout.getEntityManagerFactory();
             PostgresIdentityCoherence.requireIfPresent(context, emf);
+            PostgresIdentityCoherence.requireSocket(context, emf);
             PostgresIdentityCoherence.requireAdministratorHttp(context, emf);
             for (ReviewController controller : context.getBeansOfType(ReviewController.class).values()) {
                 if (!(controller.getReviewStore() instanceof PostgresReviewStore review)

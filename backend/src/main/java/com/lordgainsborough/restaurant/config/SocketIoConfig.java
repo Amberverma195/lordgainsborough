@@ -5,26 +5,31 @@ import com.corundumstudio.socketio.AuthorizationResult;
 import com.corundumstudio.socketio.AuthTokenResult;
 import com.corundumstudio.socketio.HandshakeData;
 import com.corundumstudio.socketio.SocketIOServer;
+import com.corundumstudio.socketio.SocketIOClient;
+import com.corundumstudio.socketio.protocol.Packet;
+import com.corundumstudio.socketio.protocol.PacketType;
 import com.corundumstudio.socketio.protocol.JacksonJsonSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.lordgainsborough.restaurant.model.CustomerOrder;
-import com.lordgainsborough.restaurant.repository.CustomerOrderRepository;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
-import com.lordgainsborough.restaurant.security.RoleAccess;
-import com.lordgainsborough.restaurant.service.KdsAccessService;
-import com.lordgainsborough.restaurant.service.OrderAccessService;
+import com.lordgainsborough.restaurant.service.SocketOrderAuthorizationService;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Map;
-import java.util.Optional;
+import java.util.HashSet;
+import java.util.Objects;
 
 @org.springframework.context.annotation.Configuration
 public class SocketIoConfig {
+    private static final String ROOM_GRANT = SocketIoConfig.class.getName() + ".roomGrant";
+    private SocketOrderAuthorizationService authorizationService;
+
+    public SocketOrderAuthorizationService getAuthorizationService() { return authorizationService; }
     @Value("${socketio.host:0.0.0.0}")
     private String host;
 
@@ -36,10 +41,11 @@ public class SocketIoConfig {
 
     @Bean(initMethod = "start", destroyMethod = "stop")
     public SocketIOServer socketIoServer(
-            CustomerOrderRepository orderRepository,
-            OrderAccessService orderAccessService,
-            KdsAccessService kdsAccessService,
+            SocketOrderAuthorizationService authorization,
             ClientIpResolver clientIpResolver) {
+        // initMethod=start executes before SmartInitializingSingleton validators. Fail closed HERE first.
+        authorization.validateBackendCoherence();
+        this.authorizationService = authorization;
         Configuration config = new Configuration();
         config.setHostname(host);
         config.setPort(port);
@@ -47,56 +53,110 @@ public class SocketIoConfig {
         // Netty-socketio's default ObjectMapper cannot serialize LocalDateTime, which
         // silently drops order.created / order.updated events to KDS and customers.
         config.setJsonSupport(new JavaTimeJacksonJsonSupport());
-        config.setAuthorizationListener(handshakeData -> {
-            String role = handshakeData.getSingleUrlParam("role");
-
-            // Layer 3: KDS realtime room is IP-gated (no login).
-            if (isKdsSocketRole(role)) {
-                String clientIp = resolveHandshakeIp(handshakeData, clientIpResolver);
-                return kdsAccessService.isIpAllowed(clientIp)
-                        ? AuthorizationResult.SUCCESSFUL_AUTHORIZATION
-                        : AuthorizationResult.FAILED_AUTHORIZATION;
+        config.setAuthorizationListener(handshake -> {
+            try {
+                // Role merely declares kitchen intent. Only the actual IP/settings gate authorizes it.
+                return !SocketOrderAuthorizationService.isKitchenRole(handshake.getSingleUrlParam("role"))
+                        || authorization.kitchenAllowed(resolveHandshakeIp(handshake, clientIpResolver))
+                        ? AuthorizationResult.SUCCESSFUL_AUTHORIZATION : AuthorizationResult.FAILED_AUTHORIZATION;
+            } catch (RuntimeException failure) {
+                return AuthorizationResult.FAILED_AUTHORIZATION;
             }
-
-            // Socket.IO's auth payload is not available during this HTTP handshake.
-            // Customer order authorization is performed by the namespace auth listener.
-            return AuthorizationResult.SUCCESSFUL_AUTHORIZATION;
         });
 
         SocketIOServer server = new SocketIOServer(config);
         server.addNamespace("/").addAuthTokenListener((authToken, client) -> {
-            String orderId = client.getHandshakeData().getSingleUrlParam("orderId");
-            if (orderId == null || orderId.isBlank()) {
-                return AuthTokenResult.AuthTokenResultSuccess;
+            synchronized (client) {
+                try {
+                    revoke(client);
+                    var handshake = client.getHandshakeData();
+                    var grant = authorization.authorize(handshake.getSingleUrlParam("orderId"),
+                            handshake.getSingleUrlParam("role"), authValue(authToken, "token", 8192),
+                            authValue(authToken, "trackingToken", 43), resolveHandshakeIp(handshake, clientIpResolver));
+                    if (grant.isEmpty()) return deniedAuthorization();
+                    client.set(ROOM_GRANT, grant.get());
+                    return AuthTokenResult.AuthTokenResultSuccess;
+                } catch (RuntimeException failure) {
+                    safelyRevoke(client);
+                    return deniedAuthorization();
+                }
             }
-
-            String token = authValue(authToken, "token");
-            String trackingToken = authValue(authToken, "trackingToken");
-            Optional<CustomerOrder> orderOpt = orderRepository.findById(orderId);
-            boolean authorized = orderOpt
-                    .filter(order -> orderAccessService.canAccessWithJwtToken(order, token, trackingToken))
-                    .isPresent();
-            return authorized
-                    ? AuthTokenResult.AuthTokenResultSuccess
-                    : new AuthTokenResult(false, Map.of("message", "Order access denied"));
         });
 
         server.addConnectListener(client -> {
-            String role = client.getHandshakeData().getSingleUrlParam("role");
-            String orderId = client.getHandshakeData().getSingleUrlParam("orderId");
-            if (isKdsSocketRole(role)) {
-                client.joinRoom("kds");
+            synchronized (client) {
+                try {
+                    SocketOrderAuthorizationService.RoomGrant grant = client.get(ROOM_GRANT);
+                    client.del(ROOM_GRANT); // A reconnect/namespace authentication cannot reuse this permission.
+                    clearProtectedRooms(client);
+                    var handshake = client.getHandshakeData();
+                    String orderId = handshake.getSingleUrlParam("orderId");
+                    String role = handshake.getSingleUrlParam("role");
+                    String ip = resolveHandshakeIp(handshake, clientIpResolver);
+                    // netty-socketio 2.0.14 skips namespace auth for a null auth payload (and older Engine.IO).
+                    // Such a path can enter no order room; kitchen-only connections still pass the real IP gate.
+                    if (grant == null) {
+                        if (orderId != null) { denyConnection(client); return; }
+                        grant = authorization.authorize(null, role, null, null, ip).orElse(null);
+                    }
+                    if (grant == null || !Objects.equals(grant.orderId(), orderId)
+                            || grant.kitchen() != SocketOrderAuthorizationService.isKitchenRole(role)
+                            || (grant.kitchen() && !authorization.kitchenAllowed(ip))) {
+                        denyConnection(client);
+                        return;
+                    }
+                    if (grant.orderId() != null) client.joinRoom("order:" + grant.orderId());
+                    if (grant.kitchen()) client.joinRoom("kds");
+                } catch (RuntimeException failure) {
+                    denyConnection(client);
+                }
             }
-            if (orderId != null && !orderId.isBlank()) {
-                client.joinRoom("order:" + orderId);
+        });
+        server.addDisconnectListener(client -> {
+            synchronized (client) {
+                // The library removes namespace rooms before invoking disconnect listeners.
+                try { revoke(client); } catch (RuntimeException ignored) { /* No stale grant retained intentionally. */ }
             }
         });
 
         return server;
     }
 
-    private static boolean isKdsSocketRole(String role) {
-        return "KDS".equalsIgnoreCase(role) || RoleAccess.canAccessKds(role);
+    private static AuthTokenResult deniedAuthorization() {
+        return new AuthTokenResult(false, Map.of("message", "Order access denied"));
+    }
+
+    private static void clearProtectedRooms(SocketIOClient client) {
+        var rooms = client.getAllRooms();
+        if (rooms == null) throw new IllegalStateException("Socket room membership is unavailable");
+        for (String room : new HashSet<>(rooms))
+            if ("kds".equals(room) || room.startsWith("order:")) client.leaveRoom(room);
+    }
+
+    private static void revoke(SocketIOClient client) {
+        try { client.del(ROOM_GRANT); }
+        finally { clearProtectedRooms(client); }
+    }
+
+    private static void safelyRevoke(SocketIOClient client) {
+        try { revoke(client); }
+        catch (RuntimeException failure) {
+            try { client.disconnect(); } catch (RuntimeException ignored) { /* Remain denied. */ }
+        }
+    }
+
+    private static void denyConnection(SocketIOClient client) {
+        safelyRevoke(client);
+        try {
+            Packet denial = new Packet(PacketType.MESSAGE, client.getEngineIOVersion());
+            denial.setSubType(PacketType.ERROR);
+            denial.setNsp(client.getNamespace().getName());
+            denial.setData(Map.of("message", "Order access denied"));
+            client.send(denial);
+        } catch (RuntimeException ignored) { /* A failed denial delivery must never grant access. */ }
+        finally {
+            try { client.disconnect(); } catch (RuntimeException ignored) { /* No protected rooms remain. */ }
+        }
     }
 
     private static String resolveHandshakeIp(HandshakeData handshakeData, ClientIpResolver clientIpResolver) {
@@ -120,22 +180,14 @@ public class SocketIoConfig {
      * Reads a value from the Socket.IO client {@code auth} payload so secrets (JWT,
      * order tracking token) travel in the handshake body rather than the URL query string.
      */
-    private String authValue(Object authToken, String key) {
-        if (authToken instanceof Map<?, ?> authMap) {
-            Object value = authMap.get(key);
-            if (value != null) {
-                String text = String.valueOf(value);
-                return text.isBlank() ? null : text;
-            }
+    private String authValue(Object authToken, String key, int maximumLength) {
+        Object value = null;
+        if (authToken instanceof Map<?, ?> authMap) value = authMap.get(key);
+        else if (authToken instanceof JsonNode authNode) {
+            JsonNode field = authNode.get(key);
+            if (field != null && field.isTextual()) value = field.textValue();
         }
-        if (authToken instanceof JsonNode authNode) {
-            JsonNode value = authNode.get(key);
-            if (value != null && !value.isNull()) {
-                String text = value.asText();
-                return text.isBlank() ? null : text;
-            }
-        }
-        return null;
+        return value instanceof String text && text.length() <= maximumLength && !text.isBlank() ? text : null;
     }
 
     /**

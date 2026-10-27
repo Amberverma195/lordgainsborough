@@ -51,6 +51,30 @@ final class PostgresIdentityCoherence {
                 throw incompatible("registered admin search HTTP interceptor");
         }
     }
+    /** Bean metadata prerequisite only; actual immutable dependencies are checked before server construction. */
+    static void preflightSocket(ConfigurableListableBeanFactory factory) {
+        if (factory.getBeanNamesForType(SocketIoConfig.class, true, false).length > 0
+                && factory.getBeanNamesForType(SocketOrderAuthorizationService.class, true, false).length != 1)
+            throw incompatible("missing or ambiguous Socket.IO authorization dependency");
+    }
+    static void requireSocket(ApplicationContext context, EntityManagerFactory emf) {
+        for (SocketIoConfig configuration : context.getBeansOfType(SocketIoConfig.class).values()) {
+            var authorization = context.getBean(SocketOrderAuthorizationService.class);
+            if (configuration.getAuthorizationService() != authorization
+                    || authorization.getOrderStore() != context.getBean(CustomerOrderStore.class)
+                    || authorization.getIdentityStore() != context.getBean(UserAuthStore.class)
+                    || authorization.getOrderAccessService() != context.getBean(OrderAccessService.class)
+                    || !(authorization.getOrderStore() instanceof PostgresCustomerOrderStore checkout)
+                    || checkout.getEntityManagerFactory() != emf)
+                throw incompatible("actual injected Socket.IO authorization/order/identity dataset");
+            authorization.validateBackendCoherence();
+            for (OrderRealtimeService realtime : context.getBeansOfType(OrderRealtimeService.class).values()) {
+                if (realtime.getPresentationService() != authorization.getPresentationService()
+                        || realtime.getSocketIoServer() != context.getBean(com.corundumstudio.socketio.SocketIOServer.class))
+                    throw incompatible("actual realtime server/presentation dependencies");
+            }
+        }
+    }
     static IllegalStateException incompatible(String detail) {
         return new IllegalStateException("Unsupported mixed-backend identity activation: " + detail);
     }

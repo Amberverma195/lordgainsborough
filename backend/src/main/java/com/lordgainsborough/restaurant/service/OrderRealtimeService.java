@@ -5,6 +5,7 @@ import com.lordgainsborough.restaurant.model.CustomerOrder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.Map;
 
@@ -21,6 +22,16 @@ public class OrderRealtimeService {
         this.socketIoServer = socketIoServer;
         this.presentationService = presentationService;
     }
+
+    @Autowired
+    public OrderRealtimeService(SocketIOServer socketIoServer, CustomerOrderPresentationService presentationService,
+            SocketOrderAuthorizationService authorization) {
+        this(socketIoServer, presentationService);
+        if (authorization.getPresentationService() != presentationService)
+            throw new IllegalStateException("Socket.IO authorization and realtime counts must use the same selected presentation service");
+    }
+    public CustomerOrderPresentationService getPresentationService() { return presentationService; }
+    public SocketIOServer getSocketIoServer() { return socketIoServer; }
 
     public void orderCreated(CustomerOrder order) {
         CustomerOrder payload = presentationService.attachCustomerOrderCount(order);
@@ -58,7 +69,8 @@ public class OrderRealtimeService {
         } catch (RuntimeException exception) {
             // Realtime delivery must never turn an already-persisted order into an
             // HTTP failure that encourages the customer to submit a duplicate.
-            log.error("Unable to emit Socket.IO event {} to room {}", event, room, exception);
+            // Exception messages can contain serialization payloads; log only the intended event and room.
+            log.warn("Unable to emit Socket.IO event {} to room {}", event, room);
         }
     }
 }

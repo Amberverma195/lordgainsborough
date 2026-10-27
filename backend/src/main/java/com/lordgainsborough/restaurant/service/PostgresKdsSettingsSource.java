@@ -12,4 +12,6 @@ public class PostgresKdsSettingsSource implements KdsSettingsSource {
     public String allowedIps() {
         return settings.findById(JpaStoreSettings.DEFAULT_ID).map(JpaStoreSettings::getKdsAllowedIp).orElse("");
     }
+
+    public JpaStoreSettingsRepository getSettingsRepository() { return settings; }
 }

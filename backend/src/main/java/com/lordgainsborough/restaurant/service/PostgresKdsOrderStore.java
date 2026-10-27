@@ -80,4 +80,6 @@ public class PostgresKdsOrderStore implements KdsOrderStore {
         CustomerOrder saved = presentation.attachCustomerOrderCount(mapper.fromJpa(entity));
         OrderNotifications.afterCommit(() -> afterCommit.accept(saved)); return saved;
     }
+
+    public JpaCustomerOrderRepository getOrderRepository() { return orders; }
 }

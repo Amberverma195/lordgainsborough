@@ -15,7 +15,7 @@ import org.springframework.data.jpa.repository.JpaContext;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
 
-/** PG-022 prepares coordinated HTTP identities; live Socket.IO still blocks production until PG-023. */
+/** Coordinated identities and PG-023 realtime remain opt-in pending final migration verification. */
 @Configuration(proxyBeanMethods = false)
 @Profile({"postgres-migration", "test"})
 @ConditionalOnProperty(name = "app.security.postgres-user-auth.enabled", havingValue = "true")
@@ -29,8 +29,7 @@ public class PostgresUserAuthPersistenceConfiguration {
     }
     @Bean static BeanFactoryPostProcessor rejectUnmigratedIdentityConsumers() {
         return factory -> {
-            if (factory.getBeanNamesForType(SocketIoConfig.class, true, false).length > 0)
-                throw PostgresIdentityCoherence.incompatible("SocketIoConfig still reads MongoDB orders; PG-023 required");
+            PostgresIdentityCoherence.preflightSocket(factory);
             if (factory.getBeanNamesForType(PostgresCustomerOrderStore.class, true, false).length == 0)
                 throw PostgresIdentityCoherence.incompatible("PostgreSQL auth requires actual PostgreSQL order history");
         };
@@ -40,6 +39,7 @@ public class PostgresUserAuthPersistenceConfiguration {
             PostgresUserAuthStore identity = context.getBean(PostgresUserAuthStore.class);
             EntityManagerFactory emf = identity.getEntityManagerFactory();
             if (PostgresIdentityCoherence.require(context, emf) != identity) fail("selected identity store");
+            PostgresIdentityCoherence.requireSocket(context, emf);
             var manager = identity.getTransactionManager();
             var ds = manager.getDataSource();
             if (context.getBean("transactionManager") != manager || ds == null) fail("security transaction manager");
