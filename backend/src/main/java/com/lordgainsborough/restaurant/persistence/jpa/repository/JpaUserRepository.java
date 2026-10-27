@@ -16,6 +16,26 @@ import java.util.Optional;
 @Repository
 public interface JpaUserRepository extends JpaRepository<JpaUser, String> {
 
+    /** Closed projection: search must never select credentials or reset metadata. */
+    interface AdminSearchUser {
+        String getId();
+        String getName();
+        String getEmail();
+        String getPhone();
+        String getPhoneNormalized();
+        String getRole();
+        String getMemberSince();
+        int getNoShowCount();
+    }
+
+    // Spring Data Containing escapes LIKE metacharacters and binds the literal input.
+    List<AdminSearchUser> findAdminByNameContainingIgnoreCaseOrderByIdAsc(
+            String name, org.springframework.data.domain.Pageable limit);
+    List<AdminSearchUser> findAdminByEmailContainingIgnoreCaseOrderByIdAsc(
+            String email, org.springframework.data.domain.Pageable limit);
+    List<AdminSearchUser> findAdminByPhoneNormalizedContainingOrderByIdAsc(
+            String phone, org.springframework.data.domain.Pageable limit);
+
     /** Counter-only write: never rewrite password, role, token version or profile columns. */
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.data.jpa.repository.Query("update JpaUser u set u.noShowCount = :count where u.id = :id")

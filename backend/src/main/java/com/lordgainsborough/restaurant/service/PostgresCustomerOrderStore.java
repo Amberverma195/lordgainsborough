@@ -104,6 +104,9 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
         return result;
     }
 
+    public JpaUserRepository getUserRepository() { return users; }
+    public JpaCustomerOrderRepository getOrderRepository() { return orders; }
+
     public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }
 
     public boolean pickupDisabled(String email, String phone) {

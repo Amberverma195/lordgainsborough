@@ -40,6 +40,17 @@ import java.util.Optional;
 @Repository
 public interface JpaCustomerOrderRepository extends JpaRepository<JpaCustomerOrder, String> {
 
+    /** One contact query for all selected users, including guest orders; no user FK assumed. */
+    @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where lower(o.customerEmail) in :emails or o.customerPhone in :phones order by o.createdAt desc, o.id asc")
+    List<JpaCustomerOrder> findAdminHistoryByContacts(
+            @org.springframework.data.repository.query.Param("emails") List<String> emails,
+            @org.springframework.data.repository.query.Param("phones") List<String> phones);
+
+    @EntityGraph(attributePaths = {"items"})
+    @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where o.id in :ids")
+    List<JpaCustomerOrder> findAdminHistoryItemsByIds(
+            @org.springframework.data.repository.query.Param("ids") List<String> ids);
+
     @EntityGraph(attributePaths = {"items"})
     @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where o.pickupDate = :date order by o.createdAt desc, o.id asc")
     List<JpaCustomerOrder> findKdsWithItemsByPickupDate(@org.springframework.data.repository.query.Param("date") String date);
