@@ -117,4 +117,20 @@ class ReviewControllerTest {
         review.setItems(List.of(item));
         return review;
     }
+
+    @Test void nullItemsAndBlankIdsAreIgnoredAndDescriptionsTrimmed() {
+        var order=orderWithItem();var request=reviewRequest(99,"  good  ");var blank=new OrderReview.ReviewItem();blank.setMenuItemId(" ");blank.setRating(5);
+        request.setItems(java.util.Arrays.asList(null,blank,request.getItems().getFirst()));
+        when(orderRepository.findById("order-1")).thenReturn(Optional.of(order));when(reviewRepository.save(any())).thenAnswer(call->call.getArgument(0));when(orderRepository.save(any())).thenAnswer(call->call.getArgument(0));
+        var result=controller.createReview("order-1",null,null,request).getBody();assertEquals(1,result.getItems().size());assertEquals(5,result.getItems().getFirst().getRating());assertEquals("good",result.getItems().getFirst().getDescription());
+    }
+    @Test void unauthorizedMongoReviewUsesLegacyAccessAndReturns404WithoutSave() {
+        var order=orderWithItem();when(orderRepository.findById("order-1")).thenReturn(Optional.of(order));when(orderAccessService.canAccess(order,"Bearer jwt","token")).thenReturn(false);
+        assertEquals(404,controller.createReview("order-1","Bearer jwt","token",reviewRequest(5,"")).getStatusCode().value());verify(orderAccessService).canAccess(order,"Bearer jwt","token");verify(reviewRepository,never()).save(any());
+    }
+    @Test void moderationHandlesNullStatusAndNormalizesCaseWithoutChangingItems() {
+        assertEquals(400,controller.updateReviewStatus("id",java.util.Collections.singletonMap("status",null)).getStatusCode().value());
+        var review=reviewRequest(4,"keep");when(reviewRepository.findById("id")).thenReturn(Optional.of(review));when(reviewRepository.save(review)).thenReturn(review);
+        assertEquals("PUBLISHED",controller.updateReviewStatus("id",java.util.Map.of("status"," published ")).getBody().getStatus());assertEquals("keep",review.getItems().getFirst().getDescription());
+    }
 }

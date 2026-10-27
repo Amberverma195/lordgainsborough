@@ -793,17 +793,17 @@ public class CartReviewReservationJpaIntegrationTest {
 
     @Test
     @Order(15)
-    @DisplayName("Review Rating Constraint: Rating < 1 or > 5 is rejected by chk_order_review_items_rating")
+    @DisplayName("Review Rating Constraint: Rating < 0 or > 5 is rejected by chk_order_review_items_rating")
     void test15_invalidReviewRating_rejected() {
         EntityManager em = emf.createEntityManager();
         EntityTransaction tx = em.getTransaction();
 
-        // 1. Rating 0 rejected
+        // 1. Rating -1 rejected after V2 permits text-only rating zero
         try {
             tx.begin();
             JpaCustomerOrder order = createAndPersistOrder(em);
             JpaOrderReview review = new JpaOrderReview("rev-chk-0-" + UUID.randomUUID(), order, "Rater", "r@example.com", "519-555-0000");
-            review.addItem(new JpaOrderReviewItem("m1", "Food", 0, "Too low")); // rating 0!
+            review.addItem(new JpaOrderReviewItem("m1", "Food", -1, "Too low")); // rating -1!
             em.persist(review);
 
             assertThatThrownBy(em::flush)

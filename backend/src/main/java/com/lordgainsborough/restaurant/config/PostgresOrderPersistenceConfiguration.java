@@ -42,7 +42,7 @@ public class PostgresOrderPersistenceConfiguration {
         return factory -> {
             // These concrete handlers still inject Mongo repositories. No boolean can make them coherent.
             // There is deliberately no allow-isolated-test bypass when legacy consumers are present.
-            for (Class<?> legacyConsumer : new Class<?>[] {ReviewController.class,
+            for (Class<?> legacyConsumer : new Class<?>[] {
                     SocketIoConfig.class, AuthController.class}) {
                 if (factory.getBeanNamesForType(legacyConsumer, true, false).length > 0) {
                     throw new IllegalStateException("Unsupported mixed-backend order activation: "
@@ -59,6 +59,11 @@ public class PostgresOrderPersistenceConfiguration {
             CustomerOrderStore selected = context.getBean(CustomerOrderStore.class);
             if (!(selected instanceof PostgresCustomerOrderStore checkout)) throw incoherent("checkout store");
             EntityManagerFactory emf = checkout.getEntityManagerFactory();
+            for (ReviewController controller : context.getBeansOfType(ReviewController.class).values()) {
+                if (!(controller.getReviewStore() instanceof PostgresReviewStore review)
+                        || review.getOrderStore() != checkout || review.getEntityManagerFactory() != emf)
+                    throw incoherent("injected review store/order linkage");
+            }
             for (KdsController controller : context.getBeansOfType(KdsController.class).values()) {
                 if (!(controller.getOrderStore() instanceof PostgresKdsOrderStore kds)
                         || kds.getEntityManagerFactory() != emf

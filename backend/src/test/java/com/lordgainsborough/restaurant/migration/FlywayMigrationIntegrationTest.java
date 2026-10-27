@@ -176,7 +176,7 @@ public class FlywayMigrationIntegrationTest {
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
-                .locations("classpath:db/migration")
+                .locations("classpath:db/migration").target("1")
                 .baselineOnMigrate(false)
                 .cleanDisabled(true)
                 .load();
@@ -285,7 +285,7 @@ public class FlywayMigrationIntegrationTest {
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
-                .locations("classpath:db/migration")
+                .locations("classpath:db/migration").target("1")
                 .baselineOnMigrate(false)
                 .cleanDisabled(true)
                 .load();
@@ -324,7 +324,7 @@ public class FlywayMigrationIntegrationTest {
 
         Flyway flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "postgres", "postgres")
-                .locations("classpath:db/migration")
+                .locations("classpath:db/migration").target("1")
                 .baselineOnMigrate(false)
                 .cleanDisabled(true)
                 .load();
@@ -333,7 +333,8 @@ public class FlywayMigrationIntegrationTest {
 
         assertThat(valResult.validationSuccessful).isTrue();
         assertThat(valResult.invalidMigrations).isEmpty();
-        assertThat(valResult.validateCount).isEqualTo(1);
+        // Validation includes resolved V2 even while this historical smoke suite targets V1.
+        assertThat(valResult.validateCount).isEqualTo(2);
         assertThat(valResult.errorDetails).isNull();
     }
 
@@ -368,6 +369,7 @@ public class FlywayMigrationIntegrationTest {
                         "spring.datasource.hikari.idle-timeout=600000",
                         "spring.flyway.enabled=true",
                         "spring.flyway.locations=classpath:db/migration",
+                        "spring.flyway.target=1",
                         "spring.flyway.baseline-on-migrate=false",
                         "spring.flyway.clean-disabled=true"
                 );

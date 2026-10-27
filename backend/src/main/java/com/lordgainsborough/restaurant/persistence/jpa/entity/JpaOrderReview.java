@@ -85,7 +85,7 @@ public class JpaOrderReview {
 
     @PreUpdate
     public void preUpdate() {
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 
     public void addItem(JpaOrderReviewItem item) {

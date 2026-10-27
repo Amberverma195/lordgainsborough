@@ -27,6 +27,11 @@ import java.util.List;
  */
 @Repository
 public interface JpaReservationRepository extends JpaRepository<JpaReservation, String> {
+    List<JpaReservation> findAllByOrderByCreatedAtDescIdAsc();
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select r from JpaReservation r where r.id = :id")
+    java.util.Optional<JpaReservation> findForUpdate(@org.springframework.data.repository.query.Param("id") String id);
+
 
     List<JpaReservation> findByDateOrderByTimeAsc(String date);
 

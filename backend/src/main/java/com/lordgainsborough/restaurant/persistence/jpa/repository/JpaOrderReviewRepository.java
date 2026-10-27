@@ -28,6 +28,13 @@ import java.util.List;
  */
 @Repository
 public interface JpaOrderReviewRepository extends JpaRepository<JpaOrderReview, String> {
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths={"items"})
+    @Query("select r from JpaOrderReview r order by r.createdAt desc, r.id asc")
+    List<JpaOrderReview> findAllWithItems();
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from JpaOrderReview r where r.id = :id")
+    java.util.Optional<JpaOrderReview> findForModeration(@Param("id") String id);
+
 
     /**
      * Resolves reviews associated with the specified order ID ordered by creation time descending.
