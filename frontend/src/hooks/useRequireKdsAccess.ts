@@ -20,18 +20,20 @@ export function useRequireKdsAccess() {
         });
 
         if (!res.ok) {
-          notFound();
+          setIsAuthorized(false);
           return;
         }
 
         setIsAuthorized(true);
       } catch {
-        notFound();
+        setIsAuthorized(false);
       }
     };
 
     verifyAccess();
   }, []);
 
+  // notFound must be thrown during rendering so Next's boundary can handle it.
+  if (isAuthorized === false) notFound();
   return isAuthorized;
 }

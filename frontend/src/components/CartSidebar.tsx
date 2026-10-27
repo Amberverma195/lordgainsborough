@@ -21,8 +21,8 @@ const CartSidebar = () => {
     }
     fetchStoreSettings().then(settings => {
       setPickupOrdersEnabled(settings.pickupOrdersEnabled);
+      setPickupDisabledForUser(isPickupDisabledForUser());
     });
-    setPickupDisabledForUser(isPickupDisabledForUser());
   }, [isCartOpen]);
 
   const checkoutBlocked = !pickupOrdersEnabled || pickupDisabledForUser;
@@ -52,7 +52,7 @@ const CartSidebar = () => {
           >
             <div className={styles.header}>
               <h2>Your Order</h2>
-              <button className={styles.closeBtn} onClick={toggleCart}>
+              <button className={styles.closeBtn} onClick={toggleCart} aria-label="Close cart">
                 <X size={24} />
               </button>
             </div>
@@ -91,11 +91,11 @@ const CartSidebar = () => {
                           <span className={styles.itemPrice}>${item.price.toFixed(2)}</span>
                           
                           <div className={styles.quantityControls}>
-                            <button onClick={() => item.quantity > 1 ? updateQuantity(item.id, -1) : removeFromCart(item.id)}>
+                            <button aria-label={item.quantity > 1 ? `Decrease quantity of ${item.name}` : `Remove ${item.name}`} onClick={() => item.quantity > 1 ? updateQuantity(item.id, -1) : removeFromCart(item.id)}>
                               {item.quantity === 1 ? <Trash2 size={16} /> : <Minus size={16} />}
                             </button>
                             <span className={styles.quantity}>{item.quantity}</span>
-                            <button onClick={() => updateQuantity(item.id, 1)}>
+                            <button aria-label={`Increase quantity of ${item.name}`} onClick={() => updateQuantity(item.id, 1)}>
                               <Plus size={16} />
                             </button>
                           </div>

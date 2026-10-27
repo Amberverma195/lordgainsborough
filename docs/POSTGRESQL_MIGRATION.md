@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-26T22:54:35-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-27T18:04:54-04:00 (America/Toronto)
 
 ---
 
@@ -376,7 +376,7 @@ The migration is organized into 15 dependency-ordered phases. Each phase defines
 | `PG-024` | Phase 13 (revised) | Real PostgreSQL 17 regression without containers | `COMPLETE` | 2026-10-26 (exact start time not recorded) | 2026-10-26T22:53:46-04:00 | 649 tests; 0 failures/errors/skips |
 | `PG-025` | Phase 14 (revised) | PostgreSQL-only default application cutover and local startup verification | `COMPLETE` | 2026-10-26 (exact start time not recorded) | 2026-10-26T22:53:46-04:00 | Default application, Flyway validate, HTTP and live sockets |
 | `PG-026` | Phase 15 (revised) | Remove all MongoDB persistence, configuration and dependencies | `COMPLETE` | 2026-10-26 (exact start time not recorded) | 2026-10-26T22:53:46-04:00 | Clean compile and zero MongoDB/Testcontainers dependency audit |
-| `PG-027` | Phase 15 | Conduct end-to-end acceptance testing across Next.js frontend and Railway backend | `NOT STARTED` | — | — | E2E browser and API test pass |
+| `PG-027` | Phase 15 | Real local Next.js/Spring/Socket.IO/PostgreSQL website acceptance | `COMPLETE (LOCAL)` | 2026-10-26 | 2026-10-27 | 17 Chromium flows passed; see docs/PG027_E2E_REPORT.md |
 | `PG-028` | Phase 4 | Execute early Flyway migration smoke test against clean PostgreSQL | `COMPLETED` | 2026-10-25T20:29:39-04:00 | 2026-10-25T20:36:00-04:00 | Flyway 11.14.1 on PG 17.11: 4/4 integration tests passed (initial V1 migration 17 tables, idempotency 0 applied, validation, minimal SB4 context) |
 | `PG-029` | Phase 11 | Preserve text-only review rating zero through V2 constraint migration (PG-020 supporting schema task) | `COMPLETED` | 2026-10-26T20:02:06-04:00 | 2026-10-26T20:09:50-04:00 | V1 left unchanged; V1-to-V2 upgrade and real rating-zero persistence passed in PG-020 focused suites; invalid rating boundaries remain covered |
 
@@ -2449,3 +2449,14 @@ The user explicitly directed code-only implementation. PG-023 tests written: 0. 
 Intermediate focused attempts also exposed and corrected test setup issues (missing JWT fixture values, administrator-fixture user-count assumptions, reset Idempotency-Key omission and Spring test-context cleanup). An initial Java refactor removed JPA constructors too broadly; those constructors were restored before production compilation succeeded. These intermediate failures are not claimed as passes. The final clean run, rather than stale reports or a Java compile alone, is the verification evidence above.
 
 **Completion and limits:** PG-024, revised PG-025 and PG-026 are complete for this authorized local PostgreSQL-only cutover. Native Java 21 runtime, production mail delivery, frontend/browser behavior and external hosted PostgreSQL/deployment health were not separately exercised. No production readiness or deployment claim is made. README, environment example and backend/TESTING.md document the new default and non-container test procedure. Commit and normal push to main follow diff review; final response records the resulting SHA.
+
+
+## PG-027 - Real website acceptance completed (2026-10-27)
+
+The user authorized actual local Chromium website testing and narrowly necessary fixes on main, followed by commit/push. Starting SHA: 4dc1db11dedc52aefcf2057c524658b6e74f0613. This phase used the actual production-built Next.js frontend, Spring Boot, Socket.IO and a dedicated disposable PostgreSQL 17 database, with controlled local SMTP. No Docker/MongoDB, external database changes, real customer communications or production deployment occurred.
+
+Final verification: 17/17 Playwright cases passed (zero skips/failures), 28 frontend unit tests passed, 649 backend tests passed (zero skips/failures/errors), frontend production build and scoped changed-file ESLint passed. Flyway validated/applied both existing migrations to fresh E2E schema v2. Browser run began 2026-10-27T22:03:31.313Z and took 81.772 seconds.
+
+Fixed asynchronous denial rendering, hidden mobile navigation/cart actions, missing About/Contact targets, missing customer/kitchen message composers and stale administrator tabs. Actual persisted checkout, messaging, KDS statuses/no-show, OTP/reset/JWT revocation, reviews, reservations, administrator CRUD/search and responsive orders were exercised. Backend production policy/API/schema remained unchanged.
+
+See [PG027_E2E_REPORT.md](PG027_E2E_REPORT.md) for the complete case matrix, commands, defects, intermediate failures, local screenshot/trace locations and remaining limitations; see [the harness README](../frontend/e2e/README.md) for reproduction. Console traces retain expected negative-test responses, existing privacy/terms 404s and CSS preload warnings; zero uncaught page errors were recorded. KDS continues to enforce the existing IP allowlist rather than a new staff-role requirement. Local acceptance does not establish production readiness or authorize deployment.

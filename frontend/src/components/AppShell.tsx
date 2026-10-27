@@ -15,12 +15,13 @@ function matchesPath(pathname: string, paths: string[]) {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const minimalLayout = matchesPath(pathname, MINIMAL_LAYOUT_PATHS);
+  const Content = matchesPath(pathname, ['/orders', '/kds', '/admin']) ? 'div' : 'main';
 
   if (minimalLayout) {
     return (
       <>
         <CartSidebar />
-        <main style={{ minHeight: '100vh' }}>{children}</main>
+        <Content style={{ minHeight: '100vh' }}>{children}</Content>
       </>
     );
   }
@@ -29,9 +30,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <Navbar />
       <CartSidebar />
-      <main style={{ paddingTop: '80px', minHeight: 'calc(100vh - 80px)' }}>
+      <Content style={{ paddingTop: '80px', minHeight: 'calc(100vh - 80px)' }}>
         {children}
-      </main>
+      </Content>
       <Footer />
     </>
   );

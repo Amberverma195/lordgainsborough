@@ -27,6 +27,7 @@ function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<stri
 }
 import { getAuthHeadersOnly } from '@/lib/auth';
 import styles from './order-status.module.css';
+import OrderMessages from '@/components/OrderMessages';
 
 function buildOrderAccessHeaders(orderId: string): HeadersInit {
   const headers: Record<string, string> = {};
@@ -101,6 +102,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [missing, setMissing] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -118,7 +120,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         cache: 'no-store',
       });
       if (res.status === 404) {
-        notFound();
+        setMissing(true);
         return;
       }
       if (!res.ok) {
@@ -258,6 +260,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     }
   };
 
+  if (missing) notFound();
   if (loading) {
     return (
       <main className={styles.container}>
@@ -408,6 +411,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         )}
       </section>
 
+      <OrderMessages orderId={orderId} messages={order.messages || []} onSent={() => { void loadOrder(); }} />
       {reviewOpen && (
         <div className={styles.modalBackdrop} onClick={() => setReviewOpen(false)}>
           <form className={styles.modal} onSubmit={submitReview} onClick={event => event.stopPropagation()}>

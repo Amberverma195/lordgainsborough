@@ -30,6 +30,8 @@
 .logo {
   object-fit: contain;
 }
+.mobileToggle { display: none; background: none; border: 0; color: inherit; cursor: pointer; }
+.mobilePanel { display: none; }
 
 .navLinks {
   display: flex;
@@ -196,10 +198,16 @@
 
 @media (max-width: 768px) {
   .navbar {
-    padding: 0 1.5rem;
+    padding: 0 .75rem;
   }
-  
+  .logo { width: 110px; height: auto; }
   .navLinks {
-    display: none; /* Mobile menu logic can be added later */
+    display: flex;
+    gap: .4rem;
   }
+  .navLinks > .navLink { display: none; }
+  .actionsContainer { gap: .6rem; margin-left: 0; }
+  .reservationBtn { padding: .5rem; font-size: .7rem; }
+  .mobileToggle { display: block; }
+  .mobilePanel { display: flex; position: absolute; top: 100%; left: 0; right: 0; gap: 1.5rem; padding: 1rem; background: var(--background); box-shadow: var(--shadow); }
 }

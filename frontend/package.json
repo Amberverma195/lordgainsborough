@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e:up": "node e2e/start.mjs",
+    "test:e2e": "playwright test",
+    "e2e:report": "playwright show-report"
   },
   "dependencies": {
     "framer-motion": "^12.38.0",
@@ -19,11 +22,17 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/smtp-server": "^3.5.13",
+    "bcryptjs": "^3.0.3",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "pg": "^8.23.1",
+    "smtp-server": "^3.21.1",
     "typescript": "^5",
     "vitest": "^3.2.4"
   }

@@ -5,12 +5,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import styles from './Navbar.module.css';
 import { useCart } from '@/context/CartContext';
-import { ShoppingBag, User } from 'lucide-react';
+import { ShoppingBag, User, Menu, X } from 'lucide-react';
 
 const Navbar = () => {
   const [scrolled, setScrolled] = useState(false);
   const { cartCount, toggleCart } = useCart();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -49,10 +50,14 @@ const Navbar = () => {
 
       <div className={styles.navLinks}>
         <Link href="/" className={styles.navLink}>Home</Link>
+        <Link href="/menu" className={styles.navLink}>Menu</Link>
         <Link href="/about" className={styles.navLink}>About</Link>
         
         <div className={styles.actionsContainer}>
-          <button className={styles.cartBtn} onClick={toggleCart}>
+          <button className={styles.mobileToggle} aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} aria-controls="mobile-navigation" onClick={() => setMenuOpen(open => !open)}>
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+          <button className={styles.cartBtn} onClick={toggleCart} aria-label={`Open cart (${cartCount} items)`}>
             <ShoppingBag size={20} />
             {cartCount > 0 && <span className={styles.cartBadge}>{cartCount}</span>}
           </button>
@@ -70,6 +75,11 @@ const Navbar = () => {
           </Link>
         </div>
       </div>
+      {menuOpen && <div id="mobile-navigation" className={styles.mobilePanel}>
+        <Link href="/" onClick={() => setMenuOpen(false)}>Home</Link>
+        <Link href="/menu" onClick={() => setMenuOpen(false)}>Menu</Link>
+        <Link href="/about" onClick={() => setMenuOpen(false)}>About</Link>
+      </div>}
     </nav>
   );
 };

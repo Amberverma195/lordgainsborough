@@ -358,6 +358,17 @@ export default function AdminPage() {
     return () => window.clearTimeout(timeout);
   }, [activeTab, fetchStoreSettings]);
 
+  useEffect(() => {
+    if (isAuthorized !== true) return;
+    // Revisit the current dataset after activity in a customer/kitchen tab.
+    const task = window.setTimeout(() => {
+      if (activeTab === 'reservations') void fetchReservations();
+      if (activeTab === 'reviews') void fetchReviews();
+      if (activeTab === 'orders') void fetchOrders();
+    }, 0);
+    return () => window.clearTimeout(task);
+  }, [activeTab, isAuthorized, fetchReservations, fetchReviews, fetchOrders]);
+
   // --- Category CRUD ---
   const handleCategorySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -629,10 +640,7 @@ export default function AdminPage() {
     [storeSettings.kdsAllowedIp],
   );
 
-  const settingsDirty = useMemo(
-    () => !storeSettingsEqual(normalizeStoreSettings(storeSettings), savedStoreSettings),
-    [storeSettings, savedStoreSettings],
-  );
+  const settingsDirty = !storeSettingsEqual(normalizeStoreSettings(storeSettings), savedStoreSettings);
 
   const updateKdsAllowedIps = (ips: string[]) => {
     setStoreSettings(prev => ({

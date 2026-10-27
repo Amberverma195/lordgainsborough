@@ -13,7 +13,7 @@ export function useRequireAdmin() {
     const verifyAdmin = async () => {
       const token = localStorage.getItem('authToken');
       if (!token) {
-        notFound();
+        setIsAuthorized(false);
         return;
       }
 
@@ -23,25 +23,26 @@ export function useRequireAdmin() {
         });
 
         if (!res.ok) {
-          notFound();
+          setIsAuthorized(false);
           return;
         }
 
         const data = await res.json();
         if (!isAdminRole(data.role)) {
-          notFound();
+          setIsAuthorized(false);
           return;
         }
 
         persistAuth(data);
         setIsAuthorized(true);
       } catch {
-        notFound();
+        setIsAuthorized(false);
       }
     };
 
     verifyAdmin();
   }, []);
 
+  if (isAuthorized === false) notFound();
   return isAuthorized;
 }

@@ -42,4 +42,7 @@ frontend/next-env.d.ts
 
 # Test / coverage
 frontend/coverage/
+frontend/.e2e/
+frontend/test-results/
+frontend/playwright-report/
 backend/.mvn/wrapper/maven-wrapper.jar

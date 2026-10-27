@@ -20,6 +20,7 @@ import {
 } from '@/lib/orders';
 
 import styles from './kds.module.css';
+import OrderMessages from '@/components/OrderMessages';
 
 const READY_OPTIONS = [10, 15, 20, 25, 30, 35, 40, 45, 60];
 
@@ -394,6 +395,7 @@ export default function KdsPage() {
                           <strong>{formatMoney(order.total)}</strong>
                         </div>
 
+                        <OrderMessages orderId={order.id} messages={order.messages || []} kitchen onSent={() => { void fetchOrders(); }} />
                         <div className={styles.cardActions}>
                           {order.status === 'NEW' && (
                             <button className={styles.primaryAction} onClick={() => updateOrderStatus(order, 'ACCEPTED')}>
