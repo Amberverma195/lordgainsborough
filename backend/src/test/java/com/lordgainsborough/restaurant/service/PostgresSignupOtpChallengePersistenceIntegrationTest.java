@@ -1732,4 +1732,157 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertEquals(5, finalState.getFailedVerifyAttempts());
         assertEquals(0, finalState.getResendCount()); // Resend must not have occurred
     }
+
+    @Test
+    @Order(65)
+    @DisplayName("65. Second client cannot replace pending registration details for an active challenge")
+    void test65_secondClientCannotReplacePendingRegistrationForActiveChallenge() {
+        String email = "victim-immutability@example.com";
+        String initialDigest = persistence.digestOtp("123456");
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, initialDigest, "ch-imm-1", "op-imm-1", "k-imm-1",
+                "Alice Legit", "+1 (555)-111-2222", "5551112222", "$2a$12$legitPasswordHashAlice");
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+
+        // Second client/attacker attempts to overwrite with Attacker credentials
+        boolean updated = store.updatePendingRegistration(
+                ch.getEmailKey(),
+                "Attacker Bob",
+                "+1 (555)-999-0000",
+                "5559990000",
+                "$2a$12$attackerPasswordHashBob",
+                now);
+
+        // Must be rejected because pending_password_hash is already set
+        assertFalse(updated, "Attacker must not be able to overwrite existing pending credentials");
+
+        SignupOtpChallenge stored = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals("Alice Legit", stored.getPendingName());
+        assertEquals("+1 (555)-111-2222", stored.getPendingPhone());
+        assertEquals("5551112222", stored.getPendingPhoneNormalized());
+        assertEquals("$2a$12$legitPasswordHashAlice", stored.getPendingPasswordHash());
+    }
+
+    @Test
+    @Order(66)
+    @DisplayName("66. Cannot modify pending registration for locked, verified, or expired challenges")
+    void test66_cannotModifyPendingRegistrationForLockedVerifiedOrExpiredChallenge() {
+        String email = "locked-update@example.com";
+        String initialDigest = persistence.digestOtp("123456");
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, initialDigest, "ch-lock-imm", "op-lock-imm", "k-lock-imm",
+                null, null, null, null);
+        ch.setStatus(OtpChallengeStatus.LOCKED);
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+
+        // Attempt to update pending registration on LOCKED challenge
+        boolean updatedLocked = store.updatePendingRegistration(
+                ch.getEmailKey(), "Name", "Phone", "5551112222", "hash", now);
+        assertFalse(updatedLocked, "Cannot update pending registration on locked challenge");
+
+        // Set status to VERIFIED
+        jdbcTemplate.update("UPDATE signup_otp_challenges SET status = 'VERIFIED' WHERE email_key = ?", ch.getEmailKey());
+        boolean updatedVerified = store.updatePendingRegistration(
+                ch.getEmailKey(), "Name", "Phone", "5551112222", "hash", now);
+        assertFalse(updatedVerified, "Cannot update pending registration on verified challenge");
+
+        // Set status to ACTIVE but expired
+        jdbcTemplate.update("UPDATE signup_otp_challenges SET status = 'ACTIVE', challenge_expires_at = ? WHERE email_key = ?",
+                java.sql.Timestamp.from(now.minusSeconds(10)), ch.getEmailKey());
+        boolean updatedExpired = store.updatePendingRegistration(
+                ch.getEmailKey(), "Name", "Phone", "5551112222", "hash", now);
+        assertFalse(updatedExpired, "Cannot update pending registration on expired challenge");
+    }
+
+    @Test
+    @Order(67)
+    @DisplayName("67. Resend during active email-send lease is blocked")
+    void test67_resendDuringActiveSendLeaseIsBlocked() {
+        String email = "send-lease-block@example.com";
+        String initialDigest = persistence.digestOtp("111111");
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, initialDigest, "ch-lease-blk", "op-lease-1", "k-lease-1");
+        ch.setSendStatus(OtpSendStatus.RESERVED);
+        ch.setSendLeaseUntil(clock.instant().plusSeconds(60));
+        ch.setNextResendAt(clock.instant().minusSeconds(5)); // cooldown elapsed, but lease still active!
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        String newDigest = persistence.digestOtp("222222");
+
+        // tryAtomicResend must fail because active send lease is still unexpired
+        Optional<SignupOtpChallenge> resend = persistence.tryAtomicResend(
+                ch.getEmailKey(), newDigest, "op-lease-2", "k-lease-2", now);
+        assertTrue(resend.isEmpty(), "tryAtomicResend must reject resend during active send lease");
+
+        // Challenge must still have original OTP digest
+        SignupOtpChallenge stored = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(initialDigest, stored.getOtpDigest());
+        assertEquals("op-lease-1", stored.getSendOperationId());
+        assertEquals(0, stored.getResendCount());
+    }
+
+    @Test
+    @Order(68)
+    @DisplayName("68. Resend after email-send lease expires succeeds and acquires new lease")
+    void test68_resendAfterSendLeaseExpiresSucceeds() {
+        String email = "send-lease-expire@example.com";
+        String initialDigest = persistence.digestOtp("333333");
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, initialDigest, "ch-lease-exp", "op-lease-old", "k-lease-old");
+        ch.setSendStatus(OtpSendStatus.RESERVED);
+        ch.setSendLeaseUntil(clock.instant().minusSeconds(1)); // lease expired!
+        ch.setNextResendAt(clock.instant().minusSeconds(10));
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        String newDigest = persistence.digestOtp("444444");
+
+        Optional<SignupOtpChallenge> resend = persistence.tryAtomicResend(
+                ch.getEmailKey(), newDigest, "op-lease-fresh", "k-lease-fresh", now);
+        assertTrue(resend.isPresent(), "tryAtomicResend must succeed once the previous send lease has expired");
+        assertEquals(1, resend.get().getResendCount());
+        assertEquals(newDigest, resend.get().getOtpDigest());
+        assertEquals("op-lease-fresh", resend.get().getSendOperationId());
+        assertEquals(OtpSendStatus.RESERVED, resend.get().getSendStatus());
+        assertNotNull(resend.get().getSendLeaseUntil());
+        assertTrue(resend.get().getSendLeaseUntil().isAfter(now));
+    }
+
+    @Test
+    @Order(69)
+    @DisplayName("69. OTP digest rotation invalidates previous OTP and verifies new OTP")
+    void test69_otpDigestRotationInvalidatesPreviousOtp() {
+        String email = "otp-rotation@example.com";
+        String firstOtp = "555555";
+        String firstDigest = persistence.digestOtp(firstOtp);
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, firstDigest, "ch-rot-1", "op-rot-1", "k-rot-1");
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setNextResendAt(clock.instant().minusSeconds(1));
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        String secondOtp = "666666";
+        String secondDigest = persistence.digestOtp(secondOtp);
+
+        Optional<SignupOtpChallenge> resend = persistence.tryAtomicResend(
+                ch.getEmailKey(), secondDigest, "op-rot-2", "k-rot-2", now);
+        assertTrue(resend.isPresent());
+
+        // Verifying firstOtp must FAIL
+        Optional<SignupOtpChallenge> verifyOld = persistence.tryAtomicMarkVerified(
+                ch.getEmailKey(), firstDigest, now);
+        assertTrue(verifyOld.isEmpty(), "Old OTP digest must not verify after rotation");
+
+        // Verifying secondOtp must SUCCEED
+        Optional<SignupOtpChallenge> verifyNew = persistence.tryAtomicMarkVerified(
+                ch.getEmailKey(), secondDigest, now);
+        assertTrue(verifyNew.isPresent(), "New OTP digest must verify successfully");
+        assertEquals(OtpChallengeStatus.VERIFIED, verifyNew.get().getStatus());
+    }
 }

@@ -105,6 +105,8 @@ class AuthControllerSignupOtpResponseTest {
         when(userRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
         when(signupOtpChallengeService.requestSignupOtp(anyString(), org.mockito.ArgumentMatchers.nullable(String.class)))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+        when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
     }
 
     @Test
@@ -140,7 +142,7 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void sendSignupOtpCooldownReturns429WithRetryAfter() {
-        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), org.mockito.ArgumentMatchers.nullable(String.class)))
+        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Denied(
                         SignupOtpChallengePersistence.ResendDenialReason.COOLDOWN_ACTIVE,
                         17,
@@ -156,7 +158,7 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void sendSignupOtpResendLimitReturns429() {
-        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), org.mockito.ArgumentMatchers.nullable(String.class)))
+        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Denied(
                         SignupOtpChallengePersistence.ResendDenialReason.RESEND_LIMIT_REACHED,
                         0,
@@ -171,7 +173,7 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void sendSignupOtpExpiredChallengeReturns410() {
-        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), org.mockito.ArgumentMatchers.nullable(String.class)))
+        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Denied(
                         SignupOtpChallengePersistence.ResendDenialReason.CHALLENGE_EXPIRED,
                         0,
@@ -186,7 +188,7 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void sendSignupOtpProviderFailureDoesNotReturn500() {
-        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), org.mockito.ArgumentMatchers.nullable(String.class)))
+        when(signupOtpChallengeService.requestSignupOtp(eq("new@example.com"), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Failed(sampleView()));
 
         ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, signupOtpRequest("new@example.com", "5551234567"), httpRequest);
@@ -199,7 +201,7 @@ class AuthControllerSignupOtpResponseTest {
     @Test
     void concurrentControllerCallsReturnStructuredMockServiceResponsesWithout500() throws Exception {
         AtomicInteger created = new AtomicInteger();
-        when(signupOtpChallengeService.requestSignupOtp(eq("race@example.com"), org.mockito.ArgumentMatchers.nullable(String.class)))
+        when(signupOtpChallengeService.requestSignupOtp(eq("race@example.com"), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     if (created.compareAndSet(0, 1)) {
                         return new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView());
@@ -338,6 +340,71 @@ class AuthControllerSignupOtpResponseTest {
         verify(userRepository, never()).registerPending(anyString(), anyString(), anyString(), any());
     }
 
+    @Test
+    void initialSendRequiresName() {
+        SendOtpRequest request = signupOtpRequest("valid@example.com", "5551234567");
+        request.setName(null);
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("Full name is required.", response.getBody().getMessage());
+    }
+
+    @Test
+    void initialSendRequiresPassword() {
+        SendOtpRequest request = signupOtpRequest("valid@example.com", "5551234567");
+        request.setPassword(null);
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("Password is required.", response.getBody().getMessage());
+    }
+
+    @Test
+    void passwordComplexityIsEnforced() {
+        SendOtpRequest request = signupOtpRequest("valid@example.com", "5551234567");
+        request.setPassword("weakpass");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody().getMessage().contains("uppercase letter"));
+    }
+
+    @Test
+    void resendRequestDoesNotRequirePassword() {
+        when(signupOtpChallengeService.looksLikeInitialSend("existing@example.com")).thenReturn(false);
+        when(signupOtpChallengeService.requestSignupOtp(eq("existing@example.com"), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(false, true, sampleView()));
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("existing@example.com");
+        request.setPhone("5551234567");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp("idem-2", null, request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_SENT, response.getBody().getCode());
+    }
+
+    @Test
+    void activeSendLeaseReturnsConflictWithRetryAfter() {
+        when(signupOtpChallengeService.looksLikeInitialSend("lease@example.com")).thenReturn(false);
+        when(signupOtpChallengeService.requestSignupOtp(eq("lease@example.com"), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.InFlight(42, sampleView()));
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("lease@example.com");
+        request.setPhone("5551234567");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals("42", response.getHeaders().getFirst("Retry-After"));
+    }
+
     private static SignupOtpChallengeView sampleView() {
         return new SignupOtpChallengeView(
                 "challenge-1",
@@ -352,6 +419,8 @@ class AuthControllerSignupOtpResponseTest {
         SendOtpRequest request = new SendOtpRequest();
         request.setEmail(email);
         request.setPhone(phone);
+        request.setName("John Doe");
+        request.setPassword("Secret@123");
         return request;
     }
 }

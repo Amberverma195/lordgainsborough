@@ -76,7 +76,7 @@ export default function SignupVerifyPage() {
       next.receivedAtMs
     ));
     if (broadcast) {
-      publishChallenge(next, body.code === 'OTP_VERIFIED' ? 'verified' : 'challenge-updated');
+      publishChallenge(next, 'challenge-updated');
     }
     return next;
   }, [publishChallenge]);
@@ -345,14 +345,14 @@ export default function SignupVerifyPage() {
 
       if (res.status === 201) {
         const data = await res.json();
+        persistAuth(data);
+        window.dispatchEvent(new Event('storage'));
+        clearAllSignupSession();
         publishChallenge({
           email: pendingSignup.email,
           challengeId: challenge?.challengeId,
           code: 'OTP_VERIFIED',
         }, 'verified');
-        clearAllSignupSession();
-        persistAuth(data);
-        window.dispatchEvent(new Event('storage'));
         router.push('/profile');
         return;
       }

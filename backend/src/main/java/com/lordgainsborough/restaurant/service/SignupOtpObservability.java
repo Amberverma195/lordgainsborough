@@ -135,8 +135,13 @@ public class SignupOtpObservability {
                 : context;
         LoggingEventBuilder log = event.warning ? logger.atWarn() : logger.atInfo();
         log.addKeyValue("event", "signup_otp_operation")
-                .addKeyValue("correlationId", safeIdentifier(currentCorrelationId()))
                 .addKeyValue("result", event.metricTag);
+        if (MDC.get(CORRELATION_MDC_KEY) == null) {
+            String cid = currentCorrelationId();
+            if (cid != null) {
+                log.addKeyValue("correlationId", safeIdentifier(cid));
+            }
+        }
         addIdentifier(log, "challengeId", safeContext.challengeId());
         addIdentifier(log, "sendOperationId", safeContext.sendOperationId());
         addKeyedHash(log, "emailKey", safeContext.emailKey());

@@ -31,10 +31,12 @@ import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.util.EmailValidator;
+import com.lordgainsborough.restaurant.util.PasswordValidator;
 import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -108,7 +110,7 @@ public class AuthController {
                     "Email is required."));
         }
 
-        if (!EmailValidator.isValidEmail(request.getEmail())) {
+        if (request.getEmail().length() > 254 || !EmailValidator.isValidEmail(request.getEmail())) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
                     "Please enter a valid email address."));
@@ -132,15 +134,25 @@ public class AuthController {
 
         UserAuthStore.Registration registration;
         if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            if (request.getName() == null || request.getName().isBlank()) {
+            if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        "Name, email, and password are required."));
+                        "Full name is required."));
             }
-            if (request.getPassword().length() < 8) {
+            if (request.getName().trim().length() > 255) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        "Password must be at least 8 characters long."));
+                        "Name must not exceed 255 characters."));
+            }
+            if (!PasswordValidator.isValid(request.getPassword())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        PasswordValidator.getValidationErrorMessage(request.getPassword())));
+            }
+            if (request.getPhone() == null || request.getPhone().isBlank() || request.getPhone().length() > 50) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Please enter a valid 10-digit phone number."));
             }
             String normalizedPhone = normalizePhone(request.getPhone());
             if (normalizedPhone.length() != 10) {
@@ -550,11 +562,14 @@ public class AuthController {
                     "Email is required."));
         }
 
-        if (!EmailValidator.isValidEmail(request.getEmail())) {
+        if (request.getEmail().length() > 254 || !EmailValidator.isValidEmail(request.getEmail())) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
                     "Please enter a valid email address."));
         }
+
+        String email = request.getEmail().trim().toLowerCase();
+        boolean isInitialSend = signupOtpChallengeService.looksLikeInitialSend(email);
 
         if (request.getPhone() == null || request.getPhone().isBlank()) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -562,7 +577,12 @@ public class AuthController {
                     "Phone number is required."));
         }
 
-        String email = request.getEmail().trim().toLowerCase();
+        if (request.getPhone().length() > 50) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Please enter a valid 10-digit phone number."));
+        }
+
         String normalizedPhone = normalizePhone(request.getPhone());
         if (normalizedPhone.length() != 10) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -570,11 +590,30 @@ public class AuthController {
                     "Please enter a valid 10-digit phone number."));
         }
 
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            if (request.getPassword().length() < 8) {
+        if (isInitialSend) {
+            if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        "Password must be at least 8 characters long."));
+                        "Full name is required."));
+            }
+            if (request.getPassword() == null || request.getPassword().isBlank()) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Password is required."));
+            }
+        }
+
+        if (request.getName() != null && request.getName().trim().length() > 255) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Name must not exceed 255 characters."));
+        }
+
+        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            if (!PasswordValidator.isValid(request.getPassword())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        PasswordValidator.getValidationErrorMessage(request.getPassword())));
             }
         }
 
@@ -586,9 +625,8 @@ public class AuthController {
         }
 
         String clientIp = resolveClientIp(httpRequest);
-        boolean countAsInitial = signupOtpChallengeService.looksLikeInitialSend(email);
         ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(
-                signupAbuseLimiter.checkAndConsumeSend(clientIp, countAsInitial, captchaToken),
+                signupAbuseLimiter.checkAndConsumeSend(clientIp, isInitialSend, captchaToken),
                 signupAbuseLimiter.hashClientIp(clientIp));
         if (abuseDenied != null) {
             return abuseDenied;
@@ -961,9 +999,14 @@ public class AuthController {
     }
 
     private void logSafeAuthFailure(String operation, Exception exception) {
-        logger.atError()
-                .addKeyValue("correlationId", SignupOtpObservability.currentCorrelationId())
-                .addKeyValue("operation", operation)
+        var builder = logger.atError();
+        if (MDC.get(SignupOtpObservability.CORRELATION_MDC_KEY) == null) {
+            String cid = SignupOtpObservability.currentCorrelationId();
+            if (cid != null && !"none".equals(cid)) {
+                builder.addKeyValue("correlationId", cid);
+            }
+        }
+        builder.addKeyValue("operation", operation)
                 .addKeyValue("exceptionType", exception.getClass().getSimpleName())
                 .log("Authentication operation failed");
     }

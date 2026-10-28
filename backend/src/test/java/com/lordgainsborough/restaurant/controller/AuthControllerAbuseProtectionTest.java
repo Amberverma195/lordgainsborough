@@ -27,6 +27,7 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -92,6 +93,8 @@ class AuthControllerAbuseProtectionTest {
                 .thenReturn(new SignupAbuseLimiter.Decision.Allowed());
         when(signupAbuseLimiter.hashClientIp(anyString())).thenReturn("a".repeat(64));
         when(signupOtpChallengeService.requestSignupOtp(anyString(), nullable(String.class)))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+        when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
     }
 
@@ -182,6 +185,8 @@ class AuthControllerAbuseProtectionTest {
         SendOtpRequest request = new SendOtpRequest();
         request.setEmail(email);
         request.setPhone(phone);
+        request.setName("John Doe");
+        request.setPassword("Secret@123");
         return request;
     }
 

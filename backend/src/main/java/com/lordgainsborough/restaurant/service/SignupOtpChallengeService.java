@@ -83,14 +83,7 @@ public class SignupOtpChallengeService {
         if (persistence.findActiveUnexpiredByEmail(normalizedEmail).isEmpty()) {
             return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash)) {
                 case CREATED -> sentResult(normalizedEmail, true, true);
-                case ALREADY_EXISTS -> {
-                    if (pendingPasswordHash != null) {
-                        persistence.updatePendingRegistration(
-                                persistence.emailKeyFromNormalized(normalizedEmail),
-                                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
-                    }
-                    yield resendOtp(normalizedEmail, key);
-                }
+                case ALREADY_EXISTS -> resendOtp(normalizedEmail, key);
                 case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
                 case DELIVERY_UNKNOWN ->
                         new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail));
@@ -100,11 +93,6 @@ public class SignupOtpChallengeService {
             };
         }
 
-        if (pendingPasswordHash != null) {
-            persistence.updatePendingRegistration(
-                    persistence.emailKeyFromNormalized(normalizedEmail),
-                    pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
-        }
         return resendOtp(normalizedEmail, key);
     }
 
@@ -211,6 +199,18 @@ public class SignupOtpChallengeService {
         Optional<RequestOtpResult> raced = replayIdempotentResult(normalizedEmail, key);
         if (raced.isPresent()) {
             return raced.get();
+        }
+
+        Optional<SignupOtpChallenge> current = persistence.findByEmailKey(emailKey);
+        if (current.isPresent()) {
+            SignupOtpChallenge c = current.get();
+            if (c.getSendStatus() == OtpSendStatus.RESERVED
+                    && c.getSendLeaseUntil() != null
+                    && c.getSendLeaseUntil().isAfter(now)) {
+                long retryAfter = Math.max(1,
+                        Duration.between(now, c.getSendLeaseUntil()).getSeconds());
+                return new RequestOtpResult.InFlight(retryAfter, toChallengeView(c, now));
+            }
         }
 
         ResendDenialReason reason = persistence.diagnoseResendDenial(emailKey, now);

@@ -349,6 +349,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND failed_verify_attempts < ?
                   AND resend_count < ?
                   AND next_resend_at <= ?
+                  AND (send_status IS NULL OR send_status != 'RESERVED' OR send_lease_until IS NULL OR send_lease_until <= ?)
                 RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
@@ -364,6 +365,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     toTimestamp(now),
                     SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,
                     SignupOtpChallengePersistence.MAX_RESENDS,
+                    toTimestamp(now),
                     toTimestamp(now)
             );
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
@@ -606,6 +608,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 pending_password_hash = ?,
                 updated_at = ?
             WHERE email_key = ?
+              AND status = 'ACTIVE'
+              AND challenge_expires_at > ?
+              AND pending_password_hash IS NULL
             """;
         int updated = jdbcTemplate.update(sql,
                 pendingName,
@@ -613,7 +618,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 pendingPhoneNormalized,
                 pendingPasswordHash,
                 toTimestamp(now),
-                emailKey);
+                emailKey,
+                toTimestamp(now));
         return updated == 1;
     }
 }

@@ -317,4 +317,54 @@ describe('signupOtpCrossTab', () => {
     tabA.close();
     tabB.close();
   });
+
+  it('verification success persists authentication before notifying other tabs', () => {
+    const memory = createMemoryStorage();
+    const sequence: string[] = [];
+
+    const tabA = subscribeSignupOtpCrossTab(() => {}, {
+      tabId: 'tab-a',
+      createBroadcastChannel: () => null,
+      storage: memory as unknown as Storage,
+      addStorageListener: (listener) => memory.addListener(listener),
+    });
+
+    const tabB = subscribeSignupOtpCrossTab((payload) => {
+      if (payload.type === 'verified') {
+        // Tab B reacts to verified: checks if token and user exist in storage
+        const token = memory.getItem('token');
+        const user = memory.getItem('user');
+        sequence.push(`tabB_received_verified:hasToken=${!!token}:hasUser=${!!user}`);
+      }
+    }, {
+      tabId: 'tab-b',
+      createBroadcastChannel: () => null,
+      storage: memory as unknown as Storage,
+      addStorageListener: (listener) => memory.addListener(listener),
+    });
+
+    // In Tab A: Persist auth FIRST
+    memory.setItem('token', 'valid-jwt-token');
+    memory.setItem('user', JSON.stringify({ id: 'u1', email: 'test@example.com' }));
+    sequence.push('tabA_persisted_auth');
+
+    // In Tab A: Broadcast verified SECOND
+    const payload = toCrossTabPayload({
+      email: 'test@example.com',
+      challengeId: 'c-verify-seq',
+      code: 'OTP_VERIFIED',
+    }, 'verified', tabA.tabId);
+    tabA.publish(payload);
+
+    const syncData = memory.getItem('signupOtpChallengeSync');
+    memory.notifyOtherTabs('signupOtpChallengeSync', syncData!);
+
+    expect(sequence).toEqual([
+      'tabA_persisted_auth',
+      'tabB_received_verified:hasToken=true:hasUser=true',
+    ]);
+
+    tabA.close();
+    tabB.close();
+  });
 });

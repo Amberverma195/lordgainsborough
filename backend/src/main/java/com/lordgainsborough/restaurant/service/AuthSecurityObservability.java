@@ -4,6 +4,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -49,10 +50,15 @@ public class AuthSecurityObservability {
                         .tag("reason", reason.name().toLowerCase())
                         .register(meterRegistry))
                 .increment();
-        logger.atInfo()
-                .addKeyValue("event", "auth_security_operation")
-                .addKeyValue("correlationId", SignupOtpObservability.currentCorrelationId())
-                .addKeyValue("flow", flow.name().toLowerCase())
+        var builder = logger.atInfo()
+                .addKeyValue("event", "auth_security_operation");
+        if (MDC.get(SignupOtpObservability.CORRELATION_MDC_KEY) == null) {
+            String cid = SignupOtpObservability.currentCorrelationId();
+            if (cid != null && !"none".equals(cid)) {
+                builder.addKeyValue("correlationId", cid);
+            }
+        }
+        builder.addKeyValue("flow", flow.name().toLowerCase())
                 .addKeyValue("outcome", outcome.name().toLowerCase())
                 .addKeyValue("reason", reason.name().toLowerCase())
                 .log("Authentication security operation");
