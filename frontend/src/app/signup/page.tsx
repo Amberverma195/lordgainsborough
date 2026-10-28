@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { UserPlus, Mail, Lock, User, ArrowRight, Phone } from 'lucide-react';
-import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
+import { formatPhoneInput, isValidPhoneNumber } from '@/lib/phone';
+import { isValidEmail } from '@/lib/email';
 import {
   validatePassword,
   passwordsMatch,
-  getPasswordValidationMessage,
 } from '@/lib/password';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { API_BASE } from '@/lib/orders';
@@ -30,38 +30,85 @@ export default function SignupPage() {
     email: '',
     phone: '',
     password: '',
-    confirmPassword: ''
+    confirmPassword: '',
   });
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showPasswordMatchError, setShowPasswordMatchError] = useState(false);
   const router = useRouter();
+
+  const nameRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordRef = useRef<HTMLInputElement>(null);
+  const termsRef = useRef<HTMLInputElement>(null);
+
+  const focusAndScrollTo = (ref: React.RefObject<HTMLInputElement | null>) => {
+    if (ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      ref.current.focus({ preventScroll: true });
+    }
+  };
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setShowPasswordMatchError(true);
-    clearAllSignupSession();
 
-    const passwordError = getPasswordValidationMessage(formData.password, formData.confirmPassword);
-    if (passwordError) {
-      setError(passwordError);
+    const newErrors: Record<string, string> = {};
+    let firstInvalidRef: React.RefObject<HTMLInputElement | null> | null = null;
+
+    if (!formData.name.trim()) {
+      newErrors.name = 'Please enter your full name.';
+      if (!firstInvalidRef) firstInvalidRef = nameRef;
+    }
+
+    if (!isValidPhoneNumber(formData.phone)) {
+      newErrors.phone = 'Please enter a valid 10-digit phone number.';
+      if (!firstInvalidRef) firstInvalidRef = phoneRef;
+    }
+
+    if (!isValidEmail(formData.email)) {
+      newErrors.email = 'Please enter a valid email address.';
+      if (!firstInvalidRef) firstInvalidRef = emailRef;
+    }
+
+    const passwordValidation = validatePassword(formData.password);
+    if (!passwordValidation.valid) {
+      newErrors.password = 'Password must meet all complexity requirements.';
+      if (!firstInvalidRef) firstInvalidRef = passwordRef;
+    }
+
+    if (!formData.confirmPassword || !passwordsMatch(formData.password, formData.confirmPassword)) {
+      newErrors.confirmPassword = 'Passwords do not match.';
+      if (!firstInvalidRef) firstInvalidRef = confirmPasswordRef;
+    }
+
+    if (!agreedToTerms) {
+      newErrors.terms = 'Please agree to the Terms of Service and Privacy Policy to continue.';
+      if (!firstInvalidRef) firstInvalidRef = termsRef;
+    }
+
+    if (firstInvalidRef) {
+      setFieldErrors(newErrors);
+      focusAndScrollTo(firstInvalidRef);
       return;
     }
 
-    if (getPhoneDigitCount(formData.phone) !== 10) {
-      setError('Please enter a valid 10-digit phone number');
-      return;
-    }
-
+    setFieldErrors({});
     setLoading(true);
+
     try {
       clearAllSignupSession();
       const idempotencyKey = crypto.randomUUID();
-      const email = formData.email.trim().toLowerCase();
+      const cleanEmail = formData.email.trim().toLowerCase();
+
       const payload = {
-        email,
+        name: formData.name.trim(),
+        email: cleanEmail,
         phone: formData.phone,
+        password: formData.password,
       };
 
       const res = await fetchWithIdempotentRetry((key) =>
@@ -76,17 +123,18 @@ export default function SignupPage() {
 
       if (res.ok || res.status === 202) {
         const body = await readSignupOtpResponse(res);
-        const challengeState = applyBackendChallengeState(null, body, email);
+        const challengeState = applyBackendChallengeState(null, body, cleanEmail);
         saveSignupOtpChallengeState(challengeState);
         savePendingSignupCredentials({
           name: formData.name.trim(),
-          email,
+          email: cleanEmail,
           phone: formData.phone,
         });
-        // Notify other tabs that already have the verify page open.
+
         const sync = subscribeSignupOtpCrossTab(() => {});
         sync.publish(toCrossTabPayload(challengeState, 'challenge-updated', sync.tabId));
         sync.close();
+
         router.push('/signup/verify');
         return;
       }
@@ -102,6 +150,7 @@ export default function SignupPage() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+    setFieldErrors(prev => ({ ...prev, [name]: '' }));
     setFormData(prev => {
       if (name === 'password' || name === 'confirmPassword') {
         return { ...prev, [name]: value.slice(0, 128) };
@@ -111,22 +160,13 @@ export default function SignupPage() {
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFieldErrors(prev => ({ ...prev, phone: '' }));
     setFormData(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }));
   };
 
-  const passwordValidation = validatePassword(formData.password);
-  const confirmMismatch =
-    showPasswordMatchError &&
-    formData.confirmPassword.length > 0 &&
-    !passwordsMatch(formData.password, formData.confirmPassword);
-  const canSubmit =
-    passwordValidation.valid &&
-    formData.password.length > 0 &&
-    formData.confirmPassword.length > 0;
-
   return (
     <div className={styles.container}>
-      <motion.div 
+      <motion.div
         className={`${styles.signupCard} premium-card`}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -142,50 +182,83 @@ export default function SignupPage() {
 
         {error && <div className={styles.errorBanner}>{error}</div>}
 
-        <form className={styles.form} onSubmit={handleSignup}>
+        <form className={styles.form} onSubmit={handleSignup} noValidate>
           <div className={styles.inputRow}>
             <div className={styles.inputGroup}>
-              <label><User size={16} /> Full Name</label>
-              <input 
+              <label htmlFor="name-input"><User size={16} /> Full Name</label>
+              <input
+                id="name-input"
+                ref={nameRef}
                 name="name"
-                type="text" 
-                placeholder="Enter your full name" 
+                type="text"
+                placeholder="Enter your full name"
                 value={formData.name}
                 onChange={handleChange}
-                required 
+                aria-invalid={!!fieldErrors.name}
+                aria-describedby={fieldErrors.name ? 'name-error' : undefined}
+                className={fieldErrors.name ? styles.inputInvalid : undefined}
+                disabled={loading}
               />
+              {fieldErrors.name && (
+                <span id="name-error" className={styles.fieldError}>
+                  {fieldErrors.name}
+                </span>
+              )}
             </div>
+
             <div className={styles.inputGroup}>
-              <label><Phone size={16} /> Phone</label>
-              <input 
+              <label htmlFor="phone-input"><Phone size={16} /> Phone</label>
+              <input
+                id="phone-input"
+                ref={phoneRef}
                 name="phone"
                 type="tel"
                 inputMode="numeric"
                 placeholder="+1 (123)-456-7890"
                 value={formData.phone}
                 onChange={handlePhoneChange}
-                required 
+                aria-invalid={!!fieldErrors.phone}
+                aria-describedby={fieldErrors.phone ? 'phone-error' : undefined}
+                className={fieldErrors.phone ? styles.inputInvalid : undefined}
+                disabled={loading}
               />
+              {fieldErrors.phone && (
+                <span id="phone-error" className={styles.fieldError}>
+                  {fieldErrors.phone}
+                </span>
+              )}
             </div>
           </div>
 
           <div className={styles.inputGroup}>
-            <label><Mail size={16} /> Email Address</label>
-            <input 
+            <label htmlFor="email-input"><Mail size={16} /> Email Address</label>
+            <input
+              id="email-input"
+              ref={emailRef}
               name="email"
-              type="email" 
-              placeholder="Enter email address" 
+              type="email"
+              placeholder="Enter email address"
               value={formData.email}
               onChange={handleChange}
-              required 
+              aria-invalid={!!fieldErrors.email}
+              aria-describedby={fieldErrors.email ? 'email-error' : undefined}
+              className={fieldErrors.email ? styles.inputInvalid : undefined}
+              disabled={loading}
             />
+            {fieldErrors.email && (
+              <span id="email-error" className={styles.fieldError}>
+                {fieldErrors.email}
+              </span>
+            )}
           </div>
 
           <div className={styles.passwordSection}>
             <div className={styles.inputRow}>
               <div className={styles.inputGroup}>
-                <label><Lock size={16} /> Password</label>
+                <label htmlFor="password-input"><Lock size={16} /> Password</label>
                 <input
+                  id="password-input"
+                  ref={passwordRef}
                   name="password"
                   type="password"
                   placeholder="Enter Password"
@@ -193,18 +266,23 @@ export default function SignupPage() {
                   onChange={handleChange}
                   maxLength={128}
                   autoComplete="new-password"
-                  aria-invalid={formData.password.length > 0 && !passwordValidation.valid}
-                  className={
-                    formData.password.length > 0 && !passwordValidation.valid
-                      ? styles.inputInvalid
-                      : undefined
-                  }
-                  required
+                  aria-invalid={!!fieldErrors.password}
+                  aria-describedby={fieldErrors.password ? 'password-error' : undefined}
+                  className={fieldErrors.password ? styles.inputInvalid : undefined}
+                  disabled={loading}
                 />
+                {fieldErrors.password && (
+                  <span id="password-error" className={styles.fieldError}>
+                    {fieldErrors.password}
+                  </span>
+                )}
               </div>
+
               <div className={styles.inputGroup}>
-                <label><Lock size={16} /> Confirm</label>
+                <label htmlFor="confirm-password-input"><Lock size={16} /> Confirm</label>
                 <input
+                  id="confirm-password-input"
+                  ref={confirmPasswordRef}
                   name="confirmPassword"
                   type="password"
                   placeholder="Re-enter password"
@@ -212,27 +290,55 @@ export default function SignupPage() {
                   onChange={handleChange}
                   maxLength={128}
                   autoComplete="new-password"
-                  aria-invalid={confirmMismatch}
-                  className={confirmMismatch ? styles.inputInvalid : undefined}
-                  required
+                  aria-invalid={!!fieldErrors.confirmPassword}
+                  aria-describedby={fieldErrors.confirmPassword ? 'confirm-error' : undefined}
+                  className={fieldErrors.confirmPassword ? styles.inputInvalid : undefined}
+                  disabled={loading}
                 />
+                {fieldErrors.confirmPassword && (
+                  <span id="confirm-error" className={styles.fieldError}>
+                    {fieldErrors.confirmPassword}
+                  </span>
+                )}
               </div>
             </div>
+
             <PasswordStrengthIndicator
               password={formData.password}
               confirmPassword={formData.confirmPassword}
-              showMatchError={showPasswordMatchError}
             />
           </div>
 
           <div className={styles.terms}>
             <label className={styles.checkboxLabel}>
-              <input type="checkbox" required />
+              <input
+                ref={termsRef}
+                type="checkbox"
+                checked={agreedToTerms}
+                onChange={(e) => {
+                  setAgreedToTerms(e.target.checked);
+                  if (e.target.checked) {
+                    setFieldErrors(prev => ({ ...prev, terms: '' }));
+                  }
+                }}
+                aria-invalid={!!fieldErrors.terms}
+                aria-describedby={fieldErrors.terms ? 'terms-error' : undefined}
+                disabled={loading}
+              />
               <span>I agree to the <Link href="/terms">Terms of Service</Link> and <Link href="/privacy">Privacy Policy</Link></span>
             </label>
+            {fieldErrors.terms && (
+              <span id="terms-error" className={styles.fieldError}>
+                {fieldErrors.terms}
+              </span>
+            )}
           </div>
 
-          <button type="submit" className={styles.signupBtn} disabled={loading || !canSubmit}>
+          <button
+            type="submit"
+            className={styles.signupBtn}
+            disabled={loading}
+          >
             {loading ? 'Sending Code...' : 'Create Account'} <ArrowRight size={18} />
           </button>
         </form>

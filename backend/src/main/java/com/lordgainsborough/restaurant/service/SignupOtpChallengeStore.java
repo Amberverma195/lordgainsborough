@@ -105,4 +105,17 @@ public interface SignupOtpChallengeStore {
      */
     Optional<SignupOtpChallenge> tryAtomicLockAfterMaxFailures(
             String emailKey, String challengeId, Instant now);
+
+    /**
+     * Updates staged pending registration details on an existing challenge.
+     */
+    default boolean updatePendingRegistration(
+            String emailKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            Instant now) {
+        return false;
+    }
 }

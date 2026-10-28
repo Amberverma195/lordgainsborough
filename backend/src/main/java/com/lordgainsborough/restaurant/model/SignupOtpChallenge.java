@@ -41,6 +41,11 @@ public class SignupOtpChallenge {
     /** Whether the last reserved/completed send was the initial challenge create. */
     private boolean lastSendWasInitial;
 
+    private String pendingName;
+    private String pendingPhone;
+    private String pendingPhoneNormalized;
+    private String pendingPasswordHash;
+
     public String getEmailKey() {
         return emailKey;
     }
@@ -175,6 +180,38 @@ public class SignupOtpChallenge {
 
     public void setLastSendWasInitial(boolean lastSendWasInitial) {
         this.lastSendWasInitial = lastSendWasInitial;
+    }
+
+    public String getPendingName() {
+        return pendingName;
+    }
+
+    public void setPendingName(String pendingName) {
+        this.pendingName = pendingName;
+    }
+
+    public String getPendingPhone() {
+        return pendingPhone;
+    }
+
+    public void setPendingPhone(String pendingPhone) {
+        this.pendingPhone = pendingPhone;
+    }
+
+    public String getPendingPhoneNormalized() {
+        return pendingPhoneNormalized;
+    }
+
+    public void setPendingPhoneNormalized(String pendingPhoneNormalized) {
+        this.pendingPhoneNormalized = pendingPhoneNormalized;
+    }
+
+    public String getPendingPasswordHash() {
+        return pendingPasswordHash;
+    }
+
+    public void setPendingPasswordHash(String pendingPasswordHash) {
+        this.pendingPasswordHash = pendingPasswordHash;
     }
 
     /**

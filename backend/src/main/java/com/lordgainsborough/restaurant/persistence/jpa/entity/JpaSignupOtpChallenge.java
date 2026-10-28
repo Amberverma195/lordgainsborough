@@ -80,6 +80,19 @@ public class JpaSignupOtpChallenge {
     @Column(name = "last_send_was_initial", nullable = false)
     private boolean lastSendWasInitial = true;
 
+    @Column(name = "pending_name", length = 255)
+    private String pendingName;
+
+    @Column(name = "pending_phone", length = 50)
+    private String pendingPhone;
+
+    @Column(name = "pending_phone_normalized", length = 10)
+    private String pendingPhoneNormalized;
+
+    @JsonIgnore
+    @Column(name = "pending_password_hash", length = 255)
+    private String pendingPasswordHash;
+
     public JpaSignupOtpChallenge() {}
 
     public JpaSignupOtpChallenge(
@@ -209,6 +222,18 @@ public class JpaSignupOtpChallenge {
 
     public boolean isLastSendWasInitial() { return lastSendWasInitial; }
     public void setLastSendWasInitial(boolean lastSendWasInitial) { this.lastSendWasInitial = lastSendWasInitial; }
+
+    public String getPendingName() { return pendingName; }
+    public void setPendingName(String pendingName) { this.pendingName = pendingName; }
+
+    public String getPendingPhone() { return pendingPhone; }
+    public void setPendingPhone(String pendingPhone) { this.pendingPhone = pendingPhone; }
+
+    public String getPendingPhoneNormalized() { return pendingPhoneNormalized; }
+    public void setPendingPhoneNormalized(String pendingPhoneNormalized) { this.pendingPhoneNormalized = pendingPhoneNormalized; }
+
+    public String getPendingPasswordHash() { return pendingPasswordHash; }
+    public void setPendingPasswordHash(String pendingPasswordHash) { this.pendingPasswordHash = pendingPasswordHash; }
 
     @Override
     public boolean equals(Object o) {

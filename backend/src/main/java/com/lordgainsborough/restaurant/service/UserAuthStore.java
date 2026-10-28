@@ -12,8 +12,11 @@ public interface UserAuthStore {
     Optional<User> findByEmailIgnoreCase(String email);
     Optional<User> findByPhone(String normalizedPhone);
     boolean existsByEmailIgnoreCase(String email);
-    boolean phoneRegisteredByAnotherUser(String normalizedPhone, String currentUserId);
+    default boolean phoneRegisteredByAnotherUser(String digits, String currentId) { return false; }
     Registration register(User draft, String rawPassword, String otp, SignupOtpChallengeService challenges);
+    default Registration registerPending(String email, String otp, String challengeId, SignupOtpChallengeService challenges) {
+        throw new UnsupportedOperationException("Pending registration not supported");
+    }
     Optional<User> updateName(User user, String token, String name, JwtUtil jwt);
     Optional<List<CustomerOrder>> history(User user, String token, JwtUtil jwt);
     PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key);

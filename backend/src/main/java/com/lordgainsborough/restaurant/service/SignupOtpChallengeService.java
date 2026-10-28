@@ -62,7 +62,13 @@ public class SignupOtpChallengeService {
      *
      * @param idempotencyKey client {@code Idempotency-Key}; blank values are treated as a unique key
      */
-    public RequestOtpResult requestSignupOtp(String email, String idempotencyKey) {
+    public RequestOtpResult requestSignupOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
@@ -75,9 +81,16 @@ public class SignupOtpChallengeService {
         }
 
         if (persistence.findActiveUnexpiredByEmail(normalizedEmail).isEmpty()) {
-            return switch (sendInitialOtp(normalizedEmail, key)) {
+            return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash)) {
                 case CREATED -> sentResult(normalizedEmail, true, true);
-                case ALREADY_EXISTS -> resendOtp(normalizedEmail, key);
+                case ALREADY_EXISTS -> {
+                    if (pendingPasswordHash != null) {
+                        persistence.updatePendingRegistration(
+                                persistence.emailKeyFromNormalized(normalizedEmail),
+                                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
+                    }
+                    yield resendOtp(normalizedEmail, key);
+                }
                 case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
                 case DELIVERY_UNKNOWN ->
                         new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail));
@@ -87,7 +100,16 @@ public class SignupOtpChallengeService {
             };
         }
 
+        if (pendingPasswordHash != null) {
+            persistence.updatePendingRegistration(
+                    persistence.emailKeyFromNormalized(normalizedEmail),
+                    pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
+        }
         return resendOtp(normalizedEmail, key);
+    }
+
+    public RequestOtpResult requestSignupOtp(String email, String idempotencyKey) {
+        return requestSignupOtp(email, idempotencyKey, null, null, null, null);
     }
 
     /** @deprecated Prefer {@link #requestSignupOtp(String, String)}. */
@@ -95,7 +117,13 @@ public class SignupOtpChallengeService {
         return requestSignupOtp(email, UUID.randomUUID().toString());
     }
 
-    public InitialSendResult sendInitialOtp(String email, String idempotencyKey) {
+    public InitialSendResult sendInitialOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
@@ -122,7 +150,8 @@ public class SignupOtpChallengeService {
         String challengeId = UUID.randomUUID().toString();
         String sendOperationId = UUID.randomUUID().toString();
         SignupOtpChallenge challenge = persistence.buildNewActiveChallenge(
-                normalizedEmail, otpDigest, challengeId, sendOperationId, key);
+                normalizedEmail, otpDigest, challengeId, sendOperationId, key,
+                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
 
         if (!persistence.tryInsertOrReplaceExpired(challenge)) {
             // Another request may have just created the challenge with this same key.
@@ -145,6 +174,10 @@ public class SignupOtpChallengeService {
                 challenge.getEmailKey(),
                 sendOperationId,
                 true);
+    }
+
+    public InitialSendResult sendInitialOtp(String email, String idempotencyKey) {
+        return sendInitialOtp(email, idempotencyKey, null, null, null, null);
     }
 
     /** @deprecated Prefer {@link #sendInitialOtp(String, String)}. */

@@ -176,6 +176,35 @@ public class SignupOtpChallengePersistence {
         return challenge;
     }
 
+    public SignupOtpChallenge buildNewActiveChallenge(
+            String email,
+            String otpDigest,
+            String challengeId,
+            String sendOperationId,
+            String clientIdempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash) {
+        SignupOtpChallenge challenge = buildNewActiveChallenge(
+                email, otpDigest, challengeId, sendOperationId, clientIdempotencyKey);
+        challenge.setPendingName(pendingName);
+        challenge.setPendingPhone(pendingPhone);
+        challenge.setPendingPhoneNormalized(pendingPhoneNormalized);
+        challenge.setPendingPasswordHash(pendingPasswordHash);
+        return challenge;
+    }
+
+    public boolean updatePendingRegistration(
+            String emailKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash) {
+        return store.updatePendingRegistration(
+                emailKey, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, clock.instant());
+    }
+
     /**
      * @deprecated Prefer the overload that includes send reservation fields.
      */

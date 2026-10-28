@@ -15,6 +15,7 @@ export interface SignupOtpCrossTabPayload {
   type: 'challenge-updated' | 'verified' | 'cleared';
   challengeId?: string;
   serverTime?: string;
+  receivedAtMs?: number;
   nextResendAt?: string;
   resendsRemaining?: number;
   challengeExpiresAt?: string;
@@ -34,6 +35,7 @@ export function toCrossTabPayload(
     type,
     challengeId: state.challengeId,
     serverTime: state.serverTime,
+    receivedAtMs: state.receivedAtMs,
     nextResendAt: state.nextResendAt,
     resendsRemaining: state.resendsRemaining,
     challengeExpiresAt: state.challengeExpiresAt,
@@ -56,6 +58,7 @@ export function applyCrossTabPayload(
     email: payload.email || previous?.email || '',
     challengeId: payload.challengeId ?? previous?.challengeId,
     serverTime: payload.serverTime ?? previous?.serverTime,
+    receivedAtMs: payload.receivedAtMs ?? previous?.receivedAtMs,
     nextResendAt: payload.nextResendAt ?? previous?.nextResendAt,
     challengeExpiresAt: payload.challengeExpiresAt ?? previous?.challengeExpiresAt,
     otpExpiresAt: previous?.otpExpiresAt,
@@ -86,6 +89,7 @@ export function parseCrossTabPayload(raw: string): SignupOtpCrossTabPayload | nu
       type: parsed.type,
       challengeId: parsed.challengeId,
       serverTime: parsed.serverTime,
+      receivedAtMs: typeof parsed.receivedAtMs === 'number' ? parsed.receivedAtMs : undefined,
       nextResendAt: parsed.nextResendAt,
       resendsRemaining: parsed.resendsRemaining,
       challengeExpiresAt: parsed.challengeExpiresAt,

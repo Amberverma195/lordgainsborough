@@ -46,15 +46,14 @@ export default function PasswordStrengthIndicator({
   password,
   confirmPassword = '',
   showRequirements = true,
-  showMatchError = false,
 }: PasswordStrengthIndicatorProps) {
   const { strength, score } = getPasswordStrength(password);
   const requirements = getPasswordRequirements(password);
   const matched = passwordsMatch(password, confirmPassword);
-  const showMismatch =
-    showMatchError && confirmPassword.length > 0 && !matched;
+  const hasConfirm = confirmPassword.length > 0;
+  const policyMet = requirements.every(r => r.met);
 
-  if (!password && !showMismatch) {
+  if (!password && !hasConfirm) {
     return null;
   }
 
@@ -98,10 +97,18 @@ export default function PasswordStrengthIndicator({
         </ul>
       )}
 
-      {showMismatch && (
-        <p className={`${styles.matchHint} ${styles.matchError}`}>
-          Passwords do not match
-        </p>
+      {hasConfirm && (
+        matched && policyMet ? (
+          <p className={`${styles.matchHint} ${styles.matchOk}`}>
+            <Check size={14} className={styles.requirementIcon} aria-hidden />
+            Passwords match
+          </p>
+        ) : !matched ? (
+          <p className={`${styles.matchHint} ${styles.matchError}`}>
+            <X size={14} className={styles.requirementIcon} aria-hidden />
+            Passwords do not match
+          </p>
+        ) : null
       )}
     </div>
   );

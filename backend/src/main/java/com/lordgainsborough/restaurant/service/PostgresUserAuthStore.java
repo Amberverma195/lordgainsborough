@@ -1,6 +1,7 @@
 package com.lordgainsborough.restaurant.service;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
+import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
@@ -116,6 +117,65 @@ public class PostgresUserAuthStore implements UserAuthStore {
             return new Registration(snapshot(created), verification, false);
         });
     }
+
+    @Override
+    public Registration registerPending(String email, String otp, String challengeId, SignupOtpChallengeService challenges) {
+        PostgresInput.text(email, 255, true);
+        String cleanEmail = email.trim().toLowerCase(Locale.ROOT);
+        if (!(challenges.getPersistence().getStore() instanceof PostgresSignupOtpChallengeStore challengeStore)
+                || challengeStore.getTransactionManager() != manager || challengeStore.getDataSource() != manager.getDataSource())
+            throw new IllegalStateException("Signup OTP and user creation must share actual PostgreSQL transaction resources");
+        return writes.execute(tx -> {
+            String emailKey = challenges.getPersistence().emailKeyFromRawEmail(cleanEmail);
+            Optional<SignupOtpChallenge> optChallenge = challengeStore.findById(emailKey);
+            if (optChallenge.isEmpty()) {
+                return new Registration(null, new SignupOtpChallengeService.VerifyOtpResult.Missing(), false);
+            }
+            SignupOtpChallenge challenge = optChallenge.get();
+            if (challengeId != null && !challengeId.isBlank() && !Objects.equals(challenge.getChallengeId(), challengeId)) {
+                return new Registration(null, new SignupOtpChallengeService.VerifyOtpResult.Missing(), false);
+            }
+            if (challenge.getPendingPasswordHash() == null || challenge.getPendingPasswordHash().isBlank()
+                    || challenge.getPendingName() == null || challenge.getPendingName().isBlank()
+                    || challenge.getPendingPhoneNormalized() == null || !challenge.getPendingPhoneNormalized().matches("[0-9]{10}")) {
+                return new Registration(null, new SignupOtpChallengeService.VerifyOtpResult.Missing(), false);
+            }
+
+            var verification = challenges.verifyOtp(cleanEmail, otp);
+            if (!(verification instanceof SignupOtpChallengeService.VerifyOtpResult.Verified)) {
+                return new Registration(null, verification, false);
+            }
+
+            JpaUser created = new JpaUser();
+            created.setId(UUID.randomUUID().toString());
+            created.setName(challenge.getPendingName());
+            created.setEmail(cleanEmail);
+            String digits = challenge.getPendingPhoneNormalized();
+            created.setPhone(challenge.getPendingPhone() != null && !challenge.getPendingPhone().isBlank()
+                    ? challenge.getPendingPhone()
+                    : String.format("+1 (%s)-%s-%s", digits.substring(0, 3), digits.substring(3, 6), digits.substring(6)));
+            created.setPhoneNormalized(digits);
+            created.setPassword(challenge.getPendingPasswordHash());
+            created.setRole("MEMBER");
+            created.setCreatedAt(LocalDateTime.now(clock).truncatedTo(ChronoUnit.MICROS));
+            created.setMemberSince(created.getCreatedAt().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
+
+            int inserted = jdbc.update("""
+                    insert into users (id, name, email, phone, phone_normalized, password, role, member_since,
+                        created_at, token_version, no_show_count)
+                    values (?, ?, ?, ?, ?, ?, 'MEMBER', ?, ?, 0, 0) on conflict do nothing
+                    """, created.getId(), created.getName(), created.getEmail(), created.getPhone(),
+                    created.getPhoneNormalized(), created.getPassword(), created.getMemberSince(), Timestamp.valueOf(created.getCreatedAt()));
+
+            if (inserted == 0) {
+                if (!users.existsByEmailIgnoreCase(created.getEmail()) && !users.existsByPhoneNormalized(created.getPhoneNormalized()))
+                    throw new IllegalStateException("Unexpected identity uniqueness conflict");
+                return new Registration(null, verification, true);
+            }
+            challenges.clear(cleanEmail);
+            return new Registration(snapshot(created), verification, false);
+        });
+    }
     public Optional<User> updateName(User user, String token, String name, JwtUtil jwt) {
         PostgresInput.text(name, 255, true);
         return writes.execute(tx -> users.findForAuthById(user.getId())
@@ -178,7 +238,7 @@ public class PostgresUserAuthStore implements UserAuthStore {
     private static String normalizePhone(String phone) {
         if (phone == null) return "";
         String digits = phone.replaceAll("\\D", "");
-        if (digits.startsWith("1") && digits.length() > 10) digits = digits.substring(1);
-        return digits.length() > 10 ? digits.substring(0, 10) : digits;
+        if (digits.startsWith("1") && digits.length() == 11) digits = digits.substring(1);
+        return digits;
     }
 }

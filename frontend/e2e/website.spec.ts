@@ -46,17 +46,15 @@ async function signup(page: Page, user = account, wrongCode = false) {
   await page.getByPlaceholder('Re-enter password', { exact: true }).fill(user.password);
   await page.getByRole('checkbox').check();await page.getByRole('button', { name: 'Create Account', exact: true }).click();
   await expect(page).toHaveURL(/\/signup\/verify/);const code=await inbox(user.email);
-  await page.getByPlaceholder('Enter your password', { exact: true }).fill(user.password);
-  await page.getByPlaceholder('Re-enter your password', { exact: true }).fill(user.password);
   if (wrongCode) {
     const wrong=code==='000000'?'111111':'000000';
     for(let i=0;i<6;i++)await page.getByRole('textbox',{name:`Digit ${i+1}`,exact:true}).fill(wrong[i]);
-    await page.getByRole('button',{name:'Create Account',exact:true}).click();
+    await page.getByRole('button',{name:/Verify Email & Create Account|Create Account/i,exact:true}).click();
     await expect.poll(async()=>Number((await db('SELECT count(*) FROM users WHERE email=$1',[user.email]))[0].count)).toBe(0);
     await expect(page.getByText(/incorrect|invalid|does not match/i)).toBeVisible();
   }
   for(let i=0;i<6;i++)await page.getByRole('textbox',{name:`Digit ${i+1}`,exact:true}).fill(code[i]);
-  await page.getByRole('button',{name:'Create Account',exact:true}).click();await expect(page).toHaveURL(/\/profile$/);
+  await page.getByRole('button',{name:/Verify Email & Create Account|Create Account/i,exact:true}).click();await expect(page).toHaveURL(/\/profile$/);
   await expect(page.getByRole('heading',{name:user.name,exact:true})).toBeVisible();
 }
 async function menuItem(page: Page, name = 'Cheesy Garlic Bread') {

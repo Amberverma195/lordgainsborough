@@ -30,6 +30,7 @@ import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
+import com.lordgainsborough.restaurant.util.EmailValidator;
 import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -101,16 +102,16 @@ public class AuthController {
     public ResponseEntity<?> signup(
             @RequestBody SignupRequest request,
             HttpServletRequest httpRequest) {
-        if (request.getEmail() == null || request.getPassword() == null || request.getName() == null) {
+        if (request.getEmail() == null || request.getEmail().isBlank()) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
-                    "Name, email, and password are required."));
+                    "Email is required."));
         }
 
-        if (request.getPassword().length() < 8) {
+        if (!EmailValidator.isValidEmail(request.getEmail())) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
-                    "Password must be at least 8 characters long."));
+                    "Please enter a valid email address."));
         }
 
         if (request.getOtp() == null || request.getOtp().isBlank()) {
@@ -121,13 +122,6 @@ public class AuthController {
 
         String email = request.getEmail().trim().toLowerCase();
 
-        String normalizedPhone = normalizePhone(request.getPhone());
-        if (normalizedPhone.length() != 10) {
-            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                    SignupOtpCode.OTP_INVALID,
-                    "Please enter a valid 10-digit phone number."));
-        }
-
         String clientIp = resolveClientIp(httpRequest);
         ResponseEntity<SignupOtpResponse> verifyLimit = mapAbuseDecision(
                 signupAbuseLimiter.checkAndConsumeVerification(clientIp),
@@ -136,26 +130,50 @@ public class AuthController {
             return verifyLimit;
         }
 
-        if (findSignupConflict(email, normalizedPhone)) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
-                    SignupOtpCode.OTP_INVALID,
-                    "Unable to complete signup with the provided details."));
+        UserAuthStore.Registration registration;
+        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            if (request.getName() == null || request.getName().isBlank()) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Name, email, and password are required."));
+            }
+            if (request.getPassword().length() < 8) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Password must be at least 8 characters long."));
+            }
+            String normalizedPhone = normalizePhone(request.getPhone());
+            if (normalizedPhone.length() != 10) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Please enter a valid 10-digit phone number."));
+            }
+            if (findSignupConflict(email, normalizedPhone)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Unable to complete signup with the provided details."));
+            }
+            User user = new User();
+            user.setName(request.getName().trim());
+            user.setEmail(email);
+            applyPhoneToUser(user, normalizedPhone);
+            user.setMemberSince(user.getCreatedAt().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
+            registration = userAuthStore.register(user, request.getPassword(), request.getOtp().trim(), signupOtpChallengeService);
+        } else {
+            registration = userAuthStore.registerPending(email, request.getOtp().trim(), request.getChallengeId(), signupOtpChallengeService);
         }
 
-        User user = new User();
-        user.setName(request.getName().trim());
-        user.setEmail(email);
-        applyPhoneToUser(user, normalizedPhone);
-        user.setMemberSince(user.getCreatedAt().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
-
-        UserAuthStore.Registration registration = userAuthStore.register(user, request.getPassword(), request.getOtp().trim(), signupOtpChallengeService);
         ResponseEntity<SignupOtpResponse> verifyFailure = mapVerifyFailure(registration.verification());
         if (verifyFailure != null) return verifyFailure;
         if (registration.conflict()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID, "Unable to complete signup with the provided details."));
         }
-        user = registration.user();
+        User user = registration.user();
+        if (user == null) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID, "Unable to complete signup with the provided details."));
+        }
         String token = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         return ResponseEntity.status(HttpStatus.CREATED).body(createAuthResponse(user, token));
     }
@@ -532,6 +550,12 @@ public class AuthController {
                     "Email is required."));
         }
 
+        if (!EmailValidator.isValidEmail(request.getEmail())) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "Please enter a valid email address."));
+        }
+
         if (request.getPhone() == null || request.getPhone().isBlank()) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
@@ -544,6 +568,14 @@ public class AuthController {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
                     "Please enter a valid 10-digit phone number."));
+        }
+
+        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            if (request.getPassword().length() < 8) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Password must be at least 8 characters long."));
+            }
         }
 
         if (findSignupConflict(email, normalizedPhone)) {
@@ -562,8 +594,17 @@ public class AuthController {
             return abuseDenied;
         }
 
-        SignupOtpChallengeService.RequestOtpResult sendResult =
-                signupOtpChallengeService.requestSignupOtp(email, idempotencyKey);
+        String pendingPasswordHash = (request.getPassword() != null && !request.getPassword().isBlank())
+                ? PasswordUtil.hashPassword(request.getPassword())
+                : null;
+        String pendingName = (request.getName() != null && !request.getName().isBlank())
+                ? request.getName().trim()
+                : null;
+
+        SignupOtpChallengeService.RequestOtpResult sendResult = (pendingPasswordHash != null || pendingName != null)
+                ? signupOtpChallengeService.requestSignupOtp(
+                        email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash)
+                : signupOtpChallengeService.requestSignupOtp(email, idempotencyKey);
         return mapSendResult(sendResult);
     }
 
@@ -577,7 +618,7 @@ public class AuthController {
     private ResponseEntity<SignupOtpResponse> mapAbuseDecision(
             SignupAbuseLimiter.Decision decision,
             String clientKey) {
-        if (decision instanceof SignupAbuseLimiter.Decision.Allowed) {
+        if (decision == null || decision instanceof SignupAbuseLimiter.Decision.Allowed) {
             return null;
         }
         SignupAbuseLimiter.Decision.Denied denied = (SignupAbuseLimiter.Decision.Denied) decision;
@@ -689,7 +730,7 @@ public class AuthController {
             case SignupOtpChallengeService.RequestOtpResult.DeliveryUnknown unknown ->
                     ResponseEntity.accepted().body(fromChallenge(
                             SignupOtpCode.OTP_DELIVERY_UNKNOWN,
-                            "Verification email delivery status is unknown. Check your inbox before requesting another code.",
+                            "We couldn't confirm whether the code was sent. Please check your inbox and spam folder. You can request another code when the timer ends.",
                             unknown.challenge()));
             case SignupOtpChallengeService.RequestOtpResult.InFlight inFlight -> {
                 ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.CONFLICT);
@@ -903,10 +944,10 @@ public class AuthController {
             return "";
         }
         String digits = phone.replaceAll("\\D", "");
-        if (digits.startsWith("1") && digits.length() > 10) {
+        if (digits.startsWith("1") && digits.length() == 11) {
             digits = digits.substring(1);
         }
-        return digits.length() > 10 ? digits.substring(0, 10) : digits;
+        return digits;
     }
 
     private String formatPhoneForStorage(String digits) {

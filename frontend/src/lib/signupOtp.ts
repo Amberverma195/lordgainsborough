@@ -29,6 +29,7 @@ export interface SignupOtpChallengeState {
   challengeId?: string;
   email: string;
   serverTime?: string;
+  receivedAtMs?: number;
   nextResendAt?: string;
   otpExpiresAt?: string;
   challengeExpiresAt?: string;
@@ -61,17 +62,24 @@ export async function readSignupOtpResponse(res: Response): Promise<SignupOtpRes
 export function applyBackendChallengeState(
   previous: SignupOtpChallengeState | null,
   body: SignupOtpResponse,
-  emailFallback?: string
+  emailFallback?: string,
+  nowMs: number = Date.now()
 ): SignupOtpChallengeState {
   const email = (body as { email?: string }).email
     || previous?.email
     || emailFallback
     || '';
 
+  const serverTime = body.serverTime ?? previous?.serverTime;
+  const receivedAtMs = (body.serverTime && body.serverTime !== previous?.serverTime)
+    ? nowMs
+    : (previous?.receivedAtMs ?? nowMs);
+
   return {
     email,
     challengeId: body.challengeId ?? previous?.challengeId,
-    serverTime: body.serverTime ?? previous?.serverTime,
+    serverTime,
+    receivedAtMs,
     nextResendAt: body.nextResendAt ?? previous?.nextResendAt,
     otpExpiresAt: body.otpExpiresAt ?? previous?.otpExpiresAt,
     challengeExpiresAt: body.challengeExpiresAt ?? previous?.challengeExpiresAt,
@@ -91,7 +99,8 @@ export function applyBackendChallengeState(
 export function cooldownSecondsFromServerClocks(
   serverTime?: string,
   nextResendAt?: string,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  receivedAtMs?: number
 ): number {
   if (!serverTime || !nextResendAt) {
     return 0;
@@ -101,9 +110,11 @@ export function cooldownSecondsFromServerClocks(
   if (!Number.isFinite(server) || !Number.isFinite(next)) {
     return 0;
   }
-  // Align client clock to server using the skew observed at last sync.
-  const skewMs = server - nowMs;
-  const effectiveNow = nowMs + skewMs;
+  const baseline = typeof receivedAtMs === 'number' && Number.isFinite(receivedAtMs)
+    ? receivedAtMs
+    : server;
+  const elapsed = Math.max(0, nowMs - baseline);
+  const effectiveNow = server + elapsed;
   return Math.max(0, Math.ceil((next - effectiveNow) / 1000));
 }
 
@@ -116,7 +127,7 @@ export function cooldownSecondsFromResponse(
   if (Number.isFinite(retryAfter) && retryAfter > 0) {
     return retryAfter;
   }
-  return cooldownSecondsFromServerClocks(body.serverTime, body.nextResendAt, nowMs);
+  return cooldownSecondsFromServerClocks(body.serverTime, body.nextResendAt, nowMs, nowMs);
 }
 
 export function isChallengeExpiredState(
@@ -129,8 +140,11 @@ export function isChallengeExpiredState(
   const server = Date.parse(state.serverTime);
   const expires = Date.parse(state.challengeExpiresAt);
   if (!Number.isFinite(server) || !Number.isFinite(expires)) return false;
-  const skewMs = server - nowMs;
-  return nowMs + skewMs >= expires;
+  const baseline = typeof state.receivedAtMs === 'number' && Number.isFinite(state.receivedAtMs)
+    ? state.receivedAtMs
+    : server;
+  const effectiveNow = server + Math.max(0, nowMs - baseline);
+  return effectiveNow >= expires;
 }
 
 export function isResendExhausted(state: SignupOtpChallengeState | null): boolean {

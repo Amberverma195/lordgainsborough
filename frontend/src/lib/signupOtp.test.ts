@@ -52,6 +52,67 @@ describe('signupOtp challenge state', () => {
     expect(seconds).not.toBe(30);
   });
 
+  it('countdown decrements once per second with receivedAtMs baseline and reaches 0', () => {
+    const serverTime = '2026-07-13T12:00:00.000Z';
+    const nextResendAt = '2026-07-13T12:00:30.000Z';
+    const receivedAtMs = 1000000;
+
+    // Progression from 30 -> 29 -> 28
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs, receivedAtMs)).toBe(30);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 1000, receivedAtMs)).toBe(29);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 2000, receivedAtMs)).toBe(28);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 15000, receivedAtMs)).toBe(15);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 29000, receivedAtMs)).toBe(1);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 30000, receivedAtMs)).toBe(0);
+    expect(cooldownSecondsFromServerClocks(serverTime, nextResendAt, receivedAtMs + 31000, receivedAtMs)).toBe(0);
+  });
+
+  it('reloading page or resuming background tab recovers cooldown naturally from saved state', () => {
+    const clientReceiptTime = 1720872000000; // local Date.now()
+    const state = applyBackendChallengeState(null, {
+      code: 'OTP_SENT',
+      challengeId: 'c-test',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      nextResendAt: '2026-07-13T12:00:30.000Z',
+      resendsRemaining: 5,
+    }, 'amber@example.com', clientReceiptTime);
+
+    saveSignupOtpChallengeState(state);
+    const reloaded = loadSignupOtpChallengeState();
+    expect(reloaded).not.toBeNull();
+    expect(reloaded?.receivedAtMs).toBe(clientReceiptTime);
+
+    // 12 seconds elapsed in background tab / reload
+    const nowAfter12s = clientReceiptTime + 12000;
+    const remaining = cooldownSecondsFromServerClocks(
+      reloaded?.serverTime,
+      reloaded?.nextResendAt,
+      nowAfter12s,
+      reloaded?.receivedAtMs
+    );
+    expect(remaining).toBe(18);
+  });
+
+  it('challenge expiry advances naturally with elapsed time', () => {
+    const receivedAtMs = 1720872000000;
+    const state: SignupOtpChallengeState = {
+      email: 'test@example.com',
+      challengeId: 'c1',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      challengeExpiresAt: '2026-07-13T12:10:00.000Z', // 10 minutes TTL
+      receivedAtMs,
+    };
+
+    // 5 minutes in: not expired
+    expect(isChallengeExpiredState(state, receivedAtMs + 300000)).toBe(false);
+    // 9 minutes 59 seconds in: not expired
+    expect(isChallengeExpiredState(state, receivedAtMs + 599000)).toBe(false);
+    // 10 minutes in: expired!
+    expect(isChallengeExpiredState(state, receivedAtMs + 600000)).toBe(true);
+    // 11 minutes in: expired!
+    expect(isChallengeExpiredState(state, receivedAtMs + 660000)).toBe(true);
+  });
+
   it('stale local countdown is overridden by backend response', () => {
     const stale: SignupOtpChallengeState = {
       email: 'member@example.com',

@@ -64,8 +64,20 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
 
         challenge.setClientIdempotencyKey(rs.getString("client_idempotency_key"));
         challenge.setLastSendWasInitial(rs.getBoolean("last_send_was_initial"));
+        challenge.setPendingName(rs.getString("pending_name"));
+        challenge.setPendingPhone(rs.getString("pending_phone"));
+        challenge.setPendingPhoneNormalized(rs.getString("pending_phone_normalized"));
+        challenge.setPendingPasswordHash(rs.getString("pending_password_hash"));
         return challenge;
     };
+
+    private static final String CHALLENGE_COLUMNS = """
+        email_key, normalized_email, challenge_id, status, otp_digest,
+        resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
+        challenge_expires_at, created_at, updated_at, send_operation_id,
+        send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
+        pending_name, pending_phone, pending_phone_normalized, pending_password_hash
+        """;
 
     public PostgresSignupOtpChallengeStore(
             DataSource dataSource,
@@ -97,14 +109,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         if (emailKey == null || emailKey.isBlank()) {
             return Optional.empty();
         }
-        String sql = """
-            SELECT email_key, normalized_email, challenge_id, status, otp_digest,
-                   resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                   challenge_expires_at, created_at, updated_at, send_operation_id,
-                   send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-            FROM signup_otp_challenges
-            WHERE email_key = ?
-            """;
+        String sql = "SELECT " + CHALLENGE_COLUMNS + " FROM signup_otp_challenges WHERE email_key = ?";
         List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER, emailKey);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
@@ -121,8 +126,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     email_key, normalized_email, challenge_id, status, otp_digest,
                     resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                     challenge_expires_at, created_at, updated_at, send_operation_id,
-                    send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
+                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO NOTHING
                 """;
             try {
@@ -143,7 +149,11 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                         challenge.getSendStatus() != null ? challenge.getSendStatus().name() : null,
                         toTimestamp(challenge.getSendLeaseUntil()),
                         challenge.getClientIdempotencyKey(),
-                        challenge.isLastSendWasInitial()
+                        challenge.isLastSendWasInitial(),
+                        challenge.getPendingName(),
+                        challenge.getPendingPhone(),
+                        challenge.getPendingPhoneNormalized(),
+                        challenge.getPendingPasswordHash()
                 );
                 return rows == 1;
             } catch (DuplicateKeyException e) {
@@ -189,14 +199,14 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     send_status = ?,
                     send_lease_until = ?,
                     client_idempotency_key = ?,
-                    last_send_was_initial = ?
+                    last_send_was_initial = ?,
+                    pending_name = ?,
+                    pending_phone = ?,
+                    pending_phone_normalized = ?,
+                    pending_password_hash = ?
                 WHERE email_key = ?
                   AND challenge_expires_at <= ?
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     fresh.getNormalizedEmail(),
@@ -213,6 +223,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     toTimestamp(fresh.getSendLeaseUntil()),
                     fresh.getClientIdempotencyKey(),
                     fresh.isLastSendWasInitial(),
+                    fresh.getPendingName(),
+                    fresh.getPendingPhone(),
+                    fresh.getPendingPhoneNormalized(),
+                    fresh.getPendingPasswordHash(),
                     emailKey,
                     toTimestamp(now)
             );
@@ -234,8 +248,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     email_key, normalized_email, challenge_id, status, otp_digest,
                     resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                     challenge_expires_at, created_at, updated_at, send_operation_id,
-                    send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
+                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO UPDATE SET
                     normalized_email = EXCLUDED.normalized_email,
                     challenge_id = EXCLUDED.challenge_id,
@@ -251,12 +266,12 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     send_status = EXCLUDED.send_status,
                     send_lease_until = EXCLUDED.send_lease_until,
                     client_idempotency_key = EXCLUDED.client_idempotency_key,
-                    last_send_was_initial = EXCLUDED.last_send_was_initial
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                    last_send_was_initial = EXCLUDED.last_send_was_initial,
+                    pending_name = EXCLUDED.pending_name,
+                    pending_phone = EXCLUDED.pending_phone,
+                    pending_phone_normalized = EXCLUDED.pending_phone_normalized,
+                    pending_password_hash = EXCLUDED.pending_password_hash
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     challenge.getEmailKey(),
@@ -275,7 +290,11 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge.getSendStatus() != null ? challenge.getSendStatus().name() : null,
                     toTimestamp(challenge.getSendLeaseUntil()),
                     challenge.getClientIdempotencyKey(),
-                    challenge.isLastSendWasInitial()
+                    challenge.isLastSendWasInitial(),
+                    challenge.getPendingName(),
+                    challenge.getPendingPhone(),
+                    challenge.getPendingPhoneNormalized(),
+                    challenge.getPendingPasswordHash()
             );
             return results.get(0);
         });
@@ -330,11 +349,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND failed_verify_attempts < ?
                   AND resend_count < ?
                   AND next_resend_at <= ?
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     newOtpDigest,
@@ -381,11 +396,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 WHERE email_key = ?
                   AND send_operation_id = ?
                   AND send_status = 'RESERVED'
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     outcome.name(),
@@ -413,11 +424,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND send_operation_id = ?
                   AND send_status = 'DEFINITELY_FAILED'
                   AND last_send_was_initial = TRUE
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     toTimestamp(now),
@@ -452,11 +459,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND otp_expires_at > ?
                   AND failed_verify_attempts < ?
                   AND otp_digest = ?
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """;
+                RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     toTimestamp(now),
@@ -525,12 +528,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 params.add(otpDigest);
             }
 
-            sql.append("""
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """);
+            sql.append("                RETURNING ").append(CHALLENGE_COLUMNS);
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(
                     sql.toString(), ROW_MAPPER, params.toArray());
@@ -580,16 +578,42 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 params.add(challengeId);
             }
 
-            sql.append("""
-                RETURNING email_key, normalized_email, challenge_id, status, otp_digest,
-                          resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
-                          challenge_expires_at, created_at, updated_at, send_operation_id,
-                          send_status, send_lease_until, client_idempotency_key, last_send_was_initial
-                """);
+            sql.append("                RETURNING ").append(CHALLENGE_COLUMNS);
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(
                     sql.toString(), ROW_MAPPER, params.toArray());
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });
+    }
+
+    @Override
+    @Transactional(transactionManager = "transactionManager")
+    public boolean updatePendingRegistration(
+            String emailKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            Instant now) {
+        if (emailKey == null || emailKey.isBlank()) {
+            return false;
+        }
+        String sql = """
+            UPDATE signup_otp_challenges
+            SET pending_name = ?,
+                pending_phone = ?,
+                pending_phone_normalized = ?,
+                pending_password_hash = ?,
+                updated_at = ?
+            WHERE email_key = ?
+            """;
+        int updated = jdbcTemplate.update(sql,
+                pendingName,
+                pendingPhone,
+                pendingPhoneNormalized,
+                pendingPasswordHash,
+                toTimestamp(now),
+                emailKey);
+        return updated == 1;
     }
 }

@@ -133,7 +133,7 @@ public class EmailSenderService {
     private String buildPlainText(String otpCode) {
         return "Lord Gainsborough - Email Verification\n\n"
                 + "Your verification code is: " + otpCode + "\n\n"
-                + "This code expires in 5 minutes.\n"
+                + "This code expires in 10 minutes.\n"
                 + "If you did not request this code, you can safely ignore this email.";
     }
 
@@ -144,7 +144,7 @@ public class EmailSenderService {
                 + "<div style='text-align: center; margin: 20px 0;'>"
                 + "  <h1 style='color: #0284c7; background: #f0f9ff; display: inline-block; padding: 10px 25px; border-radius: 5px; letter-spacing: 5px; font-size: 32px; margin: 0;'>" + otpCode + "</h1>"
                 + "</div>"
-                + "<p style='color: #666; font-size: 13px;'>This code is valid for 5 minutes. If you did not request this code, please ignore this message.</p>"
+                + "<p style='color: #666; font-size: 13px;'>This code is valid for 10 minutes. If you did not request this code, please ignore this message.</p>"
                 + "</div>";
     }
 

@@ -37,8 +37,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
@@ -96,6 +98,8 @@ class AuthControllerSignupOtpResponseTest {
         when(clientIpResolver.resolve(anyString(), nullable(String.class), nullable(String.class)))
                 .thenReturn("127.0.0.1");
         when(signupAbuseLimiter.checkAndConsumeSend(anyString(), anyBoolean(), nullable(String.class)))
+                .thenReturn(new SignupAbuseLimiter.Decision.Allowed());
+        when(signupAbuseLimiter.checkAndConsumeVerification(anyString()))
                 .thenReturn(new SignupAbuseLimiter.Decision.Allowed());
         when(signupOtpChallengeService.looksLikeInitialSend(anyString())).thenReturn(true);
         when(userRepository.existsByEmailIgnoreCase(anyString())).thenReturn(false);
@@ -245,6 +249,93 @@ class AuthControllerSignupOtpResponseTest {
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertEquals(SignupOtpCode.OTP_INVALID, response.getBody().getCode());
+        assertEquals("Please enter a valid 10-digit phone number.", response.getBody().getMessage());
+    }
+
+    @Test
+    void malformedEmailWithoutDomainSuffixReturns400WithoutCallingServices() {
+        SendOtpRequest request = signupOtpRequest("amberverma@gma", "5551234567");
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_INVALID, response.getBody().getCode());
+        assertEquals("Please enter a valid email address.", response.getBody().getMessage());
+        verify(signupAbuseLimiter, never()).checkAndConsumeSend(anyString(), anyBoolean(), nullable(String.class));
+        verify(signupOtpChallengeService, never()).requestSignupOtp(anyString(), anyString());
+    }
+
+    @Test
+    void sendSignupOtpWithPasswordStagesPendingRegistrationWithBcryptHash() {
+        SendOtpRequest request = signupOtpRequest("amber@example.com", "5551234567");
+        request.setName("Amber Verma");
+        request.setPassword("SecretPassword123!");
+
+        when(signupOtpChallengeService.requestSignupOtp(
+                eq("amber@example.com"),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                eq("Amber Verma"),
+                eq("5551234567"),
+                eq("5551234567"),
+                argThat(hash -> hash != null && hash.startsWith("$2a$"))))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp("idem-123", null, request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_SENT, response.getBody().getCode());
+        verify(signupOtpChallengeService).requestSignupOtp(
+                eq("amber@example.com"),
+                eq("idem-123"),
+                eq("Amber Verma"),
+                eq("5551234567"),
+                eq("5551234567"),
+                argThat(hash -> hash != null && hash.startsWith("$2a$")));
+    }
+
+    @Test
+    void signupWithPendingRegistrationCompletesWithoutPassword() {
+        com.lordgainsborough.restaurant.dto.SignupRequest signupReq = new com.lordgainsborough.restaurant.dto.SignupRequest();
+        signupReq.setEmail("amber@example.com");
+        signupReq.setOtp("123456");
+        signupReq.setChallengeId("challenge-1");
+        // Note: password is deliberately null
+
+        User registeredUser = new User();
+        registeredUser.setId("user-1");
+        registeredUser.setName("Amber Verma");
+        registeredUser.setEmail("amber@example.com");
+        registeredUser.setPhone("+1 (555)-123-4567");
+        registeredUser.setRole("MEMBER");
+        registeredUser.setTokenVersion(1);
+
+        org.mockito.Mockito.doReturn(new UserAuthStore.Registration(
+                        registeredUser,
+                        new SignupOtpChallengeService.VerifyOtpResult.Verified(sampleView()),
+                        false))
+                .when(userRepository).registerPending(
+                        eq("amber@example.com"),
+                        eq("123456"),
+                        eq("challenge-1"),
+                        eq(signupOtpChallengeService));
+
+        ResponseEntity<?> response = controller.signup(signupReq, httpRequest);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        assertNotNull(response.getBody());
+    }
+
+    @Test
+    void signupWithMalformedEmailFailsBeforeVerification() {
+        com.lordgainsborough.restaurant.dto.SignupRequest signupReq = new com.lordgainsborough.restaurant.dto.SignupRequest();
+        signupReq.setEmail("amberverma@gma");
+        signupReq.setOtp("123456");
+
+        ResponseEntity<?> response = controller.signup(signupReq, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        SignupOtpResponse body = (SignupOtpResponse) response.getBody();
+        assertEquals("Please enter a valid email address.", body.getMessage());
+        verify(userRepository, never()).registerPending(anyString(), anyString(), anyString(), any());
     }
 
     private static SignupOtpChallengeView sampleView() {
