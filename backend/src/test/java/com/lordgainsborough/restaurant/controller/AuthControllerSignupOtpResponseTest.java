@@ -542,6 +542,35 @@ class AuthControllerSignupOtpResponseTest {
     }
 
     @Test
+    void passwordSuppliedSignupAgainstStagedChallengeWithoutAttemptTokenReceivesConflict() {
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setChallengeId("challenge-staged-1");
+        active.setAttemptTokenHash("hash-of-real-token");
+        active.setPendingName("Original Applicant");
+        active.setPendingPhone("5551234567");
+        active.setPendingPhoneNormalized("5551234567");
+        active.setPendingPasswordHash(com.lordgainsborough.restaurant.security.PasswordUtil.hashPassword("Secret@123"));
+
+        when(signupOtpChallengeService.findActiveChallenge("amber@example.com")).thenReturn(Optional.of(active));
+        when(signupOtpChallengeService.verifyAttemptToken(eq(active), any())).thenReturn(false);
+
+        com.lordgainsborough.restaurant.dto.SignupRequest signupReq = new com.lordgainsborough.restaurant.dto.SignupRequest();
+        signupReq.setEmail("amber@example.com");
+        signupReq.setOtp("123456");
+        signupReq.setPassword("Secret@123");
+        signupReq.setName("Attacker Name");
+        signupReq.setPhone("5551234567");
+        signupReq.setAttemptToken(null);
+
+        ResponseEntity<?> response = controller.signup(null, signupReq, httpRequest);
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        SignupOtpResponse body = (SignupOtpResponse) response.getBody();
+        assertEquals(SignupOtpCode.OTP_ATTEMPT_CONFLICT, body.getCode());
+        verify(userRepository, never()).register(any(), any(), any(), any());
+    }
+
+    @Test
     void passwordSanitizationPreservesPasswordExactnessForLoginVerification() {
         String rawWithZeroWidth = "Pass\u200Bword123!";
         String sanitized = com.lordgainsborough.restaurant.util.PasswordValidator.sanitize(rawWithZeroWidth);

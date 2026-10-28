@@ -68,10 +68,29 @@ export function applyBackendChallengeState(
   emailFallback?: string,
   nowMs: number = Date.now()
 ): SignupOtpChallengeState {
+  // Stale-response protection: if the incoming response has an older serverTime
+  // than what we already have, discard it to prevent out-of-order overwrites.
+  if (previous?.serverTime && body.serverTime) {
+    const prevServer = Date.parse(previous.serverTime);
+    const incomingServer = Date.parse(body.serverTime);
+    if (Number.isFinite(prevServer) && Number.isFinite(incomingServer) && incomingServer < prevServer) {
+      return previous;
+    }
+  }
+
   const email = (body as { email?: string }).email
     || previous?.email
     || emailFallback
     || '';
+
+  // Prevent an update for a different challenge from inheriting a stale attempt token
+  const isSameOrUnspecifiedChallenge =
+    !body.challengeId ||
+    !previous?.challengeId ||
+    body.challengeId === previous.challengeId;
+
+  const attemptToken = body.attemptToken
+    ?? (isSameOrUnspecifiedChallenge ? previous?.attemptToken : undefined);
 
   const serverTime = body.serverTime ?? previous?.serverTime;
   const receivedAtMs = (body.serverTime && body.serverTime !== previous?.serverTime)
@@ -81,7 +100,7 @@ export function applyBackendChallengeState(
   return {
     email,
     challengeId: body.challengeId ?? previous?.challengeId,
-    attemptToken: body.attemptToken ?? previous?.attemptToken,
+    attemptToken,
     serverTime,
     receivedAtMs,
     nextResendAt: body.nextResendAt ?? previous?.nextResendAt,

@@ -20,6 +20,10 @@ public class SignupOtpChallengeService {
     private final EmailSenderService emailSenderService;
     private final SignupOtpObservability observability;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final byte[] attemptTokenHmacKey = new byte[32];
+    {
+        secureRandom.nextBytes(attemptTokenHmacKey);
+    }
 
     public SignupOtpChallengeService(
             SignupOtpChallengePersistence persistence,
@@ -48,7 +52,11 @@ public class SignupOtpChallengeService {
         record Denied(ResendDenialReason reason, long retryAfterSeconds, String message,
                       SignupOtpChallengeView challenge) implements RequestOtpResult {}
         record Failed(SignupOtpChallengeView challenge) implements RequestOtpResult {}
-        record DeliveryUnknown(SignupOtpChallengeView challenge) implements RequestOtpResult {}
+        record DeliveryUnknown(SignupOtpChallengeView challenge, String attemptToken) implements RequestOtpResult {
+            public DeliveryUnknown(SignupOtpChallengeView challenge) {
+                this(challenge, null);
+            }
+        }
         record InFlight(long retryAfterSeconds, SignupOtpChallengeView challenge) implements RequestOtpResult {}
         record AttemptConflict(String message, SignupOtpChallengeView challenge) implements RequestOtpResult {}
     }
@@ -75,25 +83,38 @@ public class SignupOtpChallengeService {
             String pendingPhone,
             String pendingPhoneNormalized,
             String pendingPasswordHash) {
+        return requestSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, null);
+    }
+
+    public RequestOtpResult requestSignupOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String candidateAttemptToken) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
         }
         String key = normalizeIdempotencyKey(idempotencyKey);
 
-        Optional<RequestOtpResult> replay = replayIdempotentResult(normalizedEmail, key);
+        Optional<RequestOtpResult> replay = replayIdempotentResult(normalizedEmail, key, candidateAttemptToken);
         if (replay.isPresent()) {
             return replay.get();
         }
 
         if (persistence.findActiveUnexpiredByEmail(normalizedEmail).isEmpty()) {
-            String attemptToken = generateAttemptToken();
+            String attemptToken = (candidateAttemptToken != null && !candidateAttemptToken.isBlank())
+                    ? candidateAttemptToken.trim()
+                    : deriveAttemptToken(normalizedEmail, key);
             return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, attemptToken)) {
                 case CREATED -> new RequestOtpResult.Sent(true, true, challengeViewForEmail(normalizedEmail), attemptToken);
                 case ALREADY_EXISTS -> resendOtp(normalizedEmail, key);
                 case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
                 case DELIVERY_UNKNOWN ->
-                        new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail));
+                        new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail), attemptToken);
                 case IN_FLIGHT -> new RequestOtpResult.InFlight(
                         SignupOtpChallengePersistence.SEND_LEASE.getSeconds(),
                         challengeViewForEmail(normalizedEmail));
@@ -116,6 +137,21 @@ public class SignupOtpChallengeService {
         byte[] bytes = new byte[32];
         secureRandom.nextBytes(bytes);
         return java.util.HexFormat.of().formatHex(bytes);
+    }
+
+    public String deriveAttemptToken(String normalizedEmail, String idempotencyKey) {
+        if (normalizedEmail == null || idempotencyKey == null) {
+            return generateAttemptToken();
+        }
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(attemptTokenHmacKey, "HmacSHA256"));
+            byte[] raw = mac.doFinal((normalizedEmail.trim().toLowerCase() + ":" + idempotencyKey.trim())
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(raw);
+        } catch (Exception e) {
+            return generateAttemptToken();
+        }
     }
 
     public InitialSendResult sendInitialOtp(
@@ -234,7 +270,20 @@ public class SignupOtpChallengeService {
                 emailKey, active.getAttemptTokenHash(), fresh, now);
 
         if (restarted.isEmpty()) {
-            return toRequestResult(InitialSendResult.ALREADY_EXISTS, normalizedEmail);
+            Optional<SignupOtpChallenge> current = persistence.findByEmailKey(emailKey);
+            if (current.isPresent()) {
+                SignupOtpChallenge c = current.get();
+                if (c.getSendStatus() == OtpSendStatus.RESERVED
+                        && c.getSendLeaseUntil() != null
+                        && c.getSendLeaseUntil().isAfter(now)) {
+                    long retryAfter = Math.max(1,
+                            Duration.between(now, c.getSendLeaseUntil()).getSeconds());
+                    return new RequestOtpResult.InFlight(retryAfter, toChallengeView(c, now));
+                }
+            }
+
+            ResendDenialReason reason = persistence.diagnoseResendDenial(emailKey, now);
+            return toDenied(reason, emailKey, now);
         }
 
         observability.record(
@@ -252,7 +301,7 @@ public class SignupOtpChallengeService {
             case CREATED -> new RequestOtpResult.Sent(true, true, challengeViewForEmail(normalizedEmail), newAttemptToken);
             case ALREADY_EXISTS -> toDenied(ResendDenialReason.COOLDOWN_ACTIVE, emailKey, persistence.now());
             case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
-            case DELIVERY_UNKNOWN -> new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail));
+            case DELIVERY_UNKNOWN -> new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail), newAttemptToken);
             case IN_FLIGHT -> new RequestOtpResult.InFlight(
                     SignupOtpChallengePersistence.SEND_LEASE.getSeconds(), challengeViewForEmail(normalizedEmail));
         };
@@ -651,7 +700,22 @@ public class SignupOtpChallengeService {
         return new RequestOtpResult.Sent(initial, newlyAccepted, challengeViewForEmail(normalizedEmail));
     }
 
+    public Optional<RequestOtpResult> checkIdempotentReplay(String email, String idempotencyKey, String candidateAttemptToken) {
+        String normalizedEmail = persistence.normalizeEmail(email);
+        if (normalizedEmail.isBlank() || idempotencyKey == null || idempotencyKey.isBlank()) {
+            return Optional.empty();
+        }
+        return replayIdempotentResult(normalizedEmail, normalizeIdempotencyKey(idempotencyKey), candidateAttemptToken);
+    }
+
     private Optional<RequestOtpResult> replayIdempotentResult(String normalizedEmail, String idempotencyKey) {
+        return replayIdempotentResult(normalizedEmail, idempotencyKey, null);
+    }
+
+    private Optional<RequestOtpResult> replayIdempotentResult(
+            String normalizedEmail,
+            String idempotencyKey,
+            String candidateAttemptToken) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             return Optional.empty();
         }
@@ -674,11 +738,13 @@ public class SignupOtpChallengeService {
         }
 
         SignupOtpChallengeView view = toChallengeView(challenge, now);
+        String replayedAttemptToken = resolveReplayAttemptToken(challenge, normalizedEmail, candidateAttemptToken);
+
         Optional<RequestOtpResult> result = switch (sendStatus) {
             case SENT -> Optional.of(new RequestOtpResult.Sent(
-                    challenge.isLastSendWasInitial(), false, view));
+                    challenge.isLastSendWasInitial(), false, view, replayedAttemptToken));
             case DEFINITELY_FAILED -> Optional.of(new RequestOtpResult.Failed(view));
-            case DELIVERY_UNKNOWN -> Optional.of(new RequestOtpResult.DeliveryUnknown(view));
+            case DELIVERY_UNKNOWN -> Optional.of(new RequestOtpResult.DeliveryUnknown(view, replayedAttemptToken));
             case RESERVED -> {
                 if (challenge.getSendLeaseUntil() != null && challenge.getSendLeaseUntil().isAfter(now)) {
                     long retryAfter = Math.max(1,
@@ -688,7 +754,7 @@ public class SignupOtpChallengeService {
                 persistence.tryMarkSendOutcome(
                         emailKey, challenge.getSendOperationId(), OtpSendStatus.DELIVERY_UNKNOWN, now);
                 yield Optional.of(new RequestOtpResult.DeliveryUnknown(
-                        challengeViewForEmail(normalizedEmail)));
+                        challengeViewForEmail(normalizedEmail), replayedAttemptToken));
             }
         };
         result.ifPresent(ignored -> observability.record(
@@ -698,6 +764,27 @@ public class SignupOtpChallengeService {
                         "IDEMPOTENCY_REPLAY",
                         providerCategory(sendStatus))));
         return result;
+    }
+
+    private String resolveReplayAttemptToken(
+            SignupOtpChallenge challenge,
+            String normalizedEmail,
+            String candidateAttemptToken) {
+        if (challenge.getAttemptTokenHash() == null) {
+            return null;
+        }
+        if (candidateAttemptToken != null && !candidateAttemptToken.isBlank()) {
+            if (persistence.verifyAttemptToken(candidateAttemptToken, challenge.getAttemptTokenHash())) {
+                return candidateAttemptToken.trim();
+            }
+        }
+        if (challenge.isLastSendWasInitial() && challenge.getClientIdempotencyKey() != null) {
+            String derived = deriveAttemptToken(normalizedEmail, challenge.getClientIdempotencyKey());
+            if (persistence.verifyAttemptToken(derived, challenge.getAttemptTokenHash())) {
+                return derived;
+            }
+        }
+        return null;
     }
 
     private static String normalizeIdempotencyKey(String idempotencyKey) {

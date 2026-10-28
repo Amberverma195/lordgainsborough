@@ -370,4 +370,86 @@ describe('signupOtpCrossTab', () => {
     tabA.close();
     tabB.close();
   });
+
+  it('preserves locally held attemptToken when merging updates for the same challenge', () => {
+    const localState: SignupOtpChallengeState = {
+      email: 'applicant@example.com',
+      challengeId: 'challenge-same-123',
+      attemptToken: 'secret-tab-attempt-token',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      nextResendAt: '2026-07-13T12:00:30.000Z',
+      resendsRemaining: 5,
+      code: 'OTP_SENT',
+    };
+
+    const crossTabUpdate: SignupOtpCrossTabPayload = {
+      type: 'challenge-updated',
+      challengeId: 'challenge-same-123',
+      email: 'applicant@example.com',
+      serverTime: '2026-07-13T12:00:15.000Z',
+      nextResendAt: '2026-07-13T12:00:45.000Z',
+      resendsRemaining: 4,
+      originTabId: 'other-tab',
+      updatedAt: Date.now(),
+    };
+
+    const merged = applyCrossTabPayload(localState, crossTabUpdate);
+    expect(merged).not.toBeNull();
+    expect(merged?.attemptToken).toBe('secret-tab-attempt-token');
+    expect(merged?.resendsRemaining).toBe(4);
+    expect(merged?.nextResendAt).toBe('2026-07-13T12:00:45.000Z');
+  });
+
+  it('prevents an update for a different challengeId from inheriting a stale attemptToken', () => {
+    const localState: SignupOtpChallengeState = {
+      email: 'applicant@example.com',
+      challengeId: 'challenge-old-123',
+      attemptToken: 'secret-tab-attempt-token',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      nextResendAt: '2026-07-13T12:00:30.000Z',
+      resendsRemaining: 5,
+      code: 'OTP_SENT',
+    };
+
+    const crossTabUpdateForNewChallenge: SignupOtpCrossTabPayload = {
+      type: 'challenge-updated',
+      challengeId: 'challenge-new-456',
+      email: 'applicant@example.com',
+      serverTime: '2026-07-13T12:05:00.000Z',
+      nextResendAt: '2026-07-13T12:05:30.000Z',
+      resendsRemaining: 5,
+      originTabId: 'other-tab',
+      updatedAt: Date.now(),
+    };
+
+    const merged = applyCrossTabPayload(localState, crossTabUpdateForNewChallenge);
+    expect(merged).not.toBeNull();
+    expect(merged?.challengeId).toBe('challenge-new-456');
+    expect(merged?.attemptToken).toBeUndefined();
+  });
+
+  it('prevents an update for a different email from inheriting an attemptToken', () => {
+    const localState: SignupOtpChallengeState = {
+      email: 'user1@example.com',
+      challengeId: 'challenge-123',
+      attemptToken: 'secret-tab-attempt-token',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      resendsRemaining: 5,
+      code: 'OTP_SENT',
+    };
+
+    const crossTabUpdateDifferentEmail: SignupOtpCrossTabPayload = {
+      type: 'challenge-updated',
+      challengeId: 'challenge-123',
+      email: 'user2@example.com',
+      serverTime: '2026-07-13T12:00:10.000Z',
+      resendsRemaining: 5,
+      originTabId: 'other-tab',
+      updatedAt: Date.now(),
+    };
+
+    const merged = applyCrossTabPayload(localState, crossTabUpdateDifferentEmail);
+    expect(merged).not.toBeNull();
+    expect(merged?.attemptToken).toBeUndefined();
+  });
 });

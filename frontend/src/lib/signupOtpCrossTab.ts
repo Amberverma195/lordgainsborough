@@ -54,9 +54,21 @@ export function applyCrossTabPayload(
     return null;
   }
 
+  // Preserve a tab's locally held attempt token when merging safe cross-tab status
+  // updates for the same challenge. Never broadcast the token to unrelated tabs,
+  // and prevent an update for a different challenge or email from inheriting a stale token.
+  const isSameChallenge = Boolean(
+    previous?.attemptToken &&
+    previous.challengeId &&
+    payload.challengeId &&
+    previous.challengeId === payload.challengeId &&
+    (!payload.email || !previous.email || payload.email.trim().toLowerCase() === previous.email.trim().toLowerCase())
+  );
+
   return {
     email: payload.email || previous?.email || '',
     challengeId: payload.challengeId ?? previous?.challengeId,
+    attemptToken: isSameChallenge ? previous?.attemptToken : undefined,
     serverTime: payload.serverTime ?? previous?.serverTime,
     receivedAtMs: payload.receivedAtMs ?? previous?.receivedAtMs,
     nextResendAt: payload.nextResendAt ?? previous?.nextResendAt,
@@ -76,6 +88,7 @@ export function parseCrossTabPayload(raw: string): SignupOtpCrossTabPayload | nu
       otp?: unknown;
       token?: unknown;
       digest?: unknown;
+      attemptToken?: unknown;
     };
     if (!parsed || typeof parsed !== 'object') return null;
     if (parsed.type !== 'challenge-updated' && parsed.type !== 'verified' && parsed.type !== 'cleared') {
@@ -85,6 +98,7 @@ export function parseCrossTabPayload(raw: string): SignupOtpCrossTabPayload | nu
     delete parsed.otp;
     delete parsed.token;
     delete parsed.digest;
+    delete parsed.attemptToken;
     return {
       type: parsed.type,
       challengeId: parsed.challengeId,

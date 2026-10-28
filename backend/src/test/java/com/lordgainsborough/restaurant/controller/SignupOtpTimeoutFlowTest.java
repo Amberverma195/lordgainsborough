@@ -130,7 +130,15 @@ class SignupOtpTimeoutFlowTest {
                 "idem-123", null, null, request, httpRequest);
 
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
-        assertNotNull(response.getBody());
         assertEquals(SignupOtpCode.OTP_DELIVERY_UNKNOWN, response.getBody().getCode());
+        assertNotNull(response.getBody().getAttemptToken(), "Initiating browser must receive attemptToken on DELIVERY_UNKNOWN");
+        String attemptToken = response.getBody().getAttemptToken();
+
+        // Replayed request with same Idempotency-Key after lost HTTP response
+        ResponseEntity<SignupOtpResponse> replayed = controller.sendSignupOtp(
+                "idem-123", null, null, request, httpRequest);
+        assertEquals(HttpStatus.ACCEPTED, replayed.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_DELIVERY_UNKNOWN, replayed.getBody().getCode());
+        assertEquals(attemptToken, replayed.getBody().getAttemptToken(), "Replayed initial request must return matching attemptToken");
     }
 }

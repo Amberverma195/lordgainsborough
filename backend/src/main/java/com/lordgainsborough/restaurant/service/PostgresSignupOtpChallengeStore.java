@@ -211,7 +211,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     attempt_token_hash = ?
                 WHERE email_key = ?
                   AND challenge_expires_at <= ?
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     fresh.getNormalizedEmail(),
@@ -279,7 +280,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_phone_normalized = EXCLUDED.pending_phone_normalized,
                     pending_password_hash = EXCLUDED.pending_password_hash,
                     attempt_token_hash = EXCLUDED.attempt_token_hash
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     challenge.getEmailKey(),
@@ -359,7 +361,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND resend_count < ?
                   AND next_resend_at <= ?
                   AND (send_status IS NULL OR send_status != 'RESERVED' OR send_lease_until IS NULL OR send_lease_until <= ?)
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     newOtpDigest,
@@ -407,7 +410,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 WHERE email_key = ?
                   AND send_operation_id = ?
                   AND send_status = 'RESERVED'
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     outcome.name(),
@@ -435,7 +439,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND send_operation_id = ?
                   AND send_status = 'DEFINITELY_FAILED'
                   AND last_send_was_initial = TRUE
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     toTimestamp(now),
@@ -470,7 +475,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                   AND otp_expires_at > ?
                   AND failed_verify_attempts < ?
                   AND otp_digest = ?
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     toTimestamp(now),
@@ -654,7 +660,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge_id = ?,
                     status = ?,
                     otp_digest = ?,
-                    resend_count = 0,
+                    resend_count = resend_count + 1,
                     failed_verify_attempts = 0,
                     next_resend_at = ?,
                     otp_expires_at = ?,
@@ -674,8 +680,13 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 WHERE email_key = ?
                   AND status = 'ACTIVE'
                   AND challenge_expires_at > ?
+                  AND failed_verify_attempts < ?
+                  AND resend_count < ?
+                  AND next_resend_at <= ?
+                  AND (send_status IS NULL OR send_status != 'RESERVED' OR send_lease_until IS NULL OR send_lease_until <= ?)
                   AND (attempt_token_hash = ? OR (attempt_token_hash IS NULL AND ? IS NULL))
-                RETURNING """ + CHALLENGE_COLUMNS;
+                RETURNING 
+                """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
                     fresh.getNormalizedEmail(),
@@ -698,6 +709,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     fresh.getPendingPasswordHash(),
                     fresh.getAttemptTokenHash(),
                     emailKey,
+                    toTimestamp(now),
+                    SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,
+                    SignupOtpChallengePersistence.MAX_RESENDS,
+                    toTimestamp(now),
                     toTimestamp(now),
                     expectedAttemptTokenHash,
                     expectedAttemptTokenHash

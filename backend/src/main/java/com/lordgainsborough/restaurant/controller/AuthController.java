@@ -151,8 +151,59 @@ public class AuthController {
             return verifyLimit;
         }
 
+        Optional<SignupOtpChallenge> activeOpt = signupOtpChallengeService.findActiveChallenge(email);
+        boolean isStaged = false;
+        if (activeOpt.isPresent()) {
+            SignupOtpChallenge active = activeOpt.get();
+            if (active.getPendingPasswordHash() != null) {
+                isStaged = true;
+                boolean validAttempt = active.getAttemptTokenHash() == null
+                        || signupOtpChallengeService.verifyAttemptToken(active, rawAttemptToken);
+                if (!validAttempt) {
+                    authSecurityObservability.record(
+                            AuthSecurityObservability.Flow.SIGNUP,
+                            AuthSecurityObservability.Outcome.INVALID,
+                            AuthSecurityObservability.Reason.SIGNUP_ATTEMPT_MISMATCH);
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                            "A signup verification session is already in progress for this email address. Please complete verification in your original browser window, or wait for the session to expire."));
+                }
+                if (request.getName() != null && !request.getName().trim().isBlank()
+                        && active.getPendingName() != null
+                        && !request.getName().trim().equals(active.getPendingName())) {
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                            "Registration details do not match the pending verification session."));
+                }
+                if (request.getPhone() != null && !request.getPhone().isBlank()) {
+                    String reqNormPhone = normalizePhone(request.getPhone());
+                    if (active.getPendingPhoneNormalized() != null
+                            && !reqNormPhone.equals(active.getPendingPhoneNormalized())) {
+                        return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                                SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                                "Registration details do not match the pending verification session."));
+                    }
+                }
+                if (request.getPassword() != null && !request.getPassword().isBlank()) {
+                    String cleanPassword = PasswordValidator.sanitize(request.getPassword());
+                    if (!PasswordUtil.checkPassword(cleanPassword, active.getPendingPasswordHash())) {
+                        return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                                SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                                "Registration details do not match the pending verification session."));
+                    }
+                }
+            } else if (request.getPassword() == null || request.getPassword().isBlank()) {
+                isStaged = true;
+            }
+        }
+
         UserAuthStore.Registration registration;
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+        if (isStaged) {
+            String challengeId = (request.getChallengeId() != null && !request.getChallengeId().isBlank())
+                    ? request.getChallengeId()
+                    : activeOpt.map(SignupOtpChallenge::getChallengeId).orElse(null);
+            registration = userAuthStore.registerPending(email, request.getOtp().trim(), challengeId, rawAttemptToken, signupOtpChallengeService);
+        } else if (request.getPassword() != null && !request.getPassword().isBlank()) {
             String cleanPassword = PasswordValidator.sanitize(request.getPassword());
             if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -620,29 +671,47 @@ public class AuthController {
                     "Please enter a valid 10-digit phone number."));
         }
 
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            Optional<SignupOtpChallengeService.RequestOtpResult> replay =
+                    signupOtpChallengeService.checkIdempotentReplay(email, idempotencyKey, rawAttemptToken);
+            if (replay.isPresent()) {
+                return mapSendResult(replay.get());
+            }
+        }
+
         boolean isInitialSend = signupOtpChallengeService.looksLikeInitialSend(email);
         if (isInitialSend) {
-            // Initial send
-            if (request.getName() == null || request.getName().trim().isBlank()) {
-                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                        SignupOtpCode.OTP_INVALID,
-                        "Full name is required."));
-            }
-            if (request.getName().trim().length() > 255) {
-                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                        SignupOtpCode.OTP_INVALID,
-                        "Name must not exceed 255 characters."));
-            }
-            if (request.getPassword() == null || request.getPassword().isBlank()) {
+            boolean hasName = request.getName() != null && !request.getName().trim().isBlank();
+            boolean hasPassword = request.getPassword() != null && !request.getPassword().isBlank();
+
+            if (hasName && !hasPassword) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
                         "Password is required."));
             }
-            String cleanPassword = PasswordValidator.sanitize(request.getPassword());
-            if (!PasswordValidator.isValid(cleanPassword)) {
+            if (!hasName && hasPassword) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        PasswordValidator.getValidationErrorMessage(cleanPassword)));
+                        "Full name is required."));
+            }
+
+            String pendingName = null;
+            String pendingPasswordHash = null;
+
+            if (hasName) {
+                if (request.getName().trim().length() > 255) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Name must not exceed 255 characters."));
+                }
+                String cleanPassword = PasswordValidator.sanitize(request.getPassword());
+                if (!PasswordValidator.isValid(cleanPassword)) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            PasswordValidator.getValidationErrorMessage(cleanPassword)));
+                }
+                pendingName = request.getName().trim();
+                pendingPasswordHash = PasswordUtil.hashPassword(cleanPassword);
             }
 
             if (findSignupConflict(email, normalizedPhone)) {
@@ -659,11 +728,11 @@ public class AuthController {
                 return abuseDenied;
             }
 
-            String pendingPasswordHash = PasswordUtil.hashPassword(cleanPassword);
-            String pendingName = request.getName().trim();
-
-            SignupOtpChallengeService.RequestOtpResult sendResult = signupOtpChallengeService.requestSignupOtp(
-                    email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash);
+            SignupOtpChallengeService.RequestOtpResult sendResult = (rawAttemptToken != null && !rawAttemptToken.isBlank())
+                    ? signupOtpChallengeService.requestSignupOtp(
+                            email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash, rawAttemptToken)
+                    : signupOtpChallengeService.requestSignupOtp(
+                            email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash);
             return mapSendResult(sendResult);
         }
 
@@ -852,6 +921,11 @@ public class AuthController {
 
     private ResponseEntity<SignupOtpResponse> mapSendResult(
             SignupOtpChallengeService.RequestOtpResult sendResult) {
+        if (sendResult == null) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_DELIVERY_UNKNOWN,
+                    "Unable to send verification code right now. Please try again."));
+        }
         return switch (sendResult) {
             case SignupOtpChallengeService.RequestOtpResult.Sent sent -> {
                 SignupOtpCode code = sent.newlyAccepted()
@@ -897,11 +971,16 @@ public class AuthController {
                             SignupOtpCode.OTP_DELIVERY_UNKNOWN,
                             "Unable to send a verification email right now. Please try again later.",
                             failed.challenge()));
-            case SignupOtpChallengeService.RequestOtpResult.DeliveryUnknown unknown ->
-                    ResponseEntity.accepted().body(fromChallenge(
-                            SignupOtpCode.OTP_DELIVERY_UNKNOWN,
-                            "We couldn't confirm whether the code was sent. Please check your inbox and spam folder. You can request another code when the timer ends.",
-                            unknown.challenge()));
+            case SignupOtpChallengeService.RequestOtpResult.DeliveryUnknown unknown -> {
+                SignupOtpResponse response = fromChallenge(
+                        SignupOtpCode.OTP_DELIVERY_UNKNOWN,
+                        "We couldn't confirm whether the code was sent. Please check your inbox and spam folder. You can request another code when the timer ends.",
+                        unknown.challenge());
+                if (unknown.attemptToken() != null) {
+                    response.setAttemptToken(unknown.attemptToken());
+                }
+                yield ResponseEntity.accepted().body(response);
+            }
             case SignupOtpChallengeService.RequestOtpResult.InFlight inFlight -> {
                 ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.CONFLICT);
                 if (inFlight.retryAfterSeconds() > 0) {

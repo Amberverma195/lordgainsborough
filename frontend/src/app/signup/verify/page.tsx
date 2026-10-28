@@ -50,6 +50,8 @@ export default function SignupVerifyPage() {
   const [nowTick, setNowTick] = useState(() => Date.now());
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const crossTabRef = useRef<ReturnType<typeof subscribeSignupOtpCrossTab> | null>(null);
+  const syncSeqRef = useRef(0);
+  const challengeRef = useRef<SignupOtpChallengeState | null>(null);
 
   const publishChallenge = useCallback((
     state: SignupOtpChallengeState,
@@ -65,8 +67,9 @@ export default function SignupVerifyPage() {
     email: string,
     broadcast = true
   ) => {
-    const previous = loadSignupOtpChallengeState();
+    const previous = loadSignupOtpChallengeState() || challengeRef.current;
     const next = applyBackendChallengeState(previous, body, email);
+    challengeRef.current = next;
     setChallenge(next);
     saveSignupOtpChallengeState(next);
     setCooldownSeconds(cooldownSecondsFromServerClocks(
@@ -82,14 +85,20 @@ export default function SignupVerifyPage() {
   }, [publishChallenge]);
 
   const syncChallengeStatus = useCallback(async (credentials: PendingSignupCredentials) => {
-    const cached = loadSignupOtpChallengeState();
+    const currentSeq = ++syncSeqRef.current;
+    const cached = loadSignupOtpChallengeState() || challengeRef.current;
     setSyncing(true);
     try {
       const { body } = await fetchSignupOtpStatus(
         credentials.email,
         cached?.challengeId
       );
-      const next = applyBackendChallengeState(cached, body, credentials.email);
+      if (currentSeq !== syncSeqRef.current) {
+        return;
+      }
+      const current = loadSignupOtpChallengeState() || challengeRef.current;
+      const next = applyBackendChallengeState(current, body, credentials.email);
+      challengeRef.current = next;
       setChallenge(next);
       saveSignupOtpChallengeState(next);
       setCooldownSeconds(cooldownSecondsFromServerClocks(
@@ -115,17 +124,23 @@ export default function SignupVerifyPage() {
         setInfoMessage('');
       }
     } catch {
-      if (cached) {
-        setChallenge(cached);
-        setCooldownSeconds(cooldownSecondsFromServerClocks(
-          cached.serverTime,
-          cached.nextResendAt,
-          Date.now(),
-          cached.receivedAtMs
-        ));
+      if (currentSeq === syncSeqRef.current) {
+        const current = loadSignupOtpChallengeState() || challengeRef.current;
+        if (current) {
+          challengeRef.current = current;
+          setChallenge(current);
+          setCooldownSeconds(cooldownSecondsFromServerClocks(
+            current.serverTime,
+            current.nextResendAt,
+            Date.now(),
+            current.receivedAtMs
+          ));
+        }
       }
     } finally {
-      setSyncing(false);
+      if (currentSeq === syncSeqRef.current) {
+        setSyncing(false);
+      }
     }
   }, [publishChallenge]);
 
@@ -139,13 +154,15 @@ export default function SignupVerifyPage() {
         return;
       }
       if (payload.type === 'cleared') {
+        challengeRef.current = null;
         setChallenge(null);
         clearAllSignupSession();
         router.replace('/signup');
         return;
       }
-      const next = applyCrossTabPayload(loadSignupOtpChallengeState(), payload);
+      const next = applyCrossTabPayload(loadSignupOtpChallengeState() || challengeRef.current, payload);
       if (!next) return;
+      challengeRef.current = next;
       setChallenge(next);
       saveSignupOtpChallengeState(next);
       setCooldownSeconds(cooldownSecondsFromServerClocks(
@@ -182,6 +199,7 @@ export default function SignupVerifyPage() {
       setPendingSignup(stored);
       const cached = loadSignupOtpChallengeState();
       if (cached) {
+        challengeRef.current = cached;
         setChallenge(cached);
         setCooldownSeconds(cooldownSecondsFromServerClocks(
           cached.serverTime,
@@ -258,16 +276,20 @@ export default function SignupVerifyPage() {
       return;
     }
 
+    // Invalidate any in-flight background status sync so it cannot overwrite this resend
+    syncSeqRef.current++;
+
     setResending(true);
     setError('');
     setSuccess('');
     setInfoMessage('');
 
     const idempotencyKey = crypto.randomUUID();
+    const currentChallenge = challenge || challengeRef.current || loadSignupOtpChallengeState();
     const payload = {
       email: pendingSignup.email,
       phone: pendingSignup.phone,
-      attemptToken: challenge?.attemptToken,
+      attemptToken: currentChallenge?.attemptToken,
     };
 
     try {
@@ -277,12 +299,14 @@ export default function SignupVerifyPage() {
           headers: {
             'Content-Type': 'application/json',
             'Idempotency-Key': key,
-            ...(challenge?.attemptToken ? { 'X-Signup-Attempt-Token': challenge.attemptToken } : {}),
+            ...(currentChallenge?.attemptToken ? { 'X-Signup-Attempt-Token': currentChallenge.attemptToken } : {}),
           },
           body: JSON.stringify(payload),
         }), idempotencyKey);
 
       const body = await readSignupOtpResponse(res);
+      // Invalidate any syncs triggered while fetch was in-flight
+      syncSeqRef.current++;
       applyChallengeFromBackend(body, pendingSignup.email);
 
       if (res.status === 202 || res.status === 200) {
@@ -393,7 +417,7 @@ export default function SignupVerifyPage() {
   const canCreateAccount = otp.every(Boolean);
 
   const resendDisabled =
-    resending || loading || syncing || cooldownSeconds > 0 || exhausted || challengeExpired;
+    resending || loading || cooldownSeconds > 0 || exhausted || challengeExpired;
 
   let resendLabel = 'Resend Code';
   if (resending) {

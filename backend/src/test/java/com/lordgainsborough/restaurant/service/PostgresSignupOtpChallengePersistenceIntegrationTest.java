@@ -613,6 +613,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test20_resendExactlyAtCooldownBoundaryAllowed() {
         String email = "resend-exact@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-res2", "op-res2", "k-1");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(SignupOtpChallengePersistence.RESEND_COOLDOWN); // exactly 30s
@@ -629,6 +630,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test21_resendAfterCooldownBoundaryAllowed() {
         String email = "resend-after@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-res3", "op-res3", "k-1");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(45));
@@ -644,6 +646,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         String email = "resend-rotate@example.com";
         String oldDigest = persistence.digestOtp("111111");
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, oldDigest, "ch-res4", "op-res4a", "k-4a");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(35));
@@ -685,6 +688,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test24_resendLimitEnforcedAtMaxResends() {
         String email = "resend-limit@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("100000"), "ch-res6", "op-0", "k-0");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         for (int i = 1; i <= 5; i++) {
@@ -692,6 +696,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
             Optional<SignupOtpChallenge> res = persistence.tryAtomicResend(ch.getEmailKey(), persistence.digestOtp("10000" + i), "op-" + i, "k-" + i, clock.instant());
             assertTrue(res.isPresent());
             assertEquals(i, res.get().getResendCount());
+            persistence.tryMarkSendOutcome(ch.getEmailKey(), "op-" + i, OtpSendStatus.SENT, clock.instant());
         }
 
         // 6th attempt must be rejected
@@ -753,6 +758,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test28_concurrentResend20ThreadsRace() throws Exception {
         String email = "resend-race20@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-race-res", "op-0", "k-0");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(35));
@@ -799,6 +805,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test29_resendVersusExpiredReplaceRace() {
         String email = "resend-vs-replace@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-rvr", "op-rvr", "k-rvr");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(40));
@@ -861,6 +868,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test33_markSendOutcomeRejectsStaleSendOperationId() {
         String email = "outcome-stale@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-out4", "op-old", "k-4");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(35));
@@ -1161,6 +1169,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         String oldOtp = "111111";
         String newOtp = "222222";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp(oldOtp), "ch-v4", "op-v4", "k-v4");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(35));
@@ -1322,6 +1331,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         String oldOtp = "111111";
         String oldDigest = persistence.digestOtp(oldOtp);
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, oldDigest, "ch-rot-race", "op-rr", "k-rr");
+        ch.setSendStatus(OtpSendStatus.SENT);
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(35));
@@ -1884,5 +1894,176 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
                 ch.getEmailKey(), secondDigest, now);
         assertTrue(verifyNew.isPresent(), "New OTP digest must verify successfully");
         assertEquals(OtpChallengeStatus.VERIFIED, verifyNew.get().getStatus());
+    }
+
+    // =========================================================================
+    // GROUP 8: Atomic Restart Security Controls (Defect 3)
+    // =========================================================================
+
+    @Test
+    @Order(70)
+    @DisplayName("70. Atomic restart blocked when cooldown is still active")
+    void test70_atomicRestartBlockedDuringActiveCooldown() {
+        String email = "restart-cooldown@example.com";
+        String rawOtp = "111111";
+        String attemptToken = "attempt-secret-1";
+        String tokenHash = persistence.hashAttemptToken(attemptToken);
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp(rawOtp), "ch-rst-1", "op-1", "k-1",
+                "Alice", "+1 (555)-111-2222", "5551112222", "pw-hash-1", tokenHash);
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setNextResendAt(clock.instant().plusSeconds(25)); // 25s remaining in cooldown
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("222222"), "ch-rst-2", "op-2", "k-2",
+                "Alice Updated", "+1 (555)-111-2222", "5551112222", "pw-hash-2", persistence.hashAttemptToken("attempt-secret-2"));
+
+        Optional<SignupOtpChallenge> restarted = store.tryAtomicRestart(
+                ch.getEmailKey(), tokenHash, fresh, now);
+
+        assertTrue(restarted.isEmpty(), "tryAtomicRestart must reject restart during active cooldown");
+
+        SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals("ch-rst-1", current.getChallengeId());
+        assertEquals("Alice", current.getPendingName());
+        assertEquals(tokenHash, current.getAttemptTokenHash());
+        assertEquals(0, current.getResendCount());
+    }
+
+    @Test
+    @Order(71)
+    @DisplayName("71. Atomic restart blocked when resend limit is exhausted")
+    void test71_atomicRestartBlockedWhenResendLimitExhausted() {
+        String email = "restart-exhausted@example.com";
+        String tokenHash = persistence.hashAttemptToken("attempt-secret-ex");
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("111111"), "ch-rst-ex", "op-1", "k-1",
+                "Bob", "+1 (555)-111-3333", "5551113333", "pw-hash", tokenHash);
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setResendCount(SignupOtpChallengePersistence.MAX_RESENDS); // 5 resends already used
+        ch.setNextResendAt(clock.instant().minusSeconds(1));
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("222222"), "ch-rst-ex-fresh", "op-2", "k-2",
+                "Bob New", "+1 (555)-111-3333", "5551113333", "pw-hash-new", persistence.hashAttemptToken("attempt-secret-new"));
+
+        Optional<SignupOtpChallenge> restarted = store.tryAtomicRestart(
+                ch.getEmailKey(), tokenHash, fresh, now);
+
+        assertTrue(restarted.isEmpty(), "tryAtomicRestart must reject restart when resend limit is exhausted");
+        SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(SignupOtpChallengePersistence.MAX_RESENDS, current.getResendCount());
+    }
+
+    @Test
+    @Order(72)
+    @DisplayName("72. Atomic restart blocked when failed verify attempts threshold is reached")
+    void test72_atomicRestartBlockedWhenFailedVerifyAttemptsExhausted() {
+        String email = "restart-locked@example.com";
+        String tokenHash = persistence.hashAttemptToken("attempt-secret-lock");
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("111111"), "ch-rst-lock", "op-1", "k-1",
+                "Charlie", "+1 (555)-111-4444", "5551114444", "pw-hash", tokenHash);
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setFailedVerifyAttempts(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS); // 5 failures
+        ch.setNextResendAt(clock.instant().minusSeconds(1));
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("222222"), "ch-rst-lock-fresh", "op-2", "k-2",
+                "Charlie New", "+1 (555)-111-4444", "5551114444", "pw-hash-new", persistence.hashAttemptToken("attempt-secret-new"));
+
+        Optional<SignupOtpChallenge> restarted = store.tryAtomicRestart(
+                ch.getEmailKey(), tokenHash, fresh, now);
+
+        assertTrue(restarted.isEmpty(), "tryAtomicRestart must reject restart when verification is locked");
+        SignupOtpChallenge current = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS, current.getFailedVerifyAttempts());
+    }
+
+    @Test
+    @Order(73)
+    @DisplayName("73. Atomic restart blocked when send lease is in-flight")
+    void test73_atomicRestartBlockedWhenSendLeaseInFlight() {
+        String email = "restart-lease@example.com";
+        String tokenHash = persistence.hashAttemptToken("attempt-secret-lease");
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("111111"), "ch-rst-lease", "op-1", "k-1",
+                "Diana", "+1 (555)-111-5555", "5551115555", "pw-hash", tokenHash);
+        ch.setSendStatus(OtpSendStatus.RESERVED);
+        ch.setSendLeaseUntil(clock.instant().plusSeconds(45)); // In-flight send lease active
+        ch.setNextResendAt(clock.instant().minusSeconds(5)); // cooldown passed
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("222222"), "ch-rst-lease-fresh", "op-2", "k-2",
+                "Diana New", "+1 (555)-111-5555", "5551115555", "pw-hash-new", persistence.hashAttemptToken("attempt-secret-new"));
+
+        Optional<SignupOtpChallenge> restarted = store.tryAtomicRestart(
+                ch.getEmailKey(), tokenHash, fresh, now);
+
+        assertTrue(restarted.isEmpty(), "tryAtomicRestart must reject restart while send lease is in flight");
+    }
+
+    @Test
+    @Order(74)
+    @DisplayName("74. Concurrent atomic restart race increments resendCount and allows exactly 1 winner")
+    void test74_concurrentRestartRaceIncrementsResendCountAndAllowsOnlyOneWinner() throws Exception {
+        String email = "restart-race@example.com";
+        String tokenHash = persistence.hashAttemptToken("attempt-secret-race");
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("111111"), "ch-rst-race", "op-1", "k-1",
+                "Evan", "+1 (555)-111-6666", "5551116666", "pw-hash", tokenHash);
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setResendCount(1);
+        ch.setFailedVerifyAttempts(2);
+        ch.setNextResendAt(clock.instant().minusSeconds(5)); // cooldown expired
+        assertTrue(persistence.tryInsert(ch));
+
+        clock.advance(Duration.ofSeconds(1));
+        Instant now = clock.instant();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CyclicBarrier barrier = new CyclicBarrier(2);
+        AtomicInteger winners = new AtomicInteger(0);
+
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            final int idx = i;
+            tasks.add(() -> {
+                barrier.await();
+                SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                        email, persistence.digestOtp("20000" + idx), "ch-rst-winner-" + idx, "op-rst-" + idx, "k-rst-" + idx,
+                        "Evan " + idx, "+1 (555)-111-6666", "5551116666", "pw-hash-" + idx, persistence.hashAttemptToken("attempt-new-" + idx));
+                Optional<SignupOtpChallenge> res = store.tryAtomicRestart(
+                        ch.getEmailKey(), tokenHash, fresh, now);
+                if (res.isPresent()) {
+                    winners.incrementAndGet();
+                }
+                return null;
+            });
+        }
+
+        List<Future<Void>> futures = executor.invokeAll(tasks);
+        for (Future<Void> f : futures) {
+            f.get(10, TimeUnit.SECONDS);
+        }
+        executor.shutdown();
+
+        assertEquals(1, winners.get(), "Exactly one concurrent restart must succeed");
+        SignupOtpChallenge finalState = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(2, finalState.getResendCount(), "Resend count must be incremented by 1 (1 -> 2), never reset to 0");
+        assertEquals(0, finalState.getFailedVerifyAttempts(), "Failed verify attempts must be reset to 0 on successful restart");
     }
 }

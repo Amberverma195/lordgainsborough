@@ -302,4 +302,56 @@ describe('signupOtp challenge state', () => {
     expect(loaded?.attemptToken).toBe('secret-token-xyz');
     expect(loaded?.email).toBe('applicant@example.com');
   });
+
+  it('stale backend response with older serverTime is rejected and preserves newer state', () => {
+    const fresherState: SignupOtpChallengeState = {
+      email: 'applicant@example.com',
+      challengeId: 'c-fresh-1',
+      attemptToken: 'fresh-attempt-token',
+      serverTime: '2026-07-13T12:05:00.000Z',
+      nextResendAt: '2026-07-13T12:05:30.000Z',
+      resendsRemaining: 3,
+      code: 'OTP_SENT',
+    };
+
+    // Stale status check arriving late from before the resend (e.g. from 12:04:00)
+    const staleResponse = {
+      challengeId: 'c-fresh-1',
+      serverTime: '2026-07-13T12:04:00.000Z',
+      nextResendAt: '2026-07-13T12:04:30.000Z',
+      resendsRemaining: 4,
+      code: 'OTP_ALREADY_ACTIVE' as const,
+    };
+
+    const result = applyBackendChallengeState(fresherState, staleResponse);
+
+    // Stale response must be ignored entirely
+    expect(result).toBe(fresherState);
+    expect(result.serverTime).toBe('2026-07-13T12:05:00.000Z');
+    expect(result.resendsRemaining).toBe(3);
+    expect(result.code).toBe('OTP_SENT');
+    expect(result.attemptToken).toBe('fresh-attempt-token');
+  });
+
+  it('an update for a different challenge does not inherit a stale attemptToken', () => {
+    const originalState: SignupOtpChallengeState = {
+      email: 'applicant@example.com',
+      challengeId: 'c-old-challenge',
+      attemptToken: 'old-attempt-token-secret',
+      serverTime: '2026-07-13T12:00:00.000Z',
+    };
+
+    // An update for a different challenge without an attemptToken
+    const differentChallengeResponse = {
+      challengeId: 'c-new-challenge',
+      serverTime: '2026-07-13T12:01:00.000Z',
+      code: 'OTP_SENT' as const,
+    };
+
+    const result = applyBackendChallengeState(originalState, differentChallengeResponse);
+
+    // Must NOT inherit old attemptToken
+    expect(result.challengeId).toBe('c-new-challenge');
+    expect(result.attemptToken).toBeUndefined();
+  });
 });
