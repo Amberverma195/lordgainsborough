@@ -684,35 +684,31 @@ public class AuthController {
             boolean hasName = request.getName() != null && !request.getName().trim().isBlank();
             boolean hasPassword = request.getPassword() != null && !request.getPassword().isBlank();
 
-            if (hasName && !hasPassword) {
-                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                        SignupOtpCode.OTP_INVALID,
-                        "Password is required."));
-            }
-            if (!hasName && hasPassword) {
+            if (!hasName) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
                         "Full name is required."));
             }
-
-            String pendingName = null;
-            String pendingPasswordHash = null;
-
-            if (hasName) {
-                if (request.getName().trim().length() > 255) {
-                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                            SignupOtpCode.OTP_INVALID,
-                            "Name must not exceed 255 characters."));
-                }
-                String cleanPassword = PasswordValidator.sanitize(request.getPassword());
-                if (!PasswordValidator.isValid(cleanPassword)) {
-                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                            SignupOtpCode.OTP_INVALID,
-                            PasswordValidator.getValidationErrorMessage(cleanPassword)));
-                }
-                pendingName = request.getName().trim();
-                pendingPasswordHash = PasswordUtil.hashPassword(cleanPassword);
+            if (request.getName().trim().length() > 255) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Name must not exceed 255 characters."));
             }
+
+            if (!hasPassword) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Password is required."));
+            }
+            String cleanPassword = PasswordValidator.sanitize(request.getPassword());
+            if (!PasswordValidator.isValid(cleanPassword)) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        PasswordValidator.getValidationErrorMessage(cleanPassword)));
+            }
+
+            String pendingName = request.getName().trim();
+            String pendingPasswordHash = PasswordUtil.hashPassword(cleanPassword);
 
             if (findSignupConflict(email, normalizedPhone)) {
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(

@@ -366,6 +366,18 @@ class AuthControllerSignupOtpResponseTest {
     }
 
     @Test
+    void initialSendRequiresBothNameAndPasswordWhenBothAreMissing() {
+        SendOtpRequest request = signupOtpRequest("valid@example.com", "5551234567");
+        request.setName(null);
+        request.setPassword(null);
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("Full name is required.", response.getBody().getMessage());
+    }
+
+    @Test
     void passwordComplexityIsEnforced() {
         SendOtpRequest request = signupOtpRequest("valid@example.com", "5551234567");
         request.setPassword("weakpass");
