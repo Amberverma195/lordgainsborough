@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class AuthSecurityObservability {
 
-    public enum Flow { LOGIN, PASSWORD_RESET }
+    public enum Flow { LOGIN, PASSWORD_RESET, SIGNUP }
     public enum Outcome { SUCCESS, INVALID, DENIED, FAILURE }
     public enum Reason {
         LOGIN_SUCCESS,
@@ -30,7 +30,10 @@ public class AuthSecurityObservability {
         INVALID_RESET_CODE,
         RESET_CHALLENGE_LOCKED,
         RESET_CHALLENGE_EXPIRED,
-        PASSWORD_RESET_COMPLETED
+        PASSWORD_RESET_COMPLETED,
+        SIGNUP_ATTEMPT_MISMATCH,
+        SIGNUP_ATTEMPT_RESTARTED,
+        SIGNUP_SUCCESS
     }
 
     private static final Logger logger = LoggerFactory.getLogger(AuthSecurityObservability.class);

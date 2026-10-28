@@ -36,7 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
+import java.util.Optional;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -403,6 +406,149 @@ class AuthControllerSignupOtpResponseTest {
 
         assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
         assertEquals("42", response.getHeaders().getFirst("Retry-After"));
+    }
+
+    @Test
+    void sendSignupOtpReturnsAttemptTokenOnSuccess() {
+        when(signupOtpChallengeService.looksLikeInitialSend("tokenuser@example.com")).thenReturn(true);
+        when(signupOtpChallengeService.requestSignupOtp(
+                eq("tokenuser@example.com"), any(), any(), any(), any(), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView(), "secret-attempt-token-123"));
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(
+                null, null, signupOtpRequest("tokenuser@example.com", "5551234567"), httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals("secret-attempt-token-123", response.getBody().getAttemptToken());
+    }
+
+    @Test
+    void getSignupOtpStatusNeverExposesAttemptToken() {
+        when(signupOtpChallengeService.getChallengeStatus(eq("public@example.com"), org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(new SignupOtpChallengeService.ChallengeStatusResult.Active(sampleView()));
+
+        ResponseEntity<SignupOtpResponse> response = controller.getSignupOtpStatus("public@example.com", null);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNull(response.getBody().getAttemptToken());
+    }
+
+    @Test
+    void separateBrowserWithoutAttemptTokenReceivesConflict() {
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setChallengeId("challenge-active");
+        active.setAttemptTokenHash("hash-of-real-token");
+        active.setPendingName("Original Applicant");
+        active.setPendingPhone("5551234567");
+        active.setPendingPhoneNormalized("5551234567");
+
+        when(signupOtpChallengeService.looksLikeInitialSend("existing@example.com")).thenReturn(false);
+        when(signupOtpChallengeService.findActiveChallenge("existing@example.com")).thenReturn(Optional.of(active));
+        when(signupOtpChallengeService.verifyAttemptToken(eq(active), any())).thenReturn(false);
+        when(signupOtpChallengeService.getChallengeView("existing@example.com")).thenReturn(sampleView());
+
+        SendOtpRequest request = signupOtpRequest("existing@example.com", "5551234567");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_ATTEMPT_CONFLICT, response.getBody().getCode());
+        verify(signupOtpChallengeService, never()).resendOtp(anyString(), anyString());
+        verify(authSecurityObservability).record(
+                eq(AuthSecurityObservability.Flow.SIGNUP),
+                eq(AuthSecurityObservability.Outcome.INVALID),
+                eq(AuthSecurityObservability.Reason.SIGNUP_ATTEMPT_MISMATCH));
+    }
+
+    @Test
+    void originalApplicantWithAttemptTokenCanResend() {
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setChallengeId("challenge-active");
+        active.setAttemptTokenHash("hash-of-real-token");
+        active.setPendingName("Original Applicant");
+        active.setPendingPhone("5551234567");
+        active.setPendingPhoneNormalized("5551234567");
+
+        when(signupOtpChallengeService.looksLikeInitialSend("existing@example.com")).thenReturn(false);
+        when(signupOtpChallengeService.findActiveChallenge("existing@example.com")).thenReturn(Optional.of(active));
+        when(signupOtpChallengeService.verifyAttemptToken(eq(active), eq("valid-token"))).thenReturn(true);
+        when(signupOtpChallengeService.requestSignupOtp(eq("existing@example.com"), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(false, true, sampleView()));
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("existing@example.com");
+        request.setPhone("5551234567");
+        request.setAttemptToken("valid-token");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals(SignupOtpCode.OTP_SENT, response.getBody().getCode());
+    }
+
+    @Test
+    void originalApplicantChangingDetailsTriggersSafeRestart() {
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setChallengeId("challenge-active");
+        active.setAttemptTokenHash("hash-of-real-token");
+        active.setPendingName("Original Applicant");
+        active.setPendingPhone("5551234567");
+        active.setPendingPhoneNormalized("5551234567");
+        active.setPendingPasswordHash(com.lordgainsborough.restaurant.security.PasswordUtil.hashPassword("Secret@123"));
+
+        when(signupOtpChallengeService.looksLikeInitialSend("existing@example.com")).thenReturn(false);
+        when(signupOtpChallengeService.findActiveChallenge("existing@example.com")).thenReturn(Optional.of(active));
+        when(signupOtpChallengeService.verifyAttemptToken(eq(active), eq("valid-token"))).thenReturn(true);
+        when(signupOtpChallengeService.restartSignupOtp(
+                eq("existing@example.com"), any(), eq("New Applicant Name"), any(), any(), any(), eq("valid-token")))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView(), "new-token-456"));
+
+        SendOtpRequest request = signupOtpRequest("existing@example.com", "5551234567");
+        request.setName("New Applicant Name");
+        request.setAttemptToken("valid-token");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        assertEquals("new-token-456", response.getBody().getAttemptToken());
+        verify(signupOtpChallengeService).restartSignupOtp(
+                eq("existing@example.com"), any(), eq("New Applicant Name"), any(), any(), any(), eq("valid-token"));
+    }
+
+    @Test
+    void signupRegistrationWithAttemptMismatchReturnsConflict() {
+        com.lordgainsborough.restaurant.dto.SignupRequest signupReq = new com.lordgainsborough.restaurant.dto.SignupRequest();
+        signupReq.setEmail("amber@example.com");
+        signupReq.setOtp("123456");
+        signupReq.setChallengeId("challenge-1");
+        signupReq.setAttemptToken("wrong-token");
+
+        org.mockito.Mockito.doReturn(new UserAuthStore.Registration(
+                        null,
+                        new SignupOtpChallengeService.VerifyOtpResult.AttemptMismatch(),
+                        false))
+                .when(userRepository).registerPending(
+                        eq("amber@example.com"),
+                        eq("123456"),
+                        eq("challenge-1"),
+                        eq("wrong-token"),
+                        eq(signupOtpChallengeService));
+
+        ResponseEntity<?> response = controller.signup("wrong-token", signupReq, httpRequest);
+
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        SignupOtpResponse body = (SignupOtpResponse) response.getBody();
+        assertEquals(SignupOtpCode.OTP_ATTEMPT_CONFLICT, body.getCode());
+    }
+
+    @Test
+    void passwordSanitizationPreservesPasswordExactnessForLoginVerification() {
+        String rawWithZeroWidth = "Pass\u200Bword123!";
+        String sanitized = com.lordgainsborough.restaurant.util.PasswordValidator.sanitize(rawWithZeroWidth);
+        assertEquals("Password123!", sanitized);
+
+        String bcryptHash = com.lordgainsborough.restaurant.security.PasswordUtil.hashPassword(sanitized);
+        assertTrue(com.lordgainsborough.restaurant.security.PasswordUtil.checkPassword("Password123!", bcryptHash));
     }
 
     private static SignupOtpChallengeView sampleView() {

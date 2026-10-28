@@ -87,6 +87,36 @@ public class SignupOtpChallengePersistence {
         return PasswordUtil.checkPassword(rawOtp.trim(), otpDigest);
     }
 
+    /**
+     * Computes a SHA-256 hex verifier hash of the raw attempt token.
+     * Only the hash is persisted server-side.
+     */
+    public String hashAttemptToken(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) {
+            return null;
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(rawToken.trim().getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
+    }
+
+    /**
+     * Constant-time comparison between raw attempt token and stored hash.
+     */
+    public boolean verifyAttemptToken(String rawToken, String storedHash) {
+        if (rawToken == null || storedHash == null || rawToken.isBlank() || storedHash.isBlank()) {
+            return false;
+        }
+        String computed = hashAttemptToken(rawToken);
+        return MessageDigest.isEqual(
+                computed.getBytes(StandardCharsets.UTF_8),
+                storedHash.getBytes(StandardCharsets.UTF_8));
+    }
+
     public boolean isChallengeExpired(SignupOtpChallenge challenge, Instant now) {
         return challenge == null
                 || challenge.getChallengeExpiresAt() == null
@@ -186,12 +216,29 @@ public class SignupOtpChallengePersistence {
             String pendingPhone,
             String pendingPhoneNormalized,
             String pendingPasswordHash) {
+        return buildNewActiveChallenge(
+                email, otpDigest, challengeId, sendOperationId, clientIdempotencyKey,
+                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, null);
+    }
+
+    public SignupOtpChallenge buildNewActiveChallenge(
+            String email,
+            String otpDigest,
+            String challengeId,
+            String sendOperationId,
+            String clientIdempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String attemptTokenHash) {
         SignupOtpChallenge challenge = buildNewActiveChallenge(
                 email, otpDigest, challengeId, sendOperationId, clientIdempotencyKey);
         challenge.setPendingName(pendingName);
         challenge.setPendingPhone(pendingPhone);
         challenge.setPendingPhoneNormalized(pendingPhoneNormalized);
         challenge.setPendingPasswordHash(pendingPasswordHash);
+        challenge.setAttemptTokenHash(attemptTokenHash);
         return challenge;
     }
 

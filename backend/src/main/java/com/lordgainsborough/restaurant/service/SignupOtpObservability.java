@@ -45,7 +45,9 @@ public class SignupOtpObservability {
         CHALLENGE_EXPIRED("challenge_expired", true),
         PROVIDER_DEFINITE_FAILURE("provider_definite_failure", true),
         PROVIDER_TIMEOUT("provider_timeout", true),
-        IDEMPOTENCY_REPLAY("idempotency_replay", false);
+        IDEMPOTENCY_REPLAY("idempotency_replay", false),
+        ATTEMPT_CONFLICT("attempt_conflict", true),
+        ATTEMPT_RESTARTED("attempt_restarted", false);
 
         private final String metricTag;
         private final boolean warning;

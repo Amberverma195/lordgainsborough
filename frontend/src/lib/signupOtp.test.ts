@@ -256,4 +256,50 @@ describe('signupOtp challenge state', () => {
     expect(cooldownSecondsFromServerClocks(undefined, undefined)).toBe(0);
     expect(cooldownSecondsFromServerClocks('2026-07-13T12:00:00.000Z', undefined)).toBe(0);
   });
+
+  it('applyBackendChallengeState stores and preserves attemptToken', () => {
+    const initial = applyBackendChallengeState(null, {
+      code: 'OTP_SENT',
+      challengeId: 'c-attempt-1',
+      attemptToken: 'attempt-token-secret-123',
+      serverTime: '2026-07-13T12:00:00.000Z',
+    }, 'applicant@example.com');
+
+    expect(initial.attemptToken).toBe('attempt-token-secret-123');
+
+    // Subsequent status update without attemptToken preserves the established attemptToken
+    const updated = applyBackendChallengeState(initial, {
+      code: 'OTP_ALREADY_ACTIVE',
+      challengeId: 'c-attempt-1',
+      serverTime: '2026-07-13T12:00:10.000Z',
+    });
+
+    expect(updated.attemptToken).toBe('attempt-token-secret-123');
+
+    // Safe restart with new attemptToken updates the attemptToken
+    const restarted = applyBackendChallengeState(updated, {
+      code: 'OTP_SENT',
+      challengeId: 'c-attempt-2',
+      attemptToken: 'attempt-token-secret-456',
+      serverTime: '2026-07-13T12:01:00.000Z',
+    });
+
+    expect(restarted.attemptToken).toBe('attempt-token-secret-456');
+    expect(restarted.challengeId).toBe('c-attempt-2');
+  });
+
+  it('saveSignupOtpChallengeState persists attemptToken and loadSignupOtpChallengeState recovers it', () => {
+    const state: SignupOtpChallengeState = {
+      email: 'applicant@example.com',
+      challengeId: 'c-attempt-1',
+      attemptToken: 'secret-token-xyz',
+      serverTime: '2026-07-13T12:00:00.000Z',
+    };
+
+    saveSignupOtpChallengeState(state);
+    const loaded = loadSignupOtpChallengeState();
+    expect(loaded).not.toBeNull();
+    expect(loaded?.attemptToken).toBe('secret-token-xyz');
+    expect(loaded?.email).toBe('applicant@example.com');
+  });
 });

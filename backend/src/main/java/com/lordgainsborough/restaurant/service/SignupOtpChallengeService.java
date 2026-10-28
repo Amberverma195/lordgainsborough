@@ -39,13 +39,18 @@ public class SignupOtpChallengeService {
     }
 
     public sealed interface RequestOtpResult {
-        record Sent(boolean initial, boolean newlyAccepted, SignupOtpChallengeView challenge)
-                implements RequestOtpResult {}
+        record Sent(boolean initial, boolean newlyAccepted, SignupOtpChallengeView challenge, String attemptToken)
+                implements RequestOtpResult {
+            public Sent(boolean initial, boolean newlyAccepted, SignupOtpChallengeView challenge) {
+                this(initial, newlyAccepted, challenge, null);
+            }
+        }
         record Denied(ResendDenialReason reason, long retryAfterSeconds, String message,
                       SignupOtpChallengeView challenge) implements RequestOtpResult {}
         record Failed(SignupOtpChallengeView challenge) implements RequestOtpResult {}
         record DeliveryUnknown(SignupOtpChallengeView challenge) implements RequestOtpResult {}
         record InFlight(long retryAfterSeconds, SignupOtpChallengeView challenge) implements RequestOtpResult {}
+        record AttemptConflict(String message, SignupOtpChallengeView challenge) implements RequestOtpResult {}
     }
 
     public sealed interface VerifyOtpResult {
@@ -55,6 +60,7 @@ public class SignupOtpChallengeService {
         record ChallengeExpired(SignupOtpChallengeView challenge) implements VerifyOtpResult {}
         record Locked(SignupOtpChallengeView challenge) implements VerifyOtpResult {}
         record Missing() implements VerifyOtpResult {}
+        record AttemptMismatch() implements VerifyOtpResult {}
     }
 
     /**
@@ -81,8 +87,9 @@ public class SignupOtpChallengeService {
         }
 
         if (persistence.findActiveUnexpiredByEmail(normalizedEmail).isEmpty()) {
-            return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash)) {
-                case CREATED -> sentResult(normalizedEmail, true, true);
+            String attemptToken = generateAttemptToken();
+            return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, attemptToken)) {
+                case CREATED -> new RequestOtpResult.Sent(true, true, challengeViewForEmail(normalizedEmail), attemptToken);
                 case ALREADY_EXISTS -> resendOtp(normalizedEmail, key);
                 case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
                 case DELIVERY_UNKNOWN ->
@@ -105,6 +112,12 @@ public class SignupOtpChallengeService {
         return requestSignupOtp(email, UUID.randomUUID().toString());
     }
 
+    public String generateAttemptToken() {
+        byte[] bytes = new byte[32];
+        secureRandom.nextBytes(bytes);
+        return java.util.HexFormat.of().formatHex(bytes);
+    }
+
     public InitialSendResult sendInitialOtp(
             String email,
             String idempotencyKey,
@@ -112,6 +125,17 @@ public class SignupOtpChallengeService {
             String pendingPhone,
             String pendingPhoneNormalized,
             String pendingPasswordHash) {
+        return sendInitialOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, generateAttemptToken());
+    }
+
+    public InitialSendResult sendInitialOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String attemptToken) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
@@ -126,6 +150,7 @@ public class SignupOtpChallengeService {
                 case RequestOtpResult.DeliveryUnknown d -> InitialSendResult.DELIVERY_UNKNOWN;
                 case RequestOtpResult.InFlight i -> InitialSendResult.IN_FLIGHT;
                 case RequestOtpResult.Denied denied -> InitialSendResult.ALREADY_EXISTS;
+                case RequestOtpResult.AttemptConflict ac -> InitialSendResult.ALREADY_EXISTS;
             };
         }
 
@@ -137,9 +162,11 @@ public class SignupOtpChallengeService {
         String otpDigest = persistence.digestOtp(rawOtp);
         String challengeId = UUID.randomUUID().toString();
         String sendOperationId = UUID.randomUUID().toString();
+        String attemptTokenHash = persistence.hashAttemptToken(attemptToken);
         SignupOtpChallenge challenge = persistence.buildNewActiveChallenge(
                 normalizedEmail, otpDigest, challengeId, sendOperationId, key,
-                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
+                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash,
+                attemptTokenHash);
 
         if (!persistence.tryInsertOrReplaceExpired(challenge)) {
             // Another request may have just created the challenge with this same key.
@@ -151,6 +178,7 @@ public class SignupOtpChallengeService {
                     case RequestOtpResult.DeliveryUnknown d -> InitialSendResult.DELIVERY_UNKNOWN;
                     case RequestOtpResult.InFlight i -> InitialSendResult.IN_FLIGHT;
                     case RequestOtpResult.Denied denied -> InitialSendResult.ALREADY_EXISTS;
+                    case RequestOtpResult.AttemptConflict ac -> InitialSendResult.ALREADY_EXISTS;
                 };
             }
             return InitialSendResult.ALREADY_EXISTS;
@@ -162,6 +190,76 @@ public class SignupOtpChallengeService {
                 challenge.getEmailKey(),
                 sendOperationId,
                 true);
+    }
+
+    public RequestOtpResult restartSignupOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String existingAttemptToken) {
+        String normalizedEmail = persistence.normalizeEmail(email);
+        String emailKey = persistence.emailKeyFromNormalized(normalizedEmail);
+        String key = normalizeIdempotencyKey(idempotencyKey);
+        Instant now = persistence.now();
+
+        Optional<SignupOtpChallenge> activeOpt = persistence.findActiveUnexpiredByEmail(normalizedEmail);
+        if (activeOpt.isEmpty()) {
+            return requestSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
+        }
+
+        SignupOtpChallenge active = activeOpt.get();
+        if (active.getAttemptTokenHash() != null) {
+            if (!persistence.verifyAttemptToken(existingAttemptToken, active.getAttemptTokenHash())) {
+                return new RequestOtpResult.AttemptConflict(
+                        "Signup attempt verification mismatch.", challengeViewForEmail(normalizedEmail));
+            }
+        }
+
+        String rawOtp = generateSixDigitOtp();
+        String otpDigest = persistence.digestOtp(rawOtp);
+        String challengeId = UUID.randomUUID().toString();
+        String sendOperationId = UUID.randomUUID().toString();
+        String newAttemptToken = generateAttemptToken();
+        String newAttemptTokenHash = persistence.hashAttemptToken(newAttemptToken);
+
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                normalizedEmail, otpDigest, challengeId, sendOperationId, key,
+                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash,
+                newAttemptTokenHash);
+
+        Optional<SignupOtpChallenge> restarted = persistence.getStore().tryAtomicRestart(
+                emailKey, active.getAttemptTokenHash(), fresh, now);
+
+        if (restarted.isEmpty()) {
+            return toRequestResult(InitialSendResult.ALREADY_EXISTS, normalizedEmail);
+        }
+
+        observability.record(
+                SignupOtpObservability.Event.ATTEMPT_RESTARTED,
+                SignupOtpObservability.Context.fromChallenge(fresh, "RESTARTED", null));
+
+        InitialSendResult sendResult = finalizeProviderCall(
+                normalizedEmail,
+                rawOtp,
+                emailKey,
+                sendOperationId,
+                true);
+
+        return switch (sendResult) {
+            case CREATED -> new RequestOtpResult.Sent(true, true, challengeViewForEmail(normalizedEmail), newAttemptToken);
+            case ALREADY_EXISTS -> toDenied(ResendDenialReason.COOLDOWN_ACTIVE, emailKey, persistence.now());
+            case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
+            case DELIVERY_UNKNOWN -> new RequestOtpResult.DeliveryUnknown(challengeViewForEmail(normalizedEmail));
+            case IN_FLIGHT -> new RequestOtpResult.InFlight(
+                    SignupOtpChallengePersistence.SEND_LEASE.getSeconds(), challengeViewForEmail(normalizedEmail));
+        };
+    }
+
+    public SignupOtpChallengeView getChallengeView(String email) {
+        return challengeViewForEmail(email);
     }
 
     public InitialSendResult sendInitialOtp(String email, String idempotencyKey) {
@@ -370,6 +468,17 @@ public class SignupOtpChallengeService {
      */
     public boolean looksLikeInitialSend(String email) {
         return persistence.findActiveUnexpiredByEmail(email).isEmpty();
+    }
+
+    public Optional<SignupOtpChallenge> findActiveChallenge(String email) {
+        return persistence.findActiveUnexpiredByEmail(email);
+    }
+
+    public boolean verifyAttemptToken(SignupOtpChallenge challenge, String attemptToken) {
+        if (challenge == null || challenge.getAttemptTokenHash() == null) {
+            return false;
+        }
+        return persistence.verifyAttemptToken(attemptToken, challenge.getAttemptTokenHash());
     }
 
     /**

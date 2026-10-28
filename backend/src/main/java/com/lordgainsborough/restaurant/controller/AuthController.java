@@ -14,6 +14,7 @@ import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
 import com.lordgainsborough.restaurant.dto.SignupRequest;
 import com.lordgainsborough.restaurant.dto.UpdateProfileRequest;
+import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
@@ -100,8 +101,25 @@ public class AuthController {
 
     public boolean hasPostgresUserAuthentication() { return userAuthStore instanceof PostgresUserAuthStore; }
 
+    private String resolveAttemptToken(String bodyToken, String headerToken) {
+        if (headerToken != null && !headerToken.isBlank()) {
+            return headerToken.trim();
+        }
+        if (bodyToken != null && !bodyToken.isBlank()) {
+            return bodyToken.trim();
+        }
+        return null;
+    }
+
+    public ResponseEntity<?> signup(
+            SignupRequest request,
+            HttpServletRequest httpRequest) {
+        return signup(null, request, httpRequest);
+    }
+
     @PostMapping("/signup")
     public ResponseEntity<?> signup(
+            @RequestHeader(value = "X-Signup-Attempt-Token", required = false) String attemptTokenHeader,
             @RequestBody SignupRequest request,
             HttpServletRequest httpRequest) {
         if (request.getEmail() == null || request.getEmail().isBlank()) {
@@ -123,6 +141,7 @@ public class AuthController {
         }
 
         String email = request.getEmail().trim().toLowerCase();
+        String rawAttemptToken = resolveAttemptToken(request.getAttemptToken(), attemptTokenHeader);
 
         String clientIp = resolveClientIp(httpRequest);
         ResponseEntity<SignupOtpResponse> verifyLimit = mapAbuseDecision(
@@ -134,6 +153,7 @@ public class AuthController {
 
         UserAuthStore.Registration registration;
         if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            String cleanPassword = PasswordValidator.sanitize(request.getPassword());
             if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
@@ -144,10 +164,10 @@ public class AuthController {
                         SignupOtpCode.OTP_INVALID,
                         "Name must not exceed 255 characters."));
             }
-            if (!PasswordValidator.isValid(request.getPassword())) {
+            if (!PasswordValidator.isValid(cleanPassword)) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        PasswordValidator.getValidationErrorMessage(request.getPassword())));
+                        PasswordValidator.getValidationErrorMessage(cleanPassword)));
             }
             if (request.getPhone() == null || request.getPhone().isBlank() || request.getPhone().length() > 50) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -170,9 +190,9 @@ public class AuthController {
             user.setEmail(email);
             applyPhoneToUser(user, normalizedPhone);
             user.setMemberSince(user.getCreatedAt().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
-            registration = userAuthStore.register(user, request.getPassword(), request.getOtp().trim(), signupOtpChallengeService);
+            registration = userAuthStore.register(user, cleanPassword, request.getOtp().trim(), signupOtpChallengeService);
         } else {
-            registration = userAuthStore.registerPending(email, request.getOtp().trim(), request.getChallengeId(), signupOtpChallengeService);
+            registration = userAuthStore.registerPending(email, request.getOtp().trim(), request.getChallengeId(), rawAttemptToken, signupOtpChallengeService);
         }
 
         ResponseEntity<SignupOtpResponse> verifyFailure = mapVerifyFailure(registration.verification());
@@ -232,21 +252,22 @@ public class AuthController {
                     AuthSecurityObservability.Reason.IDENTIFIER_IP_COOLDOWN);
         }
 
+        String cleanPassword = PasswordValidator.sanitize(request.getPassword());
         if (userOpt.isEmpty()) {
             return invalidLoginCredentials(
                     normalizedIdentifier,
                     clientIp,
-                    request.getPassword(),
+                    cleanPassword,
                     Optional.empty(),
                     now);
         }
 
         User user = userOpt.get();
-        if (!PasswordUtil.checkPassword(request.getPassword(), user.getPassword())) {
+        if (!PasswordUtil.checkPassword(cleanPassword, user.getPassword())) {
             return invalidLoginCredentials(
                     normalizedIdentifier,
                     clientIp,
-                    request.getPassword(),
+                    cleanPassword,
                     userOpt,
                     now);
         }
@@ -262,7 +283,7 @@ public class AuthController {
 
         Optional<User> current = userAuthStore.confirmLogin(user);
         if (current.isEmpty()) {
-            return invalidLoginCredentials(normalizedIdentifier, clientIp, request.getPassword(), userOpt, now);
+            return invalidLoginCredentials(normalizedIdentifier, clientIp, cleanPassword, userOpt, now);
         }
         user = current.get();
         // PostgreSQL confirmation may have waited behind a password reset or profile update.
@@ -550,10 +571,19 @@ public class AuthController {
         return mapChallengeStatus(status);
     }
 
+    public ResponseEntity<SignupOtpResponse> sendSignupOtp(
+            String idempotencyKey,
+            String captchaToken,
+            SendOtpRequest request,
+            HttpServletRequest httpRequest) {
+        return sendSignupOtp(idempotencyKey, captchaToken, null, request, httpRequest);
+    }
+
     @PostMapping("/signup/send-otp")
     public ResponseEntity<SignupOtpResponse> sendSignupOtp(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-Captcha-Token", required = false) String captchaToken,
+            @RequestHeader(value = "X-Signup-Attempt-Token", required = false) String attemptTokenHeader,
             @RequestBody SendOtpRequest request,
             HttpServletRequest httpRequest) {
         if (request.getEmail() == null || request.getEmail().isBlank()) {
@@ -569,7 +599,7 @@ public class AuthController {
         }
 
         String email = request.getEmail().trim().toLowerCase();
-        boolean isInitialSend = signupOtpChallengeService.looksLikeInitialSend(email);
+        String rawAttemptToken = resolveAttemptToken(request.getAttemptToken(), attemptTokenHeader);
 
         if (request.getPhone() == null || request.getPhone().isBlank()) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -590,60 +620,153 @@ public class AuthController {
                     "Please enter a valid 10-digit phone number."));
         }
 
+        boolean isInitialSend = signupOtpChallengeService.looksLikeInitialSend(email);
         if (isInitialSend) {
+            // Initial send
             if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
                         "Full name is required."));
+            }
+            if (request.getName().trim().length() > 255) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Name must not exceed 255 characters."));
             }
             if (request.getPassword() == null || request.getPassword().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
                         "Password is required."));
             }
-        }
-
-        if (request.getName() != null && request.getName().trim().length() > 255) {
-            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
-                    SignupOtpCode.OTP_INVALID,
-                    "Name must not exceed 255 characters."));
-        }
-
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            if (!PasswordValidator.isValid(request.getPassword())) {
+            String cleanPassword = PasswordValidator.sanitize(request.getPassword());
+            if (!PasswordValidator.isValid(cleanPassword)) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                         SignupOtpCode.OTP_INVALID,
-                        PasswordValidator.getValidationErrorMessage(request.getPassword())));
+                        PasswordValidator.getValidationErrorMessage(cleanPassword)));
+            }
+
+            if (findSignupConflict(email, normalizedPhone)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "Unable to complete signup with the provided details."));
+            }
+
+            String clientIp = resolveClientIp(httpRequest);
+            ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(
+                    signupAbuseLimiter.checkAndConsumeSend(clientIp, true, captchaToken),
+                    signupAbuseLimiter.hashClientIp(clientIp));
+            if (abuseDenied != null) {
+                return abuseDenied;
+            }
+
+            String pendingPasswordHash = PasswordUtil.hashPassword(cleanPassword);
+            String pendingName = request.getName().trim();
+
+            SignupOtpChallengeService.RequestOtpResult sendResult = signupOtpChallengeService.requestSignupOtp(
+                    email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash);
+            return mapSendResult(sendResult);
+        }
+
+        // Active challenge already exists
+        Optional<SignupOtpChallenge> activeOpt = signupOtpChallengeService.findActiveChallenge(email);
+        if (activeOpt.isPresent()) {
+            SignupOtpChallenge active = activeOpt.get();
+            if (active.getAttemptTokenHash() != null) {
+                boolean validAttempt = signupOtpChallengeService.verifyAttemptToken(active, rawAttemptToken);
+                if (!validAttempt) {
+                    authSecurityObservability.record(
+                            AuthSecurityObservability.Flow.SIGNUP,
+                            AuthSecurityObservability.Outcome.INVALID,
+                            AuthSecurityObservability.Reason.SIGNUP_ATTEMPT_MISMATCH);
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(fromChallenge(
+                            SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                            "A signup verification session is already in progress for this email address. Please complete verification in your original browser window, or wait for the session to expire.",
+                            signupOtpChallengeService.getChallengeView(email)));
+                }
+            }
+
+            // Original applicant possessing valid attempt secret
+            boolean restartRequested = Boolean.TRUE.equals(request.getRestart());
+            String cleanPassword = (request.getPassword() != null && !request.getPassword().isBlank())
+                    ? PasswordValidator.sanitize(request.getPassword())
+                    : null;
+            boolean detailsChanged = false;
+
+            if (request.getName() != null && !request.getName().trim().isBlank()
+                    && !request.getName().trim().equals(active.getPendingName())) {
+                detailsChanged = true;
+            }
+            if (normalizedPhone != null && !normalizedPhone.equals(active.getPendingPhoneNormalized())) {
+                detailsChanged = true;
+            }
+            if (cleanPassword != null && !cleanPassword.isBlank()
+                    && (active.getPendingPasswordHash() == null || !PasswordUtil.checkPassword(cleanPassword, active.getPendingPasswordHash()))) {
+                detailsChanged = true;
+            }
+
+            if (restartRequested || detailsChanged) {
+                String nameToUse = (request.getName() != null && !request.getName().trim().isBlank())
+                        ? request.getName().trim()
+                        : active.getPendingName();
+                if (nameToUse == null || nameToUse.isBlank()) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Full name is required."));
+                }
+                if (nameToUse.length() > 255) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Name must not exceed 255 characters."));
+                }
+
+                String passwordHashToUse;
+                if (cleanPassword != null && !cleanPassword.isBlank()) {
+                    if (!PasswordValidator.isValid(cleanPassword)) {
+                        return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            PasswordValidator.getValidationErrorMessage(cleanPassword)));
+                    }
+                    passwordHashToUse = PasswordUtil.hashPassword(cleanPassword);
+                } else {
+                    passwordHashToUse = active.getPendingPasswordHash();
+                    if (passwordHashToUse == null) {
+                        return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                                SignupOtpCode.OTP_INVALID,
+                                "Password is required."));
+                    }
+                }
+
+                if (findSignupConflict(email, normalizedPhone)) {
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Unable to complete signup with the provided details."));
+                }
+
+                String clientIp = resolveClientIp(httpRequest);
+                ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(
+                        signupAbuseLimiter.checkAndConsumeSend(clientIp, false, captchaToken),
+                        signupAbuseLimiter.hashClientIp(clientIp));
+                if (abuseDenied != null) {
+                    return abuseDenied;
+                }
+
+                SignupOtpChallengeService.RequestOtpResult restartResult = signupOtpChallengeService.restartSignupOtp(
+                        email, idempotencyKey, nameToUse, request.getPhone(), normalizedPhone, passwordHashToUse, rawAttemptToken);
+                return mapSendResult(restartResult);
             }
         }
 
-        if (findSignupConflict(email, normalizedPhone)) {
-            // Generic wording: do not reveal whether email or phone matched an existing account.
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
-                    SignupOtpCode.OTP_INVALID,
-                    "Unable to complete signup with the provided details."));
-        }
-
+        // Details did not change; resend for original applicant
         String clientIp = resolveClientIp(httpRequest);
         ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(
-                signupAbuseLimiter.checkAndConsumeSend(clientIp, isInitialSend, captchaToken),
+                signupAbuseLimiter.checkAndConsumeSend(clientIp, false, captchaToken),
                 signupAbuseLimiter.hashClientIp(clientIp));
         if (abuseDenied != null) {
             return abuseDenied;
         }
 
-        String pendingPasswordHash = (request.getPassword() != null && !request.getPassword().isBlank())
-                ? PasswordUtil.hashPassword(request.getPassword())
-                : null;
-        String pendingName = (request.getName() != null && !request.getName().isBlank())
-                ? request.getName().trim()
-                : null;
-
-        SignupOtpChallengeService.RequestOtpResult sendResult = (pendingPasswordHash != null || pendingName != null)
-                ? signupOtpChallengeService.requestSignupOtp(
-                        email, idempotencyKey, pendingName, request.getPhone(), normalizedPhone, pendingPasswordHash)
-                : signupOtpChallengeService.requestSignupOtp(email, idempotencyKey);
-        return mapSendResult(sendResult);
+        SignupOtpChallengeService.RequestOtpResult resendResult = signupOtpChallengeService.requestSignupOtp(email, idempotencyKey);
+        return mapSendResult(resendResult);
     }
 
     private String resolveClientIp(HttpServletRequest request) {
@@ -737,8 +860,17 @@ public class AuthController {
                 String message = sent.newlyAccepted()
                         ? "Verification code accepted for delivery."
                         : "A verification challenge is already active for this request.";
-                yield ResponseEntity.accepted().body(fromChallenge(code, message, sent.challenge()));
+                SignupOtpResponse response = fromChallenge(code, message, sent.challenge());
+                if (sent.attemptToken() != null) {
+                    response.setAttemptToken(sent.attemptToken());
+                }
+                yield ResponseEntity.accepted().body(response);
             }
+            case SignupOtpChallengeService.RequestOtpResult.AttemptConflict conflict ->
+                    ResponseEntity.status(HttpStatus.CONFLICT).body(fromChallenge(
+                            SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                            conflict.message(),
+                            conflict.challenge()));
             case SignupOtpChallengeService.RequestOtpResult.Denied denied -> {
                 SignupOtpCode code = switch (denied.reason()) {
                     case COOLDOWN_ACTIVE -> SignupOtpCode.OTP_RESEND_COOLDOWN;
@@ -811,6 +943,10 @@ public class AuthController {
                     ResponseEntity.badRequest().body(SignupOtpResponse.of(
                             SignupOtpCode.OTP_INVALID,
                             "Invalid verification code."));
+            case SignupOtpChallengeService.VerifyOtpResult.AttemptMismatch mismatch ->
+                    ResponseEntity.status(HttpStatus.CONFLICT).body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_ATTEMPT_CONFLICT,
+                            "Invalid or missing signup attempt verification. Please restart signup."));
         };
     }
 

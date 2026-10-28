@@ -46,6 +46,9 @@ public class SignupOtpChallenge {
     private String pendingPhoneNormalized;
     private String pendingPasswordHash;
 
+    /** SHA-256 verifier hash of the unpredictable signup attempt secret. */
+    private String attemptTokenHash;
+
     public String getEmailKey() {
         return emailKey;
     }
@@ -212,6 +215,14 @@ public class SignupOtpChallenge {
 
     public void setPendingPasswordHash(String pendingPasswordHash) {
         this.pendingPasswordHash = pendingPasswordHash;
+    }
+
+    public String getAttemptTokenHash() {
+        return attemptTokenHash;
+    }
+
+    public void setAttemptTokenHash(String attemptTokenHash) {
+        this.attemptTokenHash = attemptTokenHash;
     }
 
     /**

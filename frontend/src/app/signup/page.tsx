@@ -17,6 +17,7 @@ import {
   applyBackendChallengeState,
   clearAllSignupSession,
   fetchWithIdempotentRetry,
+  loadSignupOtpChallengeState,
   readSignupOtpResponse,
   savePendingSignupCredentials,
   saveSignupOtpChallengeState,
@@ -36,6 +37,7 @@ export default function SignupPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [conflictPending, setConflictPending] = useState(false);
   const router = useRouter();
 
   const nameRef = useRef<HTMLInputElement>(null);
@@ -97,25 +99,40 @@ export default function SignupPage() {
     }
 
     setFieldErrors({});
+    setConflictPending(false);
     setLoading(true);
 
     try {
-      clearAllSignupSession();
-      const idempotencyKey = crypto.randomUUID();
       const cleanEmail = formData.email.trim().toLowerCase();
+      const existingChallenge = loadSignupOtpChallengeState();
+      const existingToken = (existingChallenge && existingChallenge.email.toLowerCase() === cleanEmail)
+        ? existingChallenge.attemptToken
+        : undefined;
+
+      const idempotencyKey = crypto.randomUUID();
 
       const payload = {
         name: formData.name.trim(),
         email: cleanEmail,
         phone: formData.phone,
         password: formData.password,
+        attemptToken: existingToken,
+        restart: Boolean(existingToken),
       };
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      };
+      if (existingToken) {
+        headers['X-Signup-Attempt-Token'] = existingToken;
+      }
 
       const res = await fetchWithIdempotentRetry((key) =>
         fetch(`${API_BASE}/auth/signup/send-otp`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+            ...headers,
             'Idempotency-Key': key,
           },
           body: JSON.stringify(payload),
@@ -123,7 +140,8 @@ export default function SignupPage() {
 
       if (res.ok || res.status === 202) {
         const body = await readSignupOtpResponse(res);
-        const challengeState = applyBackendChallengeState(null, body, cleanEmail);
+        clearAllSignupSession();
+        const challengeState = applyBackendChallengeState(existingChallenge, body, cleanEmail);
         saveSignupOtpChallengeState(challengeState);
         savePendingSignupCredentials({
           name: formData.name.trim(),
@@ -140,6 +158,9 @@ export default function SignupPage() {
       }
 
       const body = await readSignupOtpResponse(res);
+      if (res.status === 409 && body.code === 'OTP_ATTEMPT_CONFLICT') {
+        setConflictPending(true);
+      }
       setError(body.message || 'Something went wrong. Please try again.');
     } catch {
       setError('Unable to connect to the server. Please try again.');
@@ -181,6 +202,32 @@ export default function SignupPage() {
         </div>
 
         {error && <div className={styles.errorBanner}>{error}</div>}
+        {conflictPending && (
+          <div style={{
+            background: 'rgba(217, 119, 6, 0.1)',
+            border: '1px solid rgba(217, 119, 6, 0.3)',
+            borderRadius: '8px',
+            padding: '1rem',
+            marginBottom: '1.25rem',
+            color: '#fbbf24',
+            fontSize: '0.9rem',
+            textAlign: 'center'
+          }}>
+            <p style={{ margin: '0 0 0.75rem 0' }}>
+              A signup verification session is already in progress for this email address.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+              <button
+                type="button"
+                onClick={() => router.push('/signup/verify')}
+                className="btn-secondary"
+                style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
+              >
+                Enter Verification Code
+              </button>
+            </div>
+          </div>
+        )}
 
         <form className={styles.form} onSubmit={handleSignup} noValidate>
           <div className={styles.inputRow}>

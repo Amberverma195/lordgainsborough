@@ -17,6 +17,8 @@ public enum SignupOtpCode {
     OTP_VERIFIED,
     /** Generic secondary rate limit (IP / global). Do not disclose which limit tripped. */
     OTP_RATE_LIMITED,
+    /** An existing signup attempt is bound to another client session or requires restart. */
+    OTP_ATTEMPT_CONFLICT,
     /** CAPTCHA required after suspicious send volume from this client. */
     OTP_CAPTCHA_REQUIRED
 }

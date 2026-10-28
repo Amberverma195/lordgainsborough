@@ -17,6 +17,9 @@ public interface UserAuthStore {
     default Registration registerPending(String email, String otp, String challengeId, SignupOtpChallengeService challenges) {
         throw new UnsupportedOperationException("Pending registration not supported");
     }
+    default Registration registerPending(String email, String otp, String challengeId, String attemptToken, SignupOtpChallengeService challenges) {
+        return registerPending(email, otp, challengeId, challenges);
+    }
     Optional<User> updateName(User user, String token, String name, JwtUtil jwt);
     Optional<List<CustomerOrder>> history(User user, String token, JwtUtil jwt);
     PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key);

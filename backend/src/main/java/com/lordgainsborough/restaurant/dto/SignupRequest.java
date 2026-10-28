@@ -7,6 +7,7 @@ public class SignupRequest {
     private String password;
     private String otp;
     private String challengeId;
+    private String attemptToken;
 
     // Getters and Setters
     public String getName() { return name; }
@@ -26,4 +27,7 @@ public class SignupRequest {
 
     public String getChallengeId() { return challengeId; }
     public void setChallengeId(String challengeId) { this.challengeId = challengeId; }
+
+    public String getAttemptToken() { return attemptToken; }
+    public void setAttemptToken(String attemptToken) { this.attemptToken = attemptToken; }
 }

@@ -19,6 +19,7 @@ public class SignupOtpResponse {
     private Instant challengeExpiresAt;
     private Integer resendsRemaining;
     private Boolean captchaRequired;
+    private String attemptToken;
 
     public SignupOtpCode getCode() {
         return code;
@@ -90,6 +91,14 @@ public class SignupOtpResponse {
 
     public void setCaptchaRequired(Boolean captchaRequired) {
         this.captchaRequired = captchaRequired;
+    }
+
+    public String getAttemptToken() {
+        return attemptToken;
+    }
+
+    public void setAttemptToken(String attemptToken) {
+        this.attemptToken = attemptToken;
     }
 
     public static SignupOtpResponse of(SignupOtpCode code, String message) {

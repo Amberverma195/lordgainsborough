@@ -68,6 +68,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         challenge.setPendingPhone(rs.getString("pending_phone"));
         challenge.setPendingPhoneNormalized(rs.getString("pending_phone_normalized"));
         challenge.setPendingPasswordHash(rs.getString("pending_password_hash"));
+        challenge.setAttemptTokenHash(rs.getString("attempt_token_hash"));
         return challenge;
     };
 
@@ -76,7 +77,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
         challenge_expires_at, created_at, updated_at, send_operation_id,
         send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
-        pending_name, pending_phone, pending_phone_normalized, pending_password_hash
+        pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
+        attempt_token_hash
         """;
 
     public PostgresSignupOtpChallengeStore(
@@ -127,8 +129,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                     challenge_expires_at, created_at, updated_at, send_operation_id,
                     send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
-                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
+                    attempt_token_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO NOTHING
                 """;
             try {
@@ -153,7 +156,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                         challenge.getPendingName(),
                         challenge.getPendingPhone(),
                         challenge.getPendingPhoneNormalized(),
-                        challenge.getPendingPasswordHash()
+                        challenge.getPendingPasswordHash(),
+                        challenge.getAttemptTokenHash()
                 );
                 return rows == 1;
             } catch (DuplicateKeyException e) {
@@ -203,7 +207,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_name = ?,
                     pending_phone = ?,
                     pending_phone_normalized = ?,
-                    pending_password_hash = ?
+                    pending_password_hash = ?,
+                    attempt_token_hash = ?
                 WHERE email_key = ?
                   AND challenge_expires_at <= ?
                 RETURNING """ + CHALLENGE_COLUMNS;
@@ -227,6 +232,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     fresh.getPendingPhone(),
                     fresh.getPendingPhoneNormalized(),
                     fresh.getPendingPasswordHash(),
+                    fresh.getAttemptTokenHash(),
                     emailKey,
                     toTimestamp(now)
             );
@@ -249,8 +255,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     resend_count, failed_verify_attempts, next_resend_at, otp_expires_at,
                     challenge_expires_at, created_at, updated_at, send_operation_id,
                     send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
-                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
+                    attempt_token_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO UPDATE SET
                     normalized_email = EXCLUDED.normalized_email,
                     challenge_id = EXCLUDED.challenge_id,
@@ -270,7 +277,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_name = EXCLUDED.pending_name,
                     pending_phone = EXCLUDED.pending_phone,
                     pending_phone_normalized = EXCLUDED.pending_phone_normalized,
-                    pending_password_hash = EXCLUDED.pending_password_hash
+                    pending_password_hash = EXCLUDED.pending_password_hash,
+                    attempt_token_hash = EXCLUDED.attempt_token_hash
                 RETURNING """ + CHALLENGE_COLUMNS;
 
             List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
@@ -294,7 +302,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge.getPendingName(),
                     challenge.getPendingPhone(),
                     challenge.getPendingPhoneNormalized(),
-                    challenge.getPendingPasswordHash()
+                    challenge.getPendingPasswordHash(),
+                    challenge.getAttemptTokenHash()
             );
             return results.get(0);
         });
@@ -621,5 +630,79 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                 emailKey,
                 toTimestamp(now));
         return updated == 1;
+    }
+
+    @Override
+    @Transactional(transactionManager = "transactionManager")
+    public Optional<SignupOtpChallenge> tryAtomicRestart(
+            String emailKey,
+            String expectedAttemptTokenHash,
+            SignupOtpChallenge fresh,
+            Instant now) {
+        if (emailKey == null || emailKey.isBlank()) {
+            throw new IllegalArgumentException("emailKey is required");
+        }
+        if (fresh == null) {
+            throw new IllegalArgumentException("fresh challenge is required");
+        }
+        Objects.requireNonNull(now, "now is required");
+
+        return transactionTemplate.execute(status -> {
+            String sql = """
+                UPDATE signup_otp_challenges
+                SET normalized_email = ?,
+                    challenge_id = ?,
+                    status = ?,
+                    otp_digest = ?,
+                    resend_count = 0,
+                    failed_verify_attempts = 0,
+                    next_resend_at = ?,
+                    otp_expires_at = ?,
+                    challenge_expires_at = ?,
+                    created_at = ?,
+                    updated_at = ?,
+                    send_operation_id = ?,
+                    send_status = ?,
+                    send_lease_until = ?,
+                    client_idempotency_key = ?,
+                    last_send_was_initial = ?,
+                    pending_name = ?,
+                    pending_phone = ?,
+                    pending_phone_normalized = ?,
+                    pending_password_hash = ?,
+                    attempt_token_hash = ?
+                WHERE email_key = ?
+                  AND status = 'ACTIVE'
+                  AND challenge_expires_at > ?
+                  AND (attempt_token_hash = ? OR (attempt_token_hash IS NULL AND ? IS NULL))
+                RETURNING """ + CHALLENGE_COLUMNS;
+
+            List<SignupOtpChallenge> results = jdbcTemplate.query(sql, ROW_MAPPER,
+                    fresh.getNormalizedEmail(),
+                    fresh.getChallengeId(),
+                    OtpChallengeStatus.ACTIVE.name(),
+                    fresh.getOtpDigest(),
+                    toTimestamp(fresh.getNextResendAt()),
+                    toTimestamp(fresh.getOtpExpiresAt()),
+                    toTimestamp(fresh.getChallengeExpiresAt()),
+                    toTimestamp(fresh.getCreatedAt()),
+                    toTimestamp(fresh.getUpdatedAt()),
+                    fresh.getSendOperationId(),
+                    fresh.getSendStatus() != null ? fresh.getSendStatus().name() : null,
+                    toTimestamp(fresh.getSendLeaseUntil()),
+                    fresh.getClientIdempotencyKey(),
+                    fresh.isLastSendWasInitial(),
+                    fresh.getPendingName(),
+                    fresh.getPendingPhone(),
+                    fresh.getPendingPhoneNormalized(),
+                    fresh.getPendingPasswordHash(),
+                    fresh.getAttemptTokenHash(),
+                    emailKey,
+                    toTimestamp(now),
+                    expectedAttemptTokenHash,
+                    expectedAttemptTokenHash
+            );
+            return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        });
     }
 }

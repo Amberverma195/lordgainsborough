@@ -118,4 +118,16 @@ public interface SignupOtpChallengeStore {
             Instant now) {
         return false;
     }
+
+    /**
+     * Atomically restarts a signup attempt, replacing the row with the fresh challenge
+     * if the expected attemptTokenHash matches.
+     */
+    default Optional<SignupOtpChallenge> tryAtomicRestart(
+            String emailKey,
+            String expectedAttemptTokenHash,
+            SignupOtpChallenge fresh,
+            Instant now) {
+        return Optional.empty();
+    }
 }

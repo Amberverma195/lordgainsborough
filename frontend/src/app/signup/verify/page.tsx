@@ -267,6 +267,7 @@ export default function SignupVerifyPage() {
     const payload = {
       email: pendingSignup.email,
       phone: pendingSignup.phone,
+      attemptToken: challenge?.attemptToken,
     };
 
     try {
@@ -276,6 +277,7 @@ export default function SignupVerifyPage() {
           headers: {
             'Content-Type': 'application/json',
             'Idempotency-Key': key,
+            ...(challenge?.attemptToken ? { 'X-Signup-Attempt-Token': challenge.attemptToken } : {}),
           },
           body: JSON.stringify(payload),
         }), idempotencyKey);
@@ -294,6 +296,8 @@ export default function SignupVerifyPage() {
         }
         setOtp(['', '', '', '', '', '']);
         inputRefs.current[0]?.focus();
+      } else if (res.status === 409 && body.code === 'OTP_ATTEMPT_CONFLICT') {
+        setError('A signup verification session conflict was detected. Please return to signup to restart.');
       } else if (res.status === 429) {
         if (body.code === 'OTP_RESEND_LIMIT_REACHED') {
           setError("You've reached the resend limit. Please restart verification later.");
@@ -335,11 +339,15 @@ export default function SignupVerifyPage() {
     try {
       const res = await fetch(`${API_BASE}/auth/signup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(challenge?.attemptToken ? { 'X-Signup-Attempt-Token': challenge.attemptToken } : {}),
+        },
         body: JSON.stringify({
           email: pendingSignup.email,
           otp: code,
           challengeId: challenge?.challengeId,
+          attemptToken: challenge?.attemptToken,
         }),
       });
 
@@ -351,6 +359,7 @@ export default function SignupVerifyPage() {
         publishChallenge({
           email: pendingSignup.email,
           challengeId: challenge?.challengeId,
+          attemptToken: challenge?.attemptToken,
           code: 'OTP_VERIFIED',
         }, 'verified');
         router.push('/profile');
@@ -359,7 +368,11 @@ export default function SignupVerifyPage() {
 
       const body = await readSignupOtpResponse(res);
       applyChallengeFromBackend(body, pendingSignup.email);
-      setError(body.message || 'Unable to complete verification. Please check the code and try again.');
+      if (res.status === 409 && body.code === 'OTP_ATTEMPT_CONFLICT') {
+        setError('This verification session is not valid for this browser. Please return to signup and restart.');
+      } else {
+        setError(body.message || 'Unable to complete verification. Please check the code and try again.');
+      }
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {

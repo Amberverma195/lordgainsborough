@@ -11,12 +11,14 @@ export type SignupOtpCode =
   | 'OTP_INVALID'
   | 'OTP_EXPIRED'
   | 'OTP_VERIFICATION_LOCKED'
+  | 'OTP_ATTEMPT_CONFLICT'
   | 'OTP_VERIFIED';
 
 export interface SignupOtpResponse {
   code?: SignupOtpCode;
   message?: string;
   challengeId?: string;
+  attemptToken?: string;
   serverTime?: string;
   nextResendAt?: string;
   otpExpiresAt?: string;
@@ -27,6 +29,7 @@ export interface SignupOtpResponse {
 /** Non-secret challenge timing cached after send; never includes OTP. */
 export interface SignupOtpChallengeState {
   challengeId?: string;
+  attemptToken?: string;
   email: string;
   serverTime?: string;
   receivedAtMs?: number;
@@ -78,6 +81,7 @@ export function applyBackendChallengeState(
   return {
     email,
     challengeId: body.challengeId ?? previous?.challengeId,
+    attemptToken: body.attemptToken ?? previous?.attemptToken,
     serverTime,
     receivedAtMs,
     nextResendAt: body.nextResendAt ?? previous?.nextResendAt,

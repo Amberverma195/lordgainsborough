@@ -120,6 +120,11 @@ public class PostgresUserAuthStore implements UserAuthStore {
 
     @Override
     public Registration registerPending(String email, String otp, String challengeId, SignupOtpChallengeService challenges) {
+        return registerPending(email, otp, challengeId, null, challenges);
+    }
+
+    @Override
+    public Registration registerPending(String email, String otp, String challengeId, String attemptToken, SignupOtpChallengeService challenges) {
         PostgresInput.text(email, 255, true);
         String cleanEmail = email.trim().toLowerCase(Locale.ROOT);
         if (!(challenges.getPersistence().getStore() instanceof PostgresSignupOtpChallengeStore challengeStore)
@@ -134,6 +139,11 @@ public class PostgresUserAuthStore implements UserAuthStore {
             SignupOtpChallenge challenge = optChallenge.get();
             if (challengeId != null && !challengeId.isBlank() && !Objects.equals(challenge.getChallengeId(), challengeId)) {
                 return new Registration(null, new SignupOtpChallengeService.VerifyOtpResult.Missing(), false);
+            }
+            if (challenge.getAttemptTokenHash() != null) {
+                if (!challenges.getPersistence().verifyAttemptToken(attemptToken, challenge.getAttemptTokenHash())) {
+                    return new Registration(null, new SignupOtpChallengeService.VerifyOtpResult.AttemptMismatch(), false);
+                }
             }
             if (challenge.getPendingPasswordHash() == null || challenge.getPendingPasswordHash().isBlank()
                     || challenge.getPendingName() == null || challenge.getPendingName().isBlank()

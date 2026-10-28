@@ -331,10 +331,11 @@ describe('signupOtpCrossTab', () => {
 
     const tabB = subscribeSignupOtpCrossTab((payload) => {
       if (payload.type === 'verified') {
-        // Tab B reacts to verified: checks if token and user exist in storage
-        const token = memory.getItem('token');
-        const user = memory.getItem('user');
-        sequence.push(`tabB_received_verified:hasToken=${!!token}:hasUser=${!!user}`);
+        // Tab B reacts to verified: checks actual persistAuth() storage keys
+        const token = memory.getItem('authToken');
+        const email = memory.getItem('userEmail');
+        const name = memory.getItem('userName');
+        sequence.push(`tabB_received_verified:hasToken=${!!token}:hasEmail=${!!email}:hasName=${!!name}`);
       }
     }, {
       tabId: 'tab-b',
@@ -343,9 +344,11 @@ describe('signupOtpCrossTab', () => {
       addStorageListener: (listener) => memory.addListener(listener),
     });
 
-    // In Tab A: Persist auth FIRST
-    memory.setItem('token', 'valid-jwt-token');
-    memory.setItem('user', JSON.stringify({ id: 'u1', email: 'test@example.com' }));
+    // In Tab A: Persist auth FIRST using actual persistAuth keys
+    memory.setItem('authToken', 'valid-jwt-token');
+    memory.setItem('userEmail', 'test@example.com');
+    memory.setItem('userName', 'Amber Verma');
+    memory.setItem('userRole', 'MEMBER');
     sequence.push('tabA_persisted_auth');
 
     // In Tab A: Broadcast verified SECOND
@@ -361,7 +364,7 @@ describe('signupOtpCrossTab', () => {
 
     expect(sequence).toEqual([
       'tabA_persisted_auth',
-      'tabB_received_verified:hasToken=true:hasUser=true',
+      'tabB_received_verified:hasToken=true:hasEmail=true:hasName=true',
     ]);
 
     tabA.close();
