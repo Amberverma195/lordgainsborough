@@ -2064,6 +2064,52 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertEquals(1, winners.get(), "Exactly one concurrent restart must succeed");
         SignupOtpChallenge finalState = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
         assertEquals(2, finalState.getResendCount(), "Resend count must be incremented by 1 (1 -> 2), never reset to 0");
-        assertEquals(0, finalState.getFailedVerifyAttempts(), "Failed verify attempts must be reset to 0 on successful restart");
+        assertEquals(2, finalState.getFailedVerifyAttempts(), "Failed verify attempts must be preserved across restarts (not reset to 0)");
+    }
+
+    @Test
+    @Order(75)
+    @DisplayName("75. Atomic restart preserves failed verify attempts budget and locks when exhausted")
+    void test75_atomicRestartPreservesFailedVerifyAttemptsBudget() {
+        String email = "restart-budget@example.com";
+        String tokenHash = persistence.hashAttemptToken("attempt-budget-1");
+
+        SignupOtpChallenge ch = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("111111"), "ch-rst-budget-1", "op-1", "k-1",
+                "Budget User", "+1 (555)-111-7777", "5551117777", "pw-hash", tokenHash);
+        ch.setSendStatus(OtpSendStatus.SENT);
+        ch.setFailedVerifyAttempts(2);
+        ch.setNextResendAt(clock.instant().minusSeconds(5));
+        assertTrue(persistence.tryInsert(ch));
+
+        Instant now = clock.instant();
+        String newTokenHash = persistence.hashAttemptToken("attempt-budget-2");
+        SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("222222"), "ch-rst-budget-2", "op-2", "k-2",
+                "Budget User Updated", "+1 (555)-111-7777", "5551117777", "pw-hash", newTokenHash);
+
+        Optional<SignupOtpChallenge> restarted = store.tryAtomicRestart(
+                ch.getEmailKey(), tokenHash, fresh, now);
+        assertTrue(restarted.isPresent(), "Restart with matching token must succeed");
+        assertEquals(2, restarted.get().getFailedVerifyAttempts(), "Failed attempt budget must carry over");
+
+        // Fail 3 more attempts on the restarted challenge (reaching MAX_FAILED_VERIFY_ATTEMPTS = 5)
+        for (int i = 0; i < 3; i++) {
+            clock.advance(Duration.ofSeconds(1));
+            service.verifyOtp(email, "999999");
+        }
+
+        SignupOtpChallenge exhausted = persistence.findByEmailKey(ch.getEmailKey()).orElseThrow();
+        assertEquals(OtpChallengeStatus.LOCKED, exhausted.getStatus());
+        assertEquals(SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS, exhausted.getFailedVerifyAttempts());
+
+        // Further restart is now blocked because verification is locked
+        clock.advance(Duration.ofSeconds(60));
+        SignupOtpChallenge freshAfterLock = persistence.buildNewActiveChallenge(
+                email, persistence.digestOtp("333333"), "ch-rst-budget-3", "op-3", "k-3",
+                "Budget User Again", "+1 (555)-111-7777", "5551117777", "pw-hash", persistence.hashAttemptToken("attempt-3"));
+        Optional<SignupOtpChallenge> blocked = store.tryAtomicRestart(
+                ch.getEmailKey(), newTokenHash, freshAfterLock, clock.instant());
+        assertTrue(blocked.isEmpty(), "Restart must be blocked after failed verify attempt budget is exhausted");
     }
 }

@@ -661,7 +661,6 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     status = ?,
                     otp_digest = ?,
                     resend_count = resend_count + 1,
-                    failed_verify_attempts = 0,
                     next_resend_at = ?,
                     otp_expires_at = ?,
                     challenge_expires_at = ?,

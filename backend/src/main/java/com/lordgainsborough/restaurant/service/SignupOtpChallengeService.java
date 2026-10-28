@@ -5,11 +5,22 @@ import com.lordgainsborough.restaurant.model.OtpChallengeStatus;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.SignupOtpChallenge;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence.ResendDenialReason;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -20,18 +31,65 @@ public class SignupOtpChallengeService {
     private final EmailSenderService emailSenderService;
     private final SignupOtpObservability observability;
     private final SecureRandom secureRandom = new SecureRandom();
-    private final byte[] attemptTokenHmacKey = new byte[32];
-    {
-        secureRandom.nextBytes(attemptTokenHmacKey);
-    }
+    private final List<byte[]> attemptTokenHmacKeys;
 
     public SignupOtpChallengeService(
             SignupOtpChallengePersistence persistence,
             EmailSenderService emailSenderService,
             SignupOtpObservability observability) {
+        this(persistence, emailSenderService, observability, (String) null);
+    }
+
+    @Autowired
+    public SignupOtpChallengeService(
+            SignupOtpChallengePersistence persistence,
+            EmailSenderService emailSenderService,
+            SignupOtpObservability observability,
+            @Value("${app.auth.signup.attempt-token-secrets:${app.auth.signup.attempt-token-secret:}}") String configuredSecrets) {
         this.persistence = persistence;
         this.emailSenderService = emailSenderService;
         this.observability = observability;
+        this.attemptTokenHmacKeys = initializeHmacKeys(configuredSecrets);
+    }
+
+    private List<byte[]> initializeHmacKeys(String configuredSecrets) {
+        List<byte[]> keys = new ArrayList<>();
+        if (configuredSecrets != null && !configuredSecrets.isBlank()) {
+            String[] parts = configuredSecrets.split(",");
+            for (String part : parts) {
+                String candidate = part.trim();
+                if (!candidate.isBlank()) {
+                    keys.add(deriveKeyBytes(candidate));
+                }
+            }
+        }
+        if (keys.isEmpty()) {
+            byte[] ephemeral = new byte[32];
+            secureRandom.nextBytes(ephemeral);
+            keys.add(ephemeral);
+        }
+        return Collections.unmodifiableList(keys);
+    }
+
+    private static byte[] deriveKeyBytes(String raw) {
+        String trimmed = raw.trim();
+        if (trimmed.length() == 64 && trimmed.matches("^[0-9a-fA-F]{64}$")) {
+            try {
+                return HexFormat.of().parseHex(trimmed);
+            } catch (Exception ignored) {
+                // fall through to digest
+            }
+        }
+        byte[] utf8 = trimmed.getBytes(StandardCharsets.UTF_8);
+        if (utf8.length == 32) {
+            return utf8;
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return md.digest(utf8);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm unavailable", e);
+        }
     }
 
     public enum InitialSendResult {
@@ -140,15 +198,19 @@ public class SignupOtpChallengeService {
     }
 
     public String deriveAttemptToken(String normalizedEmail, String idempotencyKey) {
+        return deriveAttemptToken(normalizedEmail, idempotencyKey, attemptTokenHmacKeys.get(0));
+    }
+
+    public String deriveAttemptToken(String normalizedEmail, String idempotencyKey, byte[] key) {
         if (normalizedEmail == null || idempotencyKey == null) {
             return generateAttemptToken();
         }
         try {
-            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
-            mac.init(new javax.crypto.spec.SecretKeySpec(attemptTokenHmacKey, "HmacSHA256"));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key, "HmacSHA256"));
             byte[] raw = mac.doFinal((normalizedEmail.trim().toLowerCase() + ":" + idempotencyKey.trim())
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return java.util.HexFormat.of().formatHex(raw);
+                    .getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(raw);
         } catch (Exception e) {
             return generateAttemptToken();
         }
@@ -779,9 +841,11 @@ public class SignupOtpChallengeService {
             }
         }
         if (challenge.isLastSendWasInitial() && challenge.getClientIdempotencyKey() != null) {
-            String derived = deriveAttemptToken(normalizedEmail, challenge.getClientIdempotencyKey());
-            if (persistence.verifyAttemptToken(derived, challenge.getAttemptTokenHash())) {
-                return derived;
+            for (byte[] key : attemptTokenHmacKeys) {
+                String derived = deriveAttemptToken(normalizedEmail, challenge.getClientIdempotencyKey(), key);
+                if (persistence.verifyAttemptToken(derived, challenge.getAttemptTokenHash())) {
+                    return derived;
+                }
             }
         }
         return null;
