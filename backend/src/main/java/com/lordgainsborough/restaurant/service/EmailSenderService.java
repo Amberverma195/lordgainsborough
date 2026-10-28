@@ -107,8 +107,9 @@ public class EmailSenderService {
         Throwable root = e.getRootCause() != null ? e.getRootCause() : e;
         String name = root.getClass().getName().toLowerCase();
         String message = root.getMessage() == null ? "" : root.getMessage().toLowerCase();
-        if (name.contains("timeout") || message.contains("timed out") || message.contains("timeout")) {
-            return new AmbiguousEmailDeliveryException("SMTP timed out; delivery status unknown", e);
+        if (name.contains("timeout") || message.contains("timed out") || message.contains("timeout")
+                || name.contains("connect") || message.contains("connection") || message.contains("refused")) {
+            return new AmbiguousEmailDeliveryException("SMTP timed out or connection failed; delivery status unknown", e);
         }
         if (message.contains("invalid") || message.contains("reject") || message.contains("550")) {
             return new DefiniteEmailRejectionException("SMTP rejected the message", e);

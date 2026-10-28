@@ -567,40 +567,67 @@ public class SignupOtpChallengeService {
                             SignupOtpObservability.ProviderCategory.ACCEPTED));
             return InitialSendResult.CREATED;
         } catch (DefiniteEmailRejectionException ex) {
-            SignupOtpChallenge failed = persistence.tryMarkSendOutcome(
-                            emailKey, sendOperationId, OtpSendStatus.DEFINITELY_FAILED, now)
-                    .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
-            if (initial) {
-                persistence.expireAfterDefiniteInitialFailure(emailKey, sendOperationId, now);
+            SignupOtpChallenge failed = null;
+            try {
+                failed = persistence.tryMarkSendOutcome(
+                                emailKey, sendOperationId, OtpSendStatus.DEFINITELY_FAILED, now)
+                        .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
+                if (initial) {
+                    persistence.expireAfterDefiniteInitialFailure(emailKey, sendOperationId, now);
+                }
+            } catch (Exception ignored) {
+                // Do not let secondary database errors mask definite provider rejection
             }
-            observability.record(
-                    SignupOtpObservability.Event.PROVIDER_DEFINITE_FAILURE,
-                    SignupOtpObservability.Context.fromChallenge(
-                            failed,
-                            "OTP_PROVIDER_DEFINITE_FAILURE",
-                            SignupOtpObservability.ProviderCategory.DEFINITE_FAILURE));
+            try {
+                observability.record(
+                        SignupOtpObservability.Event.PROVIDER_DEFINITE_FAILURE,
+                        SignupOtpObservability.Context.fromChallenge(
+                                failed,
+                                "OTP_PROVIDER_DEFINITE_FAILURE",
+                                SignupOtpObservability.ProviderCategory.DEFINITE_FAILURE));
+            } catch (Exception ignored) {
+                // Keep outcome response reliable
+            }
             return InitialSendResult.SEND_FAILED;
         } catch (AmbiguousEmailDeliveryException ex) {
-            SignupOtpChallenge unknown = persistence.tryMarkSendOutcome(
-                            emailKey, sendOperationId, OtpSendStatus.DELIVERY_UNKNOWN, now)
-                    .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
-            observability.record(
-                    SignupOtpObservability.Event.PROVIDER_TIMEOUT,
-                    SignupOtpObservability.Context.fromChallenge(
-                            unknown,
-                            "OTP_DELIVERY_UNKNOWN",
-                            SignupOtpObservability.ProviderCategory.TIMEOUT_OR_AMBIGUOUS));
+            SignupOtpChallenge unknown = null;
+            try {
+                unknown = persistence.tryMarkSendOutcome(
+                                emailKey, sendOperationId, OtpSendStatus.DELIVERY_UNKNOWN, now)
+                        .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
+            } catch (Exception ignored) {
+                // Do not let secondary database errors mask delivery timeout
+            }
+            try {
+                observability.record(
+                        SignupOtpObservability.Event.PROVIDER_TIMEOUT,
+                        SignupOtpObservability.Context.fromChallenge(
+                                unknown,
+                                "OTP_DELIVERY_UNKNOWN",
+                                SignupOtpObservability.ProviderCategory.TIMEOUT_OR_AMBIGUOUS));
+            } catch (Exception ignored) {
+                // Keep outcome response reliable
+            }
             return InitialSendResult.DELIVERY_UNKNOWN;
         } catch (RuntimeException ex) {
-            SignupOtpChallenge unknown = persistence.tryMarkSendOutcome(
-                            emailKey, sendOperationId, OtpSendStatus.DELIVERY_UNKNOWN, now)
-                    .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
-            observability.record(
-                    SignupOtpObservability.Event.PROVIDER_TIMEOUT,
-                    SignupOtpObservability.Context.fromChallenge(
-                            unknown,
-                            "OTP_DELIVERY_UNKNOWN",
-                            SignupOtpObservability.ProviderCategory.TIMEOUT_OR_AMBIGUOUS));
+            SignupOtpChallenge unknown = null;
+            try {
+                unknown = persistence.tryMarkSendOutcome(
+                                emailKey, sendOperationId, OtpSendStatus.DELIVERY_UNKNOWN, now)
+                        .orElseGet(() -> persistence.findByEmailKey(emailKey).orElse(null));
+            } catch (Exception ignored) {
+                // Do not let secondary database errors mask delivery timeout
+            }
+            try {
+                observability.record(
+                        SignupOtpObservability.Event.PROVIDER_TIMEOUT,
+                        SignupOtpObservability.Context.fromChallenge(
+                                unknown,
+                                "OTP_DELIVERY_UNKNOWN",
+                                SignupOtpObservability.ProviderCategory.TIMEOUT_OR_AMBIGUOUS));
+            } catch (Exception ignored) {
+                // Keep outcome response reliable
+            }
             return InitialSendResult.DELIVERY_UNKNOWN;
         }
     }

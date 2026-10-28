@@ -1143,6 +1143,8 @@ public class AuthController {
             }
         }
         builder.addKeyValue("operation", operation)
+                .addKeyValue("stage", AuthExceptionHandler.classifyStage(exception))
+                .addKeyValue("exceptionClass", exception.getClass().getName())
                 .addKeyValue("exceptionType", exception.getClass().getSimpleName())
                 .log("Authentication operation failed");
     }

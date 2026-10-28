@@ -6,6 +6,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
@@ -18,7 +19,18 @@ import java.util.Map;
 @Service
 public class BrevoApiEmailService {
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+
+    public BrevoApiEmailService() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(8000);
+        this.restTemplate = new RestTemplate(factory);
+    }
+
+    public BrevoApiEmailService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
     @Value("${brevo.api-key:}")
     private String apiKey;
