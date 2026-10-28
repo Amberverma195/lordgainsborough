@@ -36,11 +36,11 @@ whether a small number of keyed client identifiers dominate the structured logs.
 
 ## Login and password-reset security
 
-Login request counters and password-reset request counters are MongoDB fixed-window counters.
+Login request counters and password-reset request counters are PostgreSQL fixed-window counters using atomic upserts.
 Login identifier/IP cooldown state is stored separately in `login_failure_states` so
 `blockedUntil` and successful-login clearing are distributed and atomic. Password-reset
 challenge state is stored in `password_reset_otp_challenges`; authorization always checks
-status and expiry timestamps because MongoDB TTL cleanup is asynchronous.
+status and expiry timestamps independently of expired-row cleanup.
 
 The broad login IP counter consumes every request that reaches `AuthController.login`,
 including missing-field validation failures. JSON that cannot be deserialized is rejected by
@@ -50,19 +50,18 @@ Spring before the controller and therefore does not consume a login counter unit
 Never add email, IP, user IDs, challenge IDs, provider messages, codes, digests, or passwords
 as metric labels.
 
-Password reset uses a MongoDB transaction for the security-critical claim, user mutation,
-and challenge finalization on the deployed replica-set topology:
+Password reset uses one PostgreSQL transaction for the security-critical claim, user
+mutation and challenge finalization:
 
 1. A correct code atomically moves one challenge from `ACTIVE` to `PROCESSING` with a stable
    reset operation ID.
 2. The user password, `tokenVersion`, and `passwordChangedAt` are updated atomically on the
-   user document, guarded by that operation ID.
+   users row, guarded by that operation ID.
 3. The challenge is finalized as `CONSUMED`.
 
-A safe idempotent claim/update/finalize implementation remains available for focused tests
-or a topology where a transaction manager is not supplied. A retry with the same idempotency
-key can resume an interrupted `PROCESSING` operation. Different operations cannot claim or
-complete the same challenge.
+A retry with the same idempotency key can resume an interrupted `PROCESSING` operation.
+Different operations cannot claim or complete the same challenge. The deployed store uses
+the application PostgreSQL transaction manager.
 
 Required production configuration includes `ABUSE_IP_HASH_SECRET`. The application fails
 startup when it is absent so keyed IP/identifier hashes never use a predictable fallback.

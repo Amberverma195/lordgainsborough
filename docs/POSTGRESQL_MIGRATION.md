@@ -3,7 +3,7 @@
 > **Single Source of Truth**  
 > **Repository:** `Amberverma195/lordgainsborough`  
 > **Status:** Active Roadmap & Journal  
-> **Last Updated:** 2026-10-27T18:04:54-04:00 (America/Toronto)
+> **Last Updated:** 2026-10-27T20:05:46-04:00 (America/Toronto)
 
 ---
 
@@ -2460,3 +2460,12 @@ Final verification: 17/17 Playwright cases passed (zero skips/failures), 28 fron
 Fixed asynchronous denial rendering, hidden mobile navigation/cart actions, missing About/Contact targets, missing customer/kitchen message composers and stale administrator tabs. Actual persisted checkout, messaging, KDS statuses/no-show, OTP/reset/JWT revocation, reviews, reservations, administrator CRUD/search and responsive orders were exercised. Backend production policy/API/schema remained unchanged.
 
 See [PG027_E2E_REPORT.md](PG027_E2E_REPORT.md) for the complete case matrix, commands, defects, intermediate failures, local screenshot/trace locations and remaining limitations; see [the harness README](../frontend/e2e/README.md) for reproduction. Console traces retain expected negative-test responses, existing privacy/terms 404s and CSS preload warnings; zero uncaught page errors were recorded. KDS continues to enforce the existing IP allowlist rather than a new staff-role requirement. Local acceptance does not establish production readiness or authorize deployment.
+
+
+## Final MongoDB cleanup audit - 2026-10-27
+
+The user explicitly authorized deletion of only the retired Lord Gainsborough MongoDB application database. Current source/dependency scans confirm PG-026 already removed the active MongoDB implementation. Updated stale startup/operations documentation; preserved historical records, migrations, tests and runtime behavior. The focused Maven dependency tree succeeded with no MongoDB or Testcontainers dependency matches. No full regression rerun was needed for documentation-only edits.
+
+Railway production initially listed obsolete variables and pending changes. A subsequent external change removed MONGODB_URI and MONGODB_DATABASE; connected-management reads confirm both absent while required variable names remain. This agent performed no Railway mutation. Deployment c014d080-c6a7-4f8d-97af-d64f26b57837 reached SUCCESS, established Supabase PostgreSQL 17.11 connectivity and validated both migrations at schema v2. The live menu returned HTTP 200 with 119 items using verified TLS through the existing Railway CNAME to avoid local DNS filtering.
+
+Atlas deletion remains incomplete: saved credentials for the candidate LordGainsBorough database failed authentication (code 8000), so project/ownership and collection inventory could not be verified. No database or collection was dropped. [Final cleanup report](FINAL_MONGODB_CLEANUP.md) records findings, exact health verification and manual Atlas deletion steps. No cluster/project deletion, Supabase mutation or application behavior change was performed.

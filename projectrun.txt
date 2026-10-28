@@ -22,8 +22,12 @@ Local URLs:
 
 Environment variables used by the backend:
 
-  MONGODB_URI
-  MONGODB_DATABASE
+  DB_HOST
+  DB_PORT (optional; defaults to 5432)
+  DB_NAME (defaults to postgres)
+  DB_USER
+  DB_PASSWORD
+  DB_SSL_MODE (optional; defaults to prefer; use require for Supabase)
   MAIL_USERNAME
   MAIL_PASSWORD
   JWT_SECRET
@@ -31,5 +35,5 @@ Environment variables used by the backend:
 
 To check that they exist without printing secret values:
 
-  'MONGODB_URI','MONGODB_DATABASE','MAIL_USERNAME','MAIL_PASSWORD','JWT_SECRET','ABUSE_IP_HASH_SECRET' |
+  'DB_HOST','DB_NAME','DB_USER','DB_PASSWORD','MAIL_USERNAME','MAIL_PASSWORD','JWT_SECRET','ABUSE_IP_HASH_SECRET' |
     ForEach-Object { "$_ = " + [bool][Environment]::GetEnvironmentVariable($_, 'User') }
