@@ -42,8 +42,8 @@ test.describe('Homepage Loading, Instant Visibility & Performance Tests', () => 
     await expect(page.getByRole('heading', { name: 'Address', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Private Dining', exact: true })).toBeVisible();
 
-    // Verify default featured dish is visible in SSR HTML
-    await expect(page.getByRole('heading', { name: 'Signature Wagyu Ribeye' })).toBeVisible();
+    // Verify fictional Wagyu Ribeye placeholder is not displayed
+    await expect(page.getByRole('heading', { name: 'Signature Wagyu Ribeye' })).toHaveCount(0);
 
     await context.close();
   });
