@@ -45,6 +45,48 @@
   border-radius: 50%;
 }
 
+@keyframes floatOrb {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.12;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.18;
+  }
+}
+
+@keyframes heroFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scrollPulse {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translateY(10px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .decorationLeft .floatingOrb {
+    animation: floatOrb 10s ease-in-out infinite;
+  }
+  .decorationRight .floatingOrb {
+    animation: floatOrb 12s ease-in-out infinite reverse;
+  }
+}
+
 /* Hero Section */
 .hero {
   position: relative;
@@ -96,6 +138,33 @@
   max-width: 1000px;
   width: 100%;
   box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .heroContent {
+    animation: heroFadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+.scrollIndicator {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.scrollLine {
+  width: 1px;
+  height: 60px;
+  background: linear-gradient(to bottom, var(--secondary), transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) and (min-width: 769px) {
+  .scrollLine {
+    animation: scrollPulse 2s ease-in-out infinite;
+  }
 }
 
 .heroEyebrow {
@@ -257,6 +326,11 @@
   margin-top: 2rem;
   width: 100%;
   min-width: 0;
+  transition: opacity 0.25s ease;
+}
+
+.featuredTransitioning {
+  opacity: 0.5;
 }
 
 .featuredImage {
