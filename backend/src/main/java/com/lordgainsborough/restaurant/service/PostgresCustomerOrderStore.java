@@ -51,6 +51,15 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
         }));
     }
 
+    @Override
+    public Optional<CustomerOrder> findByIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) return Optional.empty();
+        return transactions.execute(status -> orders.findWithItemsByIdempotencyKey(idempotencyKey.trim()).map(entity -> {
+            entity.getMessages().size();
+            return mapper.fromJpa(entity);
+        }));
+    }
+
     public CustomerOrder create(CustomerOrder order, Consumer<CustomerOrder> afterCommit) {
         return transactions.execute(status -> {
             JpaCustomerOrder entity = mapper.toJpa(order);

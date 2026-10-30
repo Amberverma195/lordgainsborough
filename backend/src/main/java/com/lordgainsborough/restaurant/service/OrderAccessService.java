@@ -35,6 +35,20 @@ public class OrderAccessService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(token);
     }
 
+    public String deriveTrackingToken(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return generateTrackingToken();
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update("LGB_ORDER_TRACKING_SALT:".getBytes(StandardCharsets.UTF_8));
+            byte[] derived = digest.digest(idempotencyKey.trim().getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(derived);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
+    }
+
     public String hashTrackingToken(String trackingToken) {
         if (trackingToken == null || trackingToken.isBlank()) {
             return "";

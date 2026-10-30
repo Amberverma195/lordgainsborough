@@ -80,6 +80,9 @@ public class JpaCustomerOrder {
     @Column(name = "tracking_token_hash", length = 255)
     private String trackingTokenHash;
 
+    @Column(name = "idempotency_key", length = 128)
+    private String idempotencyKey;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderColumn(name = "item_index", nullable = false)
     private List<JpaOrderItem> items = new ArrayList<>();
@@ -203,6 +206,9 @@ public class JpaCustomerOrder {
 
     public String getTrackingTokenHash() { return trackingTokenHash; }
     public void setTrackingTokenHash(String trackingTokenHash) { this.trackingTokenHash = trackingTokenHash; }
+
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 
     public List<JpaOrderItem> getItems() { return items; }
     public void setItems(List<JpaOrderItem> items) {

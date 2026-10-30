@@ -77,6 +77,7 @@ export interface CustomerOrder {
   pickedUpAt?: string | null;
   noShowAt?: string | null;
   reviewed?: boolean;
+  idempotencyKey?: string | null;
   customerOrderCount?: number;
   customerNoShowCount?: number;
 }
@@ -194,3 +195,49 @@ export function sortOrders(orders: CustomerOrder[]): CustomerOrder[] {
     return right - left;
   });
 }
+
+export const ORDER_IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+export const CHECKOUT_IDEMPOTENCY_KEY_STORAGE = 'checkoutIdempotencyKey';
+export const CHECKOUT_CART_FINGERPRINT_STORAGE = 'checkoutCartFingerprint';
+
+export function getCartFingerprint(items: { id?: string; menuItemId?: string; quantity: number }[]): string {
+  return items
+    .map(i => `${i.id || i.menuItemId || ''}:${i.quantity}`)
+    .sort()
+    .join('|');
+}
+
+export function getOrCreateCheckoutIdempotencyKey(cart: { id?: string; menuItemId?: string; quantity: number }[]): string {
+  if (typeof sessionStorage === 'undefined') {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `lgb-${Date.now()}`;
+  }
+  try {
+    const currentFingerprint = getCartFingerprint(cart);
+    const savedFingerprint = sessionStorage.getItem(CHECKOUT_CART_FINGERPRINT_STORAGE);
+    const savedKey = sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE);
+
+    if (savedKey && savedFingerprint === currentFingerprint) {
+      return savedKey;
+    }
+
+    const newKey = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `lgb-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    sessionStorage.setItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE, newKey);
+    sessionStorage.setItem(CHECKOUT_CART_FINGERPRINT_STORAGE, currentFingerprint);
+    return newKey;
+  } catch {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `lgb-${Date.now()}`;
+  }
+}
+
+export function clearCheckoutIdempotencyKey(): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE);
+    sessionStorage.removeItem(CHECKOUT_CART_FINGERPRINT_STORAGE);
+  } catch {
+    // ignore
+  }
+}
+

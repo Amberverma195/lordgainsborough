@@ -10,6 +10,7 @@ import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.CustomerOrderStore;
 import com.lordgainsborough.restaurant.service.OrderMoney;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -40,7 +41,39 @@ public class OrderController {
     public OrderAccessService getOrderAccessService() { return orderAccessService; }
 
     @PostMapping
-    public ResponseEntity<?> createOrder(@RequestBody CustomerOrder order) {
+    public ResponseEntity<?> createOrder(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKeyHeader,
+            @RequestBody CustomerOrder order) {
+        String idempotencyKey = idempotencyKeyHeader;
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            idempotencyKey = order.getIdempotencyKey();
+        }
+        if (idempotencyKey != null) {
+            idempotencyKey = idempotencyKey.trim();
+            if (idempotencyKey.isBlank()) {
+                idempotencyKey = null;
+            } else if (idempotencyKey.length() > 128) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "code", "INVALID_IDEMPOTENCY_KEY",
+                        "message", "Idempotency-Key must not exceed 128 characters."));
+            }
+        }
+
+        if (idempotencyKey != null) {
+            Optional<CustomerOrder> existing = orderStore.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                CustomerOrder saved = existing.get();
+                if (!matchesExistingOrder(order, saved)) {
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                            "code", "IDEMPOTENT_PAYLOAD_MISMATCH",
+                            "message", "An order already exists for this idempotency key with different details."));
+                }
+                applyReviewState(saved);
+                String trackingToken = orderAccessService.deriveTrackingToken(idempotencyKey);
+                return ResponseEntity.ok(new OrderCreationResponse(OrderStatusResponse.from(saved), trackingToken));
+            }
+        }
+
         if (order.getItems() == null || order.getItems().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of(
                     "code", "EMPTY_CART",
@@ -81,6 +114,7 @@ public class OrderController {
         }
 
         order.setId(null);
+        order.setIdempotencyKey(idempotencyKey);
         order.setStatus("NEW");
         order.setAverageReadyMinutes(normalizeReadyMinutes(orderStore.settings().getDefaultReadyMinutes()));
         order.setCreatedAt(LocalDateTime.now());
@@ -98,11 +132,35 @@ public class OrderController {
             return ResponseEntity.badRequest().body(cartChanged());
         }
 
-        String trackingToken = orderAccessService.generateTrackingToken();
+        String trackingToken = idempotencyKey != null
+                ? orderAccessService.deriveTrackingToken(idempotencyKey)
+                : orderAccessService.generateTrackingToken();
         order.setTrackingTokenHash(orderAccessService.hashTrackingToken(trackingToken));
 
-        CustomerOrder saved = orderStore.create(order, this::notifyCreated);
+        CustomerOrder saved;
+        try {
+            saved = orderStore.create(order, this::notifyCreated);
+        } catch (DataIntegrityViolationException duplicate) {
+            if (idempotencyKey != null) {
+                Optional<CustomerOrder> existing = orderStore.findByIdempotencyKey(idempotencyKey);
+                if (existing.isPresent()) {
+                    CustomerOrder existingOrder = existing.get();
+                    if (!matchesExistingOrder(order, existingOrder)) {
+                        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                                "code", "IDEMPOTENT_PAYLOAD_MISMATCH",
+                                "message", "An order already exists for this idempotency key with different details."));
+                    }
+                    applyReviewState(existingOrder);
+                    return ResponseEntity.ok(new OrderCreationResponse(OrderStatusResponse.from(existingOrder), trackingToken));
+                }
+            }
+            throw duplicate;
+        }
         return ResponseEntity.ok(new OrderCreationResponse(OrderStatusResponse.from(saved), trackingToken));
+    }
+
+    public ResponseEntity<?> createOrder(CustomerOrder order) {
+        return createOrder(null, order);
     }
 
     @GetMapping("/{id}")
@@ -238,5 +296,47 @@ public class OrderController {
 
     private void applyReviewState(CustomerOrder order) {
         order.setReviewed(order.isReviewed() || orderStore.reviewExists(order.getId()));
+    }
+
+    private boolean matchesExistingOrder(CustomerOrder incoming, CustomerOrder existing) {
+        if (incoming == null || existing == null) {
+            return false;
+        }
+        String incomingEmail = incoming.getCustomerEmail();
+        String existingEmail = existing.getCustomerEmail();
+        if (incomingEmail != null && existingEmail != null
+                && !incomingEmail.trim().equalsIgnoreCase(existingEmail.trim())) {
+            return false;
+        }
+        String incomingPhone = normalizePhoneDigits(incoming.getCustomerPhone());
+        String existingPhone = normalizePhoneDigits(existing.getCustomerPhone());
+        if (!incomingPhone.isBlank() && !existingPhone.isBlank()
+                && !incomingPhone.equals(existingPhone)) {
+            return false;
+        }
+        if (incoming.getItems() != null && existing.getItems() != null) {
+            if (incoming.getItems().size() != existing.getItems().size()) {
+                return false;
+            }
+            for (int i = 0; i < incoming.getItems().size(); i++) {
+                CustomerOrder.OrderItem inItem = incoming.getItems().get(i);
+                CustomerOrder.OrderItem exItem = existing.getItems().get(i);
+                if (inItem == null || exItem == null) return false;
+                if (inItem.getQuantity() != exItem.getQuantity()) return false;
+                if (inItem.getMenuItemId() != null && exItem.getMenuItemId() != null) {
+                    if (!inItem.getMenuItemId().equals(exItem.getMenuItemId())) return false;
+                } else if (inItem.getName() != null && exItem.getName() != null) {
+                    if (!inItem.getName().trim().equalsIgnoreCase(exItem.getName().trim())) return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static String normalizePhoneDigits(String phone) {
+        if (phone == null) return "";
+        String digits = phone.replaceAll("\\D", "");
+        if (digits.startsWith("1") && digits.length() > 10) digits = digits.substring(1);
+        return digits.length() > 10 ? digits.substring(0, 10) : digits;
     }
 }

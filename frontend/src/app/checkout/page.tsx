@@ -13,6 +13,9 @@ import {
   formatPickupDateLabel,
   getTodayString,
   storeTrackingToken,
+  getOrCreateCheckoutIdempotencyKey,
+  clearCheckoutIdempotencyKey,
+  ORDER_IDEMPOTENCY_KEY_HEADER,
 } from '@/lib/orders';
 import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
 import {
@@ -131,6 +134,7 @@ export default function CheckoutPage() {
         return;
       }
 
+      const idempotencyKey = getOrCreateCheckoutIdempotencyKey(cart);
       const tax = cartTotal * settings.taxRate;
       const payload = {
         customerName: `${profile.firstName.trim()} ${profile.lastName.trim()}`.trim(),
@@ -140,6 +144,7 @@ export default function CheckoutPage() {
         pickupTime: formData.pickupTime,
         specialInstructions: formData.specialInstructions.trim(),
         averageReadyMinutes: settings.defaultReadyMinutes,
+        idempotencyKey,
         items: cart.map(item => ({
           menuItemId: item.id,
           name: item.name,
@@ -154,7 +159,10 @@ export default function CheckoutPage() {
 
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          [ORDER_IDEMPOTENCY_KEY_HEADER]: idempotencyKey,
+        },
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => null);
@@ -169,6 +177,14 @@ export default function CheckoutPage() {
       if (res.status === 403) {
         setPickupDisabledForUser(true);
         setError(typeof data?.message === 'string' ? data.message : PICKUP_DISABLED_NO_SHOW_MESSAGE);
+        return;
+      }
+
+      if (res.status === 409) {
+        clearCheckoutIdempotencyKey();
+        setError(typeof data?.message === 'string'
+          ? data.message
+          : 'An order conflict occurred. Please review your cart and try again.');
         return;
       }
 
@@ -188,6 +204,7 @@ export default function CheckoutPage() {
         storeTrackingToken(order.id, data.trackingToken);
       }
 
+      clearCheckoutIdempotencyKey();
       clearCart();
       sessionStorage.removeItem('pickupDate');
       sessionStorage.removeItem('pickupTime');

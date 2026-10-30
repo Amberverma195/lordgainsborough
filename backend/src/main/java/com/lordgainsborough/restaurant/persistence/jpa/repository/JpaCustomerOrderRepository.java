@@ -73,4 +73,7 @@ public interface JpaCustomerOrderRepository extends JpaRepository<JpaCustomerOrd
      */
     @EntityGraph(attributePaths = {"messages"})
     Optional<JpaCustomerOrder> findWithMessagesById(String id);
+
+    @EntityGraph(attributePaths = {"items"})
+    Optional<JpaCustomerOrder> findWithItemsByIdempotencyKey(String idempotencyKey);
 }

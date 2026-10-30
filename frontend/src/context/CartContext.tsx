@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MenuItem } from '@/lib/mockData';
-import { API_BASE } from '@/lib/orders';
+import { API_BASE, clearCheckoutIdempotencyKey } from '@/lib/orders';
 
 export interface CartItem extends MenuItem {
   quantity: number;
@@ -311,6 +311,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearCart = () => {
     clearPendingServerSave();
+    clearCheckoutIdempotencyKey();
     cartRef.current = [];
     saveLocalCart([]);
     setCart([]);

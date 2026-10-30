@@ -30,6 +30,7 @@ public class CustomerOrder {
     private boolean reviewed;
     @JsonIgnore
     private String trackingTokenHash;
+    private String idempotencyKey;
     private int customerOrderCount;
     private int customerNoShowCount;
 
@@ -95,6 +96,9 @@ public class CustomerOrder {
 
     public String getTrackingTokenHash() { return trackingTokenHash; }
     public void setTrackingTokenHash(String trackingTokenHash) { this.trackingTokenHash = trackingTokenHash; }
+
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 
     public int getCustomerOrderCount() { return customerOrderCount; }
     public void setCustomerOrderCount(int customerOrderCount) { this.customerOrderCount = customerOrderCount; }

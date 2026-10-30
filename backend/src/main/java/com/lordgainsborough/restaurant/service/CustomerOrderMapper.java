@@ -22,6 +22,7 @@ public final class CustomerOrderMapper {
         target.setPickedUpAt(source.getPickedUpAt());
         target.setNoShowAt(source.getNoShowAt());
         target.setTrackingTokenHash(source.getTrackingTokenHash());
+        target.setIdempotencyKey(source.getIdempotencyKey());
         target.setReviewed(source.isReviewed());
         target.setSubtotal(OrderMoney.decimal(source.getSubtotal()));
         target.setTax(OrderMoney.decimal(source.getTax()));
@@ -61,6 +62,7 @@ public final class CustomerOrderMapper {
         target.setPickedUpAt(source.getPickedUpAt());
         target.setNoShowAt(source.getNoShowAt());
         target.setTrackingTokenHash(source.getTrackingTokenHash());
+        target.setIdempotencyKey(source.getIdempotencyKey());
         target.setReviewed(source.isReviewed());
         target.setSubtotal(source.getSubtotal().doubleValue());
         target.setTax(source.getTax().doubleValue());

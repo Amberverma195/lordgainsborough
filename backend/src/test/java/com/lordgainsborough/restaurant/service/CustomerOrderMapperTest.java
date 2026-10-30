@@ -22,6 +22,7 @@ class CustomerOrderMapperTest {
         var now=LocalDateTime.of(2026,10,26,18,0); order.setCreatedAt(now); order.setAcceptedAt(now.plusMinutes(1));
         order.setReadyAt(now.plusMinutes(2)); order.setPickedUpAt(now.plusMinutes(3)); order.setNoShowAt(now.plusMinutes(4));
         order.setReviewed(true); order.setTrackingTokenHash("private hash");
+        order.setIdempotencyKey("idemp-key-12345");
         var item=new CustomerOrder.OrderItem(); item.setMenuItemId("menu"); item.setName("Dish"); item.setQuantity(1);
         item.setUnitPrice(1); item.setTotal(1); item.setNotes("notes"); order.getItems().add(item);
         var message=new CustomerOrder.OrderMessage(); message.setId("message"); message.setSenderRole("CUSTOMER");

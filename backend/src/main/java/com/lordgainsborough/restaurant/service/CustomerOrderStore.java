@@ -10,6 +10,7 @@ import java.util.function.Predicate;
 /** PG-017 storage boundary. Related reads must belong to the same dataset as orders. */
 public interface CustomerOrderStore {
     Optional<CustomerOrder> findById(String id);
+    Optional<CustomerOrder> findByIdempotencyKey(String idempotencyKey);
     CustomerOrder create(CustomerOrder order, Consumer<CustomerOrder> afterCommit);
     Optional<CustomerOrder.OrderMessage> appendMessage(String id, Predicate<CustomerOrder> authorized,
             CustomerOrder.OrderMessage message, Consumer<CustomerOrder> afterCommit);
