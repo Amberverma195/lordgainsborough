@@ -1,5 +1,7 @@
 package com.lordgainsborough.restaurant.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -24,6 +26,7 @@ import java.util.Map;
 public class ResendEmailService {
 
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${resend.api-key:}")
     private String apiKey;
@@ -151,11 +154,11 @@ public class ResendEmailService {
             );
 
             if (!response.getStatusCode().is2xxSuccessful()) {
-                throw classifyHttpFailure(response.getStatusCode());
+                throw classifyHttpFailure(response.getStatusCode(), response.getBody());
             }
         } catch (HttpStatusCodeException e) {
-            // Never retain provider response body or cause: it may echo recipient or payload details.
-            throw classifyHttpFailure(e.getStatusCode());
+            // Never retain provider response body or cause in the exception or logs: it may echo recipient or payload details.
+            throw classifyHttpFailure(e.getStatusCode(), e.getResponseBodyAsString());
         } catch (ResourceAccessException e) {
             throw new AmbiguousEmailDeliveryException(
                     "Resend API timed out or connection failed; delivery status unknown", e);
@@ -172,11 +175,23 @@ public class ResendEmailService {
     }
 
     private RuntimeException classifyHttpFailure(HttpStatusCode status) {
+        return classifyHttpFailure(status, null);
+    }
+
+    private RuntimeException classifyHttpFailure(HttpStatusCode status, String responseBody) {
         int code = status.value();
         if (code == 401 || code == 403) {
             return new DefiniteEmailRejectionException("Resend authentication failed: HTTP_" + code);
         }
         if (code == 409) {
+            if (isConcurrentIdempotentRequest(responseBody)) {
+                return new AmbiguousEmailDeliveryException(
+                        "Resend concurrent in-flight request conflict: HTTP_409");
+            }
+            if (isInvalidIdempotentRequest(responseBody)) {
+                return new DefiniteEmailRejectionException(
+                        "Resend invalid idempotent request conflict: HTTP_409");
+            }
             return new DefiniteEmailRejectionException("Resend idempotency conflict: HTTP_409");
         }
         if (code == 408 || code == 429 || code >= 500) {
@@ -186,5 +201,36 @@ public class ResendEmailService {
             return new DefiniteEmailRejectionException("Resend rejected request: HTTP_" + code);
         }
         return new AmbiguousEmailDeliveryException("Resend provider request failed with category HTTP_" + code);
+    }
+
+    private boolean isConcurrentIdempotentRequest(String responseBody) {
+        return matchesErrorIdentifier(responseBody, "concurrent_idempotent_requests");
+    }
+
+    private boolean isInvalidIdempotentRequest(String responseBody) {
+        return matchesErrorIdentifier(responseBody, "invalid_idempotent_request");
+    }
+
+    private boolean matchesErrorIdentifier(String responseBody, String identifier) {
+        if (responseBody == null || responseBody.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            if (root != null) {
+                if (root.hasNonNull("name") && identifier.equalsIgnoreCase(root.get("name").asText().trim())) {
+                    return true;
+                }
+                if (root.hasNonNull("code") && identifier.equalsIgnoreCase(root.get("code").asText().trim())) {
+                    return true;
+                }
+                if (root.hasNonNull("error") && identifier.equalsIgnoreCase(root.get("error").asText().trim())) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            // Non-JSON response, fall through to substring match
+        }
+        return responseBody.contains(identifier);
     }
 }

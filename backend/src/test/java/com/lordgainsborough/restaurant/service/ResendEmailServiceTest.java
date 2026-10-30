@@ -221,7 +221,7 @@ class ResendEmailServiceTest {
     }
 
     @Test
-    void testHttp409IdempotencyConflict_ThrowsDefiniteEmailRejectionException() {
+    void testHttp409GenericConflict_ThrowsDefiniteEmailRejectionException() {
         mockServer.expect(requestTo(API_URL))
                 .andRespond(withStatus(HttpStatus.CONFLICT).body("{\"message\": \"Idempotency conflict\"}"));
 
@@ -229,6 +229,42 @@ class ResendEmailServiceTest {
                 resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-conflict"));
 
         assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertFalse(ex.getMessage().contains("user@example.com"));
+        assertNull(ex.getCause());
+        mockServer.verify();
+    }
+
+    @Test
+    void testHttp409ConcurrentIdempotentRequests_ThrowsAmbiguousEmailDeliveryException() {
+        mockServer.expect(requestTo(API_URL))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"name\": \"concurrent_idempotent_requests\", \"statusCode\": 409, \"message\": \"There is another request in progress with the same idempotency key.\"}"));
+
+        AmbiguousEmailDeliveryException ex = assertThrows(AmbiguousEmailDeliveryException.class, () ->
+                resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-concurrent"));
+
+        assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertTrue(ex.getMessage().contains("concurrent"));
+        assertFalse(ex.getMessage().contains("user@example.com"));
+        assertNull(ex.getCause());
+        mockServer.verify();
+    }
+
+    @Test
+    void testHttp409InvalidIdempotentRequest_ThrowsDefiniteEmailRejectionException() {
+        mockServer.expect(requestTo(API_URL))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"name\": \"invalid_idempotent_request\", \"statusCode\": 409, \"message\": \"This idempotency key has been used with this HTTP method and endpoint within the last 24 hours, but the request body was modified and doesn't match the original request.\"}"));
+
+        DefiniteEmailRejectionException ex = assertThrows(DefiniteEmailRejectionException.class, () ->
+                resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-invalid"));
+
+        assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertTrue(ex.getMessage().contains("invalid idempotent"));
+        assertFalse(ex.getMessage().contains("user@example.com"));
+        assertNull(ex.getCause());
         mockServer.verify();
     }
 
