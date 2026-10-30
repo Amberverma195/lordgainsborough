@@ -2,13 +2,12 @@
 
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight } from 'lucide-react';
+import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import styles from './reserve.module.css';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { API_BASE } from '@/lib/orders';
 
 export default function ReservePage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [formData, setFormData] = useState({
@@ -38,11 +37,8 @@ export default function ReservePage() {
       
       if (res.ok) {
         setSuccess(true);
-        setTimeout(() => {
-          router.push('/');
-        }, 3000);
       } else {
-        alert('Failed to submit reservation. Please try again.');
+        alert('Failed to submit reservation request. Please check your information and try again.');
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -58,16 +54,75 @@ export default function ReservePage() {
       <div className={styles.container}>
         <motion.div 
           className={`${styles.successCard} premium-card`}
-          initial={{ opacity: 0, scale: 0.9 }}
+          initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.35 }}
         >
-          <div className={styles.successIcon}>✨</div>
-          <h2>Reservation Confirmed</h2>
-          <p>We look forward to hosting you, {formData.name.split(' ')[0]}.</p>
-          <p className={styles.successDetails}>
-            Your table for {formData.partySize} is booked on {formData.date} at {formData.time}.
+          <div className={styles.successIconWrapper}>
+            <CheckCircle2 size={56} color="var(--secondary)" />
+          </div>
+          <h2>Reservation Request Received</h2>
+          <div className={styles.statusBadge}>
+            Status: Pending Confirmation
+          </div>
+          <p className={styles.successGreeting}>
+            Thank you, {formData.name.split(' ')[0]}. We have received your booking request.
           </p>
-          <p className={styles.redirectText}>Returning to home page...</p>
+
+          <div className={styles.successDetails}>
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Date &amp; Time:</span>
+              <strong className={styles.detailValue}>{formData.date} at {formData.time}</strong>
+            </div>
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Party Size:</span>
+              <strong className={styles.detailValue}>{formData.partySize} {formData.partySize === 1 ? 'Guest' : 'Guests'}</strong>
+            </div>
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Contact:</span>
+              <strong className={styles.detailValue}>{formData.phone} &bull; {formData.email}</strong>
+            </div>
+            {formData.specialRequests && (
+              <div className={styles.detailRow}>
+                <span className={styles.detailLabel}>Special Requests:</span>
+                <strong className={styles.detailValue}>{formData.specialRequests}</strong>
+              </div>
+            )}
+          </div>
+
+          <div className={styles.noticeBox}>
+            <AlertCircle size={22} color="var(--secondary)" className={styles.noticeIcon} />
+            <div className={styles.noticeContent}>
+              <p className={styles.noticeTitle}>Table Availability Review in Progress</p>
+              <p className={styles.noticeText}>
+                Your reservation is <strong>not yet confirmed</strong>. Our host team reviews all requests against dining room capacity. We will contact you at <strong>{formData.email}</strong> or <strong>{formData.phone}</strong> once your table is confirmed.
+              </p>
+            </div>
+          </div>
+
+          <div className={styles.successActions}>
+            <Link href="/" className={styles.homeBtn}>
+              Return to Home
+            </Link>
+            <button
+              type="button"
+              className={styles.newRequestBtn}
+              onClick={() => {
+                setSuccess(false);
+                setFormData({
+                  name: '',
+                  email: '',
+                  phone: '',
+                  date: '',
+                  time: '',
+                  partySize: 2,
+                  specialRequests: ''
+                });
+              }}
+            >
+              Submit Another Request
+            </button>
+          </div>
         </motion.div>
       </div>
     );
@@ -126,7 +181,7 @@ export default function ReservePage() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <h1>Reserve a Table</h1>
+        <h1>Request a Table</h1>
         <p>Experience culinary excellence at Lord Gainsborough.</p>
       </motion.div>
 
@@ -240,8 +295,15 @@ export default function ReservePage() {
             </div>
           </div>
 
+          <div className={styles.formNotice}>
+            <AlertCircle size={18} color="var(--secondary)" />
+            <span>
+              Reservations are submitted as requests with <em>Pending</em> status. Our host team will review dining room capacity and confirm your table.
+            </span>
+          </div>
+
           <button type="submit" className={styles.submitBtn} disabled={loading || !formData.date || !formData.time || !formData.name || !formData.phone}>
-            {loading ? 'Confirming...' : 'Confirm Reservation'} <ArrowRight size={18} />
+            {loading ? 'Submitting Request...' : 'Submit Reservation Request'} <ArrowRight size={18} />
           </button>
         </form>
       </motion.div>
