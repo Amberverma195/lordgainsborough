@@ -4,9 +4,9 @@ import React, { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { UserPlus, Mail, Lock, User, ArrowRight, Phone } from 'lucide-react';
+import { UserPlus, Mail, Lock, User, ArrowRight, Phone, Eye, EyeOff } from 'lucide-react';
 import { formatPhoneInput, isValidPhoneNumber } from '@/lib/phone';
-import { isValidEmail } from '@/lib/email';
+import { isValidEmail, suggestEmailDomainTypo } from '@/lib/email';
 import {
   validatePassword,
   passwordsMatch,
@@ -33,6 +33,10 @@ export default function SignupPage() {
     password: '',
     confirmPassword: '',
   });
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [emailTypoSuggestion, setEmailTypoSuggestion] = useState<string | null>(null);
+  const [emailConfirmedAsEntered, setEmailConfirmedAsEntered] = useState<string | null>(null);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -74,6 +78,14 @@ export default function SignupPage() {
     if (!isValidEmail(formData.email)) {
       newErrors.email = 'Please enter a valid email address.';
       if (!firstInvalidRef) firstInvalidRef = emailRef;
+    } else {
+      const cleanEmail = formData.email.trim().toLowerCase();
+      const typo = suggestEmailDomainTypo(formData.email);
+      if (typo && typo.toLowerCase() !== cleanEmail && emailConfirmedAsEntered !== cleanEmail) {
+        setEmailTypoSuggestion(typo);
+        newErrors.email = `Did you mean ${typo}? Use suggestion or confirm your email below.`;
+        if (!firstInvalidRef) firstInvalidRef = emailRef;
+      }
     }
 
     const passwordValidation = validatePassword(formData.password);
@@ -172,6 +184,17 @@ export default function SignupPage() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFieldErrors(prev => ({ ...prev, [name]: '' }));
+    if (name === 'email') {
+      const typo = suggestEmailDomainTypo(value);
+      if (typo && typo.toLowerCase() !== value.trim().toLowerCase()) {
+        setEmailTypoSuggestion(typo);
+      } else {
+        setEmailTypoSuggestion(null);
+      }
+      if (emailConfirmedAsEntered && emailConfirmedAsEntered !== value.trim().toLowerCase()) {
+        setEmailConfirmedAsEntered(null);
+      }
+    }
     setFormData(prev => {
       if (name === 'password' || name === 'confirmPassword') {
         return { ...prev, [name]: value.slice(0, 128) };
@@ -297,27 +320,73 @@ export default function SignupPage() {
                 {fieldErrors.email}
               </span>
             )}
+            {emailTypoSuggestion && emailConfirmedAsEntered !== formData.email.trim().toLowerCase() && (
+              <div className={styles.emailSuggestion} role="alert">
+                <div className={styles.suggestionPrompt}>
+                  <span>Did you mean</span>
+                  <button
+                    type="button"
+                    className={styles.suggestionLink}
+                    onClick={() => {
+                      const corrected = emailTypoSuggestion;
+                      setFormData(prev => ({ ...prev, email: corrected }));
+                      setEmailTypoSuggestion(null);
+                      setEmailConfirmedAsEntered(corrected.toLowerCase());
+                      setFieldErrors(prev => ({ ...prev, email: '' }));
+                    }}
+                  >
+                    {emailTypoSuggestion}
+                  </button>
+                  <span>?</span>
+                </div>
+                <div className={styles.suggestionActions}>
+                  <button
+                    type="button"
+                    className={styles.confirmEmailAsEnteredBtn}
+                    onClick={() => {
+                      setEmailConfirmedAsEntered(formData.email.trim().toLowerCase());
+                      setEmailTypoSuggestion(null);
+                      setFieldErrors(prev => ({ ...prev, email: '' }));
+                    }}
+                  >
+                    Use my email as entered
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className={styles.passwordSection}>
             <div className={styles.inputRow}>
               <div className={styles.inputGroup}>
                 <label htmlFor="password-input"><Lock size={16} /> Password</label>
-                <input
-                  id="password-input"
-                  ref={passwordRef}
-                  name="password"
-                  type="password"
-                  placeholder="Enter Password"
-                  value={formData.password}
-                  onChange={handleChange}
-                  maxLength={128}
-                  autoComplete="new-password"
-                  aria-invalid={!!fieldErrors.password}
-                  aria-describedby={fieldErrors.password ? 'password-error' : undefined}
-                  className={fieldErrors.password ? styles.inputInvalid : undefined}
-                  disabled={loading}
-                />
+                <div className={styles.passwordWrapper}>
+                  <input
+                    id="password-input"
+                    ref={passwordRef}
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Enter Password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    aria-invalid={!!fieldErrors.password}
+                    aria-describedby={fieldErrors.password ? 'password-error' : undefined}
+                    className={`${styles.passwordInput} ${fieldErrors.password ? styles.inputInvalid : ''}`}
+                    disabled={loading}
+                  />
+                  <button
+                    type="button"
+                    className={styles.passwordToggleBtn}
+                    onClick={() => setShowPassword(prev => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    disabled={loading}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
                 {fieldErrors.password && (
                   <span id="password-error" className={styles.fieldError}>
                     {fieldErrors.password}
@@ -327,21 +396,33 @@ export default function SignupPage() {
 
               <div className={styles.inputGroup}>
                 <label htmlFor="confirm-password-input"><Lock size={16} /> Confirm</label>
-                <input
-                  id="confirm-password-input"
-                  ref={confirmPasswordRef}
-                  name="confirmPassword"
-                  type="password"
-                  placeholder="Re-enter password"
-                  value={formData.confirmPassword}
-                  onChange={handleChange}
-                  maxLength={128}
-                  autoComplete="new-password"
-                  aria-invalid={!!fieldErrors.confirmPassword}
-                  aria-describedby={fieldErrors.confirmPassword ? 'confirm-error' : undefined}
-                  className={fieldErrors.confirmPassword ? styles.inputInvalid : undefined}
-                  disabled={loading}
-                />
+                <div className={styles.passwordWrapper}>
+                  <input
+                    id="confirm-password-input"
+                    ref={confirmPasswordRef}
+                    name="confirmPassword"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="Re-enter password"
+                    value={formData.confirmPassword}
+                    onChange={handleChange}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    aria-invalid={!!fieldErrors.confirmPassword}
+                    aria-describedby={fieldErrors.confirmPassword ? 'confirm-error' : undefined}
+                    className={`${styles.passwordInput} ${fieldErrors.confirmPassword ? styles.inputInvalid : ''}`}
+                    disabled={loading}
+                  />
+                  <button
+                    type="button"
+                    className={styles.passwordToggleBtn}
+                    onClick={() => setShowConfirmPassword(prev => !prev)}
+                    aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showConfirmPassword}
+                    disabled={loading}
+                  >
+                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
                 {fieldErrors.confirmPassword && (
                   <span id="confirm-error" className={styles.fieldError}>
                     {fieldErrors.confirmPassword}

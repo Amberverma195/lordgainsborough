@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ShieldCheck, ArrowRight, Mail } from 'lucide-react';
+import { ShieldCheck, ArrowRight, Mail, CheckCircle2, X } from 'lucide-react';
 import styles from './verify.module.css';
 import { persistAuth } from '@/lib/auth';
 import { API_BASE } from '@/lib/orders';
@@ -35,6 +35,11 @@ function maskEmail(email: string): string {
   return `${visible}${'*'.repeat(Math.max(local.length - 2, 1))}@${domain}`;
 }
 
+interface ToastState {
+  id: string;
+  message: string;
+}
+
 export default function SignupVerifyPage() {
   const router = useRouter();
   const [pendingSignup, setPendingSignup] = useState<PendingSignupCredentials | null>(null);
@@ -44,14 +49,41 @@ export default function SignupVerifyPage() {
   const [resending, setResending] = useState(false);
   const [syncing, setSyncing] = useState(true);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
-  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const crossTabRef = useRef<ReturnType<typeof subscribeSignupOtpCrossTab> | null>(null);
   const syncSeqRef = useRef(0);
   const challengeRef = useRef<SignupOtpChallengeState | null>(null);
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
+    setToast({ id: String(Date.now()), message });
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 4000);
+  }, []);
+
+  const dismissToast = useCallback(() => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToast(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   const publishChallenge = useCallback((
     state: SignupOtpChallengeState,
@@ -72,12 +104,6 @@ export default function SignupVerifyPage() {
     challengeRef.current = next;
     setChallenge(next);
     saveSignupOtpChallengeState(next);
-    setCooldownSeconds(cooldownSecondsFromServerClocks(
-      next.serverTime,
-      next.nextResendAt,
-      Date.now(),
-      next.receivedAtMs
-    ));
     if (broadcast) {
       publishChallenge(next, 'challenge-updated');
     }
@@ -101,12 +127,6 @@ export default function SignupVerifyPage() {
       challengeRef.current = next;
       setChallenge(next);
       saveSignupOtpChallengeState(next);
-      setCooldownSeconds(cooldownSecondsFromServerClocks(
-        next.serverTime,
-        next.nextResendAt,
-        Date.now(),
-        next.receivedAtMs
-      ));
       publishChallenge(next);
 
       if (body.code === 'OTP_DELIVERY_UNKNOWN') {
@@ -116,11 +136,9 @@ export default function SignupVerifyPage() {
         );
       } else if (body.code === 'OTP_CHALLENGE_EXPIRED') {
         setError(body.message || 'This verification session has expired. Please start signup again.');
-        setSuccess('');
         setInfoMessage('');
       } else if (body.code === 'OTP_RESEND_LIMIT_REACHED') {
         setError("You've reached the resend limit. Please restart verification later.");
-        setSuccess('');
         setInfoMessage('');
       }
     } catch {
@@ -129,12 +147,6 @@ export default function SignupVerifyPage() {
         if (current) {
           challengeRef.current = current;
           setChallenge(current);
-          setCooldownSeconds(cooldownSecondsFromServerClocks(
-            current.serverTime,
-            current.nextResendAt,
-            Date.now(),
-            current.receivedAtMs
-          ));
         }
       }
     } finally {
@@ -148,7 +160,6 @@ export default function SignupVerifyPage() {
     const handle = subscribeSignupOtpCrossTab((payload) => {
       if (payload.type === 'verified') {
         setError('');
-        setSuccess('This email was verified in another tab. Continuing…');
         clearAllSignupSession();
         router.replace('/profile');
         return;
@@ -165,12 +176,6 @@ export default function SignupVerifyPage() {
       challengeRef.current = next;
       setChallenge(next);
       saveSignupOtpChallengeState(next);
-      setCooldownSeconds(cooldownSecondsFromServerClocks(
-        next.serverTime,
-        next.nextResendAt,
-        Date.now(),
-        next.receivedAtMs
-      ));
       if (next.code === 'OTP_CHALLENGE_EXPIRED') {
         setError(next.message || 'This verification session has expired. Please start signup again.');
       } else if (next.code === 'OTP_RESEND_LIMIT_REACHED') {
@@ -201,12 +206,6 @@ export default function SignupVerifyPage() {
       if (cached) {
         challengeRef.current = cached;
         setChallenge(cached);
-        setCooldownSeconds(cooldownSecondsFromServerClocks(
-          cached.serverTime,
-          cached.nextResendAt,
-          Date.now(),
-          cached.receivedAtMs
-        ));
       }
       void syncChallengeStatus(stored);
     }, 0);
@@ -227,16 +226,6 @@ export default function SignupVerifyPage() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (!challenge) return;
-    setCooldownSeconds(cooldownSecondsFromServerClocks(
-      challenge.serverTime,
-      challenge.nextResendAt,
-      nowTick,
-      challenge.receivedAtMs
-    ));
-  }, [challenge, nowTick]);
 
   const handleOtpChange = (index: number, value: string) => {
     const digit = value.replace(/\D/g, '').slice(-1);
@@ -281,7 +270,6 @@ export default function SignupVerifyPage() {
 
     setResending(true);
     setError('');
-    setSuccess('');
     setInfoMessage('');
 
     const idempotencyKey = crypto.randomUUID();
@@ -315,8 +303,10 @@ export default function SignupVerifyPage() {
             body.message ||
             "We couldn't confirm whether the code was sent. Please check your inbox and spam folder. You can request another code when the timer ends."
           );
+        } else if (body.code === 'OTP_ALREADY_ACTIVE') {
+          setInfoMessage(body.message || 'A code was already sent recently. Please check your inbox.');
         } else {
-          setSuccess(body.message || 'A verification code has been sent.');
+          showToast('A new verification code has been sent to your email.');
         }
         setOtp(['', '', '', '', '', '']);
         inputRefs.current[0]?.focus();
@@ -357,7 +347,6 @@ export default function SignupVerifyPage() {
 
     setLoading(true);
     setError('');
-    setSuccess('');
     setInfoMessage('');
 
     try {
@@ -416,6 +405,15 @@ export default function SignupVerifyPage() {
   const challengeExpired = isChallengeExpiredState(challenge, nowTick);
   const canCreateAccount = otp.every(Boolean);
 
+  const cooldownSeconds = challenge
+    ? cooldownSecondsFromServerClocks(
+        challenge.serverTime,
+        challenge.nextResendAt,
+        nowTick,
+        challenge.receivedAtMs
+      )
+    : 0;
+
   const resendDisabled =
     resending || loading || cooldownSeconds > 0 || exhausted || challengeExpired;
 
@@ -427,11 +425,32 @@ export default function SignupVerifyPage() {
   } else if (exhausted) {
     resendLabel = 'Resend limit reached';
   } else if (cooldownSeconds > 0) {
-    resendLabel = `Resend Code (${cooldownSeconds}s)`;
+    resendLabel = `Resend available in ${cooldownSeconds}s`;
   }
 
   return (
     <div className={styles.container}>
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={styles.toast}
+        >
+          <div className={styles.toastIconWrapper}>
+            <CheckCircle2 size={18} />
+          </div>
+          <span className={styles.toastMessage}>{toast.message}</span>
+          <button
+            type="button"
+            className={styles.toastCloseBtn}
+            onClick={dismissToast}
+            aria-label="Dismiss notification"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       <motion.div
         className={`${styles.verifyCard} premium-card`}
         initial={{ opacity: 0, y: 20 }}
@@ -450,13 +469,12 @@ export default function SignupVerifyPage() {
             </span>
           </p>
           <p className={styles.hint}>
-            It may take up to 2 minutes to arrive. Check spam and promotions folders too.
+            Your initial code was sent. It may take up to 2 minutes to arrive. Check spam and promotions folders too.
           </p>
         </div>
 
         {error && <div className={styles.errorBanner}>{error}</div>}
         {infoMessage && <div className={styles.infoBanner}>{infoMessage}</div>}
-        {success && <div className={styles.successBanner}>{success}</div>}
         {challengeExpired && (
           <div className={styles.errorBanner}>
             This verification session has expired. Please start signup again.

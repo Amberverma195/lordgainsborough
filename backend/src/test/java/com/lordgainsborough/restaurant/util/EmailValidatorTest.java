@@ -46,4 +46,15 @@ class EmailValidatorTest {
         assertTrue(EmailValidator.isValidEmail("chef@lordgainsborough.restaurant"));
         assertTrue(EmailValidator.isValidEmail("guest_123-special@dept.hospitality.org"));
     }
+
+    @Test
+    void acceptsValidUnusualAndModernDomains() {
+        assertTrue(EmailValidator.isValidEmail("founder@startup.io"));
+        assertTrue(EmailValidator.isValidEmail("support@company.co"));
+        assertTrue(EmailValidator.isValidEmail("resident@toronto.ca"));
+        assertTrue(EmailValidator.isValidEmail("concierge@hotel.boutique"));
+        assertTrue(EmailValidator.isValidEmail("admin@network.net"));
+        assertTrue(EmailValidator.isValidEmail("booking@experience.travel"));
+        assertTrue(EmailValidator.isValidEmail("eng@platform.engineering"));
+    }
 }
