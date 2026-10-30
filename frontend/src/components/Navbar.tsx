@@ -15,7 +15,7 @@ const Navbar = () => {
 
   useEffect(() => {
     const handleScroll = () => {
-      setScrolled(window.scrollY > 50);
+      setScrolled(window.scrollY > 40);
     };
     window.addEventListener('scroll', handleScroll);
     
@@ -36,12 +36,12 @@ const Navbar = () => {
   return (
     <nav className={`${styles.navbar} ${scrolled ? styles.scrolled : ''}`}>
       <div className={styles.logoContainer}>
-        <Link href="/">
+        <Link href="/" aria-label="Lord Gainsborough Home">
           <Image 
             src="/NavLOGO.png" 
             alt="Lord Gainsborough Logo" 
-            width={180} 
-            height={60} 
+            width={160} 
+            height={52} 
             className={styles.logo}
             priority
           />
@@ -54,10 +54,23 @@ const Navbar = () => {
         <Link href="/about" className={styles.navLink}>About</Link>
         
         <div className={styles.actionsContainer}>
-          <button className={styles.mobileToggle} aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} aria-controls="mobile-navigation" onClick={() => setMenuOpen(open => !open)}>
-            {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          <button
+            type="button"
+            className={styles.mobileToggle}
+            aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-navigation"
+            onClick={() => setMenuOpen(open => !open)}
+          >
+            {menuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
-          <button className={styles.cartBtn} onClick={toggleCart} aria-label={`Open cart (${cartCount} items)`}>
+
+          <button
+            type="button"
+            className={styles.cartBtn}
+            onClick={toggleCart}
+            aria-label={`Open cart (${cartCount} items)`}
+          >
             <ShoppingBag size={20} />
             {cartCount > 0 && <span className={styles.cartBadge}>{cartCount}</span>}
           </button>
@@ -71,15 +84,22 @@ const Navbar = () => {
           </Link>
 
           <Link href="/reserve" className={styles.reservationBtn}>
-            Book a Table
+            <span className={styles.reservationBtnTextFull}>Book a Table</span>
+            <span className={styles.reservationBtnTextShort}>Reserve</span>
           </Link>
         </div>
       </div>
-      {menuOpen && <div id="mobile-navigation" className={styles.mobilePanel}>
-        <Link href="/" onClick={() => setMenuOpen(false)}>Home</Link>
-        <Link href="/menu" onClick={() => setMenuOpen(false)}>Menu</Link>
-        <Link href="/about" onClick={() => setMenuOpen(false)}>About</Link>
-      </div>}
+
+      {menuOpen && (
+        <div id="mobile-navigation" className={styles.mobilePanel}>
+          <Link href="/" onClick={() => setMenuOpen(false)}>Home</Link>
+          <Link href="/menu" onClick={() => setMenuOpen(false)}>Menu</Link>
+          <Link href="/about" onClick={() => setMenuOpen(false)}>About</Link>
+          <Link href="/reserve" className={styles.mobilePanelReserveBtn} onClick={() => setMenuOpen(false)}>
+            Book a Table
+          </Link>
+        </div>
+      )}
     </nav>
   );
 };

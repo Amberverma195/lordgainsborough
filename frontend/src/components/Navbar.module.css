@@ -2,12 +2,15 @@
   position: fixed;
   top: 0;
   left: 0;
+  right: 0;
   width: 100%;
+  max-width: 100vw;
+  box-sizing: border-box;
   height: 80px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4rem;
+  padding: 0 max(3rem, env(safe-area-inset-right)) 0 max(3rem, env(safe-area-inset-left));
   z-index: 1000;
   background: transparent;
   border-bottom: 1px solid transparent;
@@ -25,18 +28,45 @@
 .logoContainer {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .logo {
   object-fit: contain;
+  width: auto;
+  height: auto;
+  max-height: 52px;
 }
-.mobileToggle { display: none; background: none; border: 0; color: inherit; cursor: pointer; }
-.mobilePanel { display: none; }
+
+.mobileToggle {
+  display: none;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem;
+  border-radius: 8px;
+  transition: var(--transition-smooth);
+}
+
+.mobileToggle:hover {
+  color: var(--secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mobilePanel {
+  display: none;
+}
 
 .navLinks {
   display: flex;
   gap: 2rem;
   align-items: center;
+  min-width: 0;
 }
 
 .navLink {
@@ -70,18 +100,22 @@
 }
 
 .reservationBtn {
-  padding: 0.75rem 1.8rem;
+  padding: 0.75rem 1.6rem;
   background: var(--gradient);
   color: var(--background);
   border-radius: 50px;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   transition: var(--transition-smooth);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   box-shadow: 0 4px 15px rgba(212, 175, 55, 0.2);
   white-space: nowrap;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .reservationBtn:hover {
@@ -89,11 +123,16 @@
   box-shadow: 0 8px 25px rgba(212, 175, 55, 0.4);
 }
 
+.reservationBtnTextShort {
+  display: none;
+}
+
 .actionsContainer {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: 1.25rem;
   margin-left: 1rem;
+  flex-shrink: 0;
 }
 
 .cartBtn, .profileBtn {
@@ -106,9 +145,12 @@
   justify-content: center;
   position: relative;
   transition: var(--transition-smooth);
+  min-width: 44px;
+  min-height: 44px;
   padding: 0.5rem;
   border-radius: 50%;
   text-decoration: none;
+  flex-shrink: 0;
 }
 
 .cartBtn:hover, .profileBtn:hover {
@@ -152,8 +194,8 @@
 
 .cartBadge {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: 2px;
+  right: 2px;
   background-color: var(--secondary);
   color: white;
   font-size: 0.7rem;
@@ -164,50 +206,140 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  transform: translate(25%, -25%);
+  transform: translate(15%, -15%);
 }
 
-@media (max-width: 1200px) {
-  .navbar {
-    padding: 0 2rem;
+@keyframes slideDownMenu {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
   }
-  .navLinks {
-    gap: 1.5rem;
-  }
-  .actionsContainer {
-    gap: 1.2rem;
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
+/* Tablet Breakpoint */
 @media (max-width: 1024px) {
   .navbar {
-    padding: 0 1.5rem;
+    padding: 0 max(1.5rem, env(safe-area-inset-right)) 0 max(1.5rem, env(safe-area-inset-left));
   }
   .navLinks {
-    gap: 1rem;
+    gap: 1.25rem;
   }
   .actionsContainer {
-    gap: 0.8rem;
+    gap: 0.75rem;
     margin-left: 0.5rem;
   }
   .reservationBtn {
     padding: 0.6rem 1.2rem;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
   }
 }
 
+/* Mobile Breakpoint */
 @media (max-width: 768px) {
   .navbar {
-    padding: 0 .75rem;
+    height: 70px; /* Fixed height on mobile so scrolling does NOT resize the bar */
+    padding: 0 max(0.85rem, env(safe-area-inset-right)) 0 max(0.85rem, env(safe-area-inset-left));
   }
-  .logo { width: 110px; height: auto; }
+  .scrolled {
+    height: 70px; /* Same height when scrolled to eliminate navbar jump */
+  }
+  .logo {
+    max-height: 40px;
+    width: auto;
+  }
   .navLinks {
     display: flex;
-    gap: .4rem;
+    gap: 0;
   }
-  .navLinks > .navLink { display: none; }
-  .actionsContainer { gap: .6rem; margin-left: 0; }
-  .reservationBtn { padding: .5rem; font-size: .7rem; }
-  .mobileToggle { display: block; }
-  .mobilePanel { display: flex; position: absolute; top: 100%; left: 0; right: 0; gap: 1.5rem; padding: 1rem; background: var(--background); box-shadow: var(--shadow); }
+  .navLinks > .navLink {
+    display: none;
+  }
+  .actionsContainer {
+    gap: 0.35rem;
+    margin-left: 0;
+  }
+  .mobileToggle {
+    display: flex;
+  }
+  .reservationBtn {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.75rem;
+  }
+  .reservationBtnTextFull {
+    display: none;
+  }
+  .reservationBtnTextShort {
+    display: inline;
+  }
+
+  .mobilePanel {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 1.25rem 1.5rem;
+    gap: 0.5rem;
+    background: rgba(12, 12, 12, 0.98);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--secondary);
+    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.7);
+    animation: slideDownMenu 0.25s ease-out;
+  }
+
+  .mobilePanel a {
+    color: var(--text);
+    font-size: 1.05rem;
+    font-weight: 500;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: block;
+    transition: var(--transition-smooth);
+  }
+
+  .mobilePanel a:hover {
+    color: var(--secondary);
+    padding-left: 6px;
+  }
+
+  .mobilePanelReserveBtn {
+    margin-top: 0.75rem;
+    background: var(--gradient) !important;
+    color: #000 !important;
+    text-align: center;
+    border-radius: 50px;
+    font-weight: 700;
+    padding: 0.85rem 1.25rem !important;
+    border-bottom: none !important;
+    box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
+  }
+}
+
+/* Narrow Phone Breakpoint (<360px, e.g. 320px) */
+@media (max-width: 360px) {
+  .navbar {
+    padding: 0 max(0.5rem, env(safe-area-inset-right)) 0 max(0.5rem, env(safe-area-inset-left));
+  }
+  .logo {
+    max-height: 34px;
+  }
+  .actionsContainer {
+    gap: 0.15rem;
+  }
+  .cartBtn, .profileBtn, .mobileToggle {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0.35rem;
+  }
+  /* On very narrow phones (<360px), reservation is accessible in the 1-tap mobile menu */
+  .reservationBtn {
+    display: none;
+  }
 }
