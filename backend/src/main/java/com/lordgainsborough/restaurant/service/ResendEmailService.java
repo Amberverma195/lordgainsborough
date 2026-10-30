@@ -2,6 +2,7 @@ package com.lordgainsborough.restaurant.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -27,17 +28,12 @@ public class ResendEmailService {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final int connectTimeoutMs;
+    private final int readTimeoutMs;
 
-    @Value("${resend.api-key:}")
     private String apiKey;
-
-    @Value("${app.mail.from:no-reply@lordgainsboroughrestaurant.ca}")
     private String fromEmail = "no-reply@lordgainsboroughrestaurant.ca";
-
-    @Value("${app.mail.from-name:Lord Gainsborough}")
     private String fromName = "Lord Gainsborough";
-
-    @Value("${resend.api-url:https://api.resend.com/emails}")
     private String apiUrl = "https://api.resend.com/emails";
 
     public ResendEmailService() {
@@ -45,14 +41,11 @@ public class ResendEmailService {
     }
 
     public ResendEmailService(int connectTimeoutMs, int readTimeoutMs) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
-        factory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        this.restTemplate = new RestTemplate(factory);
+        this(buildRestTemplate(connectTimeoutMs, readTimeoutMs), connectTimeoutMs, readTimeoutMs, null, null, null, null);
     }
 
     public ResendEmailService(RestTemplate restTemplate) {
-        this.restTemplate = restTemplate;
+        this(restTemplate, 5000, 8000, null, null, null, null);
     }
 
     public ResendEmailService(
@@ -61,11 +54,54 @@ public class ResendEmailService {
             String fromEmail,
             String fromName,
             String apiUrl) {
+        this(restTemplate, 5000, 8000, apiKey, fromEmail, fromName, apiUrl);
+    }
+
+    @Autowired
+    public ResendEmailService(
+            @Value("${resend.connect-timeout-ms:5000}") int connectTimeoutMs,
+            @Value("${resend.read-timeout-ms:8000}") int readTimeoutMs,
+            @Value("${resend.api-key:}") String apiKey,
+            @Value("${app.mail.from:no-reply@lordgainsboroughrestaurant.ca}") String fromEmail,
+            @Value("${app.mail.from-name:Lord Gainsborough}") String fromName,
+            @Value("${resend.api-url:https://api.resend.com/emails}") String apiUrl) {
+        this(buildRestTemplate(connectTimeoutMs, readTimeoutMs), connectTimeoutMs, readTimeoutMs, apiKey, fromEmail, fromName, apiUrl);
+    }
+
+    public ResendEmailService(
+            RestTemplate restTemplate,
+            int connectTimeoutMs,
+            int readTimeoutMs,
+            String apiKey,
+            String fromEmail,
+            String fromName,
+            String apiUrl) {
         this.restTemplate = restTemplate;
+        this.connectTimeoutMs = connectTimeoutMs;
+        this.readTimeoutMs = readTimeoutMs;
         this.apiKey = apiKey;
         this.fromEmail = fromEmail != null ? fromEmail : "no-reply@lordgainsboroughrestaurant.ca";
         this.fromName = fromName != null ? fromName : "Lord Gainsborough";
         this.apiUrl = apiUrl != null ? apiUrl : "https://api.resend.com/emails";
+    }
+
+    private static RestTemplate buildRestTemplate(int connectTimeoutMs, int readTimeoutMs) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
+        factory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
+        return new RestTemplate(factory);
+    }
+
+    public int getConnectTimeoutMs() {
+        return connectTimeoutMs;
+    }
+
+    public int getReadTimeoutMs() {
+        return readTimeoutMs;
+    }
+
+    public RestTemplate getRestTemplate() {
+        return restTemplate;
     }
 
     public boolean isConfigured() {
@@ -184,15 +220,19 @@ public class ResendEmailService {
             return new DefiniteEmailRejectionException("Resend authentication failed: HTTP_" + code);
         }
         if (code == 409) {
-            if (isConcurrentIdempotentRequest(responseBody)) {
-                return new AmbiguousEmailDeliveryException(
-                        "Resend concurrent in-flight request conflict: HTTP_409");
-            }
             if (isInvalidIdempotentRequest(responseBody)) {
                 return new DefiniteEmailRejectionException(
                         "Resend invalid idempotent request conflict: HTTP_409");
             }
-            return new DefiniteEmailRejectionException("Resend idempotency conflict: HTTP_409");
+            if (isConcurrentIdempotentRequest(responseBody)) {
+                return new AmbiguousEmailDeliveryException(
+                        "Resend concurrent in-flight request conflict: HTTP_409");
+            }
+            // Conservative fallback for unrecognized 409 response bodies:
+            // Since HTTP 409 denotes an idempotency/concurrency conflict, treat delivery status as
+            // ambiguous to preserve the active OTP send lease and prevent triggering unsafe duplicate sends.
+            return new AmbiguousEmailDeliveryException(
+                    "Resend unrecognized idempotency conflict: HTTP_409");
         }
         if (code == 408 || code == 429 || code >= 500) {
             return new AmbiguousEmailDeliveryException("Resend provider error: HTTP_" + code);

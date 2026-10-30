@@ -7,6 +7,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
@@ -221,14 +224,47 @@ class ResendEmailServiceTest {
     }
 
     @Test
-    void testHttp409GenericConflict_ThrowsDefiniteEmailRejectionException() {
+    void testHttp409UnrecognizedConflict_HandledConservativelyAsAmbiguousEmailDeliveryException() {
         mockServer.expect(requestTo(API_URL))
                 .andRespond(withStatus(HttpStatus.CONFLICT).body("{\"message\": \"Idempotency conflict\"}"));
 
-        DefiniteEmailRejectionException ex = assertThrows(DefiniteEmailRejectionException.class, () ->
+        AmbiguousEmailDeliveryException ex = assertThrows(AmbiguousEmailDeliveryException.class, () ->
                 resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-conflict"));
 
         assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertTrue(ex.getMessage().contains("unrecognized idempotency conflict"));
+        assertFalse(ex.getMessage().contains("user@example.com"));
+        assertNull(ex.getCause());
+        mockServer.verify();
+    }
+
+    @Test
+    void testHttp409EmptyBody_HandledConservativelyAsAmbiguousEmailDeliveryException() {
+        mockServer.expect(requestTo(API_URL))
+                .andRespond(withStatus(HttpStatus.CONFLICT).body(""));
+
+        AmbiguousEmailDeliveryException ex = assertThrows(AmbiguousEmailDeliveryException.class, () ->
+                resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-empty-conflict"));
+
+        assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertTrue(ex.getMessage().contains("unrecognized idempotency conflict"));
+        assertFalse(ex.getMessage().contains("user@example.com"));
+        assertNull(ex.getCause());
+        mockServer.verify();
+    }
+
+    @Test
+    void testHttp409UnknownErrorName_HandledConservativelyAsAmbiguousEmailDeliveryException() {
+        mockServer.expect(requestTo(API_URL))
+                .andRespond(withStatus(HttpStatus.CONFLICT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"name\": \"unexpected_provider_conflict\", \"message\": \"Something conflicted\"}"));
+
+        AmbiguousEmailDeliveryException ex = assertThrows(AmbiguousEmailDeliveryException.class, () ->
+                resendEmailService.sendEmail("user@example.com", "Sub", "<p>hi</p>", "hi", "op-unknown-conflict"));
+
+        assertTrue(ex.getMessage().contains("HTTP_409"));
+        assertTrue(ex.getMessage().contains("unrecognized idempotency conflict"));
         assertFalse(ex.getMessage().contains("user@example.com"));
         assertNull(ex.getCause());
         mockServer.verify();
@@ -266,6 +302,29 @@ class ResendEmailServiceTest {
         assertFalse(ex.getMessage().contains("user@example.com"));
         assertNull(ex.getCause());
         mockServer.verify();
+    }
+
+    @Test
+    void testConstructors_ConfigureEffectiveTimeoutsOnHttpClient() {
+        // Explicit timeouts constructor
+        ResendEmailService serviceWithCustomTimeouts = new ResendEmailService(3000, 7000);
+        assertEquals(3000, serviceWithCustomTimeouts.getConnectTimeoutMs());
+        assertEquals(7000, serviceWithCustomTimeouts.getReadTimeoutMs());
+
+        ClientHttpRequestFactory customFactory = serviceWithCustomTimeouts.getRestTemplate().getRequestFactory();
+        assertInstanceOf(SimpleClientHttpRequestFactory.class, customFactory);
+        assertEquals(3000, (int) ReflectionTestUtils.getField(customFactory, "connectTimeout"));
+        assertEquals(7000, (int) ReflectionTestUtils.getField(customFactory, "readTimeout"));
+
+        // Default constructor uses 5000ms / 8000ms
+        ResendEmailService defaultService = new ResendEmailService();
+        assertEquals(5000, defaultService.getConnectTimeoutMs());
+        assertEquals(8000, defaultService.getReadTimeoutMs());
+
+        ClientHttpRequestFactory defaultFactory = defaultService.getRestTemplate().getRequestFactory();
+        assertInstanceOf(SimpleClientHttpRequestFactory.class, defaultFactory);
+        assertEquals(5000, (int) ReflectionTestUtils.getField(defaultFactory, "connectTimeout"));
+        assertEquals(8000, (int) ReflectionTestUtils.getField(defaultFactory, "readTimeout"));
     }
 
     @Test
