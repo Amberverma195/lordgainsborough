@@ -10,34 +10,30 @@ import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import com.lordgainsborough.restaurant.service.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import jakarta.mail.Session;
-import jakarta.mail.internet.MimeMessage;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.mail.MailSendException;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.net.SocketTimeoutException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class SignupOtpTimeoutFlowTest {
 
-    private final JavaMailSender mailSender = mock(JavaMailSender.class);
-    private final BrevoApiEmailService brevoApi = mock(BrevoApiEmailService.class);
+    private final ResendEmailService resendEmailService = mock(ResendEmailService.class);
     private final UserAuthStore userAuthStore = mock(UserAuthStore.class);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private final OtpService otpService = mock(OtpService.class);
@@ -55,11 +51,8 @@ class SignupOtpTimeoutFlowTest {
 
     @BeforeEach
     void setUp() {
-        EmailSenderService emailSender = new EmailSenderService(mailSender, brevoApi);
-        ReflectionTestUtils.setField(emailSender, "fromEmail", "lordgainsborough5@gmail.com");
-        ReflectionTestUtils.setField(emailSender, "fromName", "Lord Gainsborough");
-        when(brevoApi.isConfigured()).thenReturn(false);
-        when(mailSender.createMimeMessage()).thenReturn(new MimeMessage(Session.getInstance(new Properties())));
+        EmailSenderService emailSender = new EmailSenderService(resendEmailService);
+        when(resendEmailService.isConfigured()).thenReturn(true);
 
         when(store.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(db.get(inv.getArgument(0))));
         when(store.save(any(SignupOtpChallenge.class))).thenAnswer(inv -> {
@@ -117,8 +110,10 @@ class SignupOtpTimeoutFlowTest {
     @Test
     void emailTimeoutReturns202WithDeliveryUnknown() {
         SocketTimeoutException timeout = new SocketTimeoutException("connect timed out");
-        MailSendException mailException = new MailSendException("Mail server connection failed", timeout);
-        doThrow(mailException).when(mailSender).send(any(MimeMessage.class));
+        ResourceAccessException accessException = new ResourceAccessException("Resend API timed out", timeout);
+        doThrow(new AmbiguousEmailDeliveryException(
+                "Resend API timed out or connection failed; delivery status unknown", accessException))
+                .when(resendEmailService).sendEmail(any(), any(), any(), any(), any());
 
         SendOtpRequest request = new SendOtpRequest();
         request.setEmail("member@example.com");

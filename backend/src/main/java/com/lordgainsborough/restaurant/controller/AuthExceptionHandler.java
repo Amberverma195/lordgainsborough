@@ -69,11 +69,12 @@ public class AuthExceptionHandler {
             }
 
             if (current instanceof EmailDeliveryException
-                    || current instanceof org.springframework.mail.MailException
+                    || className.contains("MailException")
                     || className.contains("MessagingException")
                     || className.contains("MailConnectException")
                     || className.contains("SocketTimeoutException")
                     || className.contains("ResourceAccessException")
+                    || message.contains("resend")
                     || message.contains("smtp")
                     || message.contains("brevo")
                     || message.contains("mail")) {

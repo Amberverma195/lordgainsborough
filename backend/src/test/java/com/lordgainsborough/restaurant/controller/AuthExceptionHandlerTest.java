@@ -81,7 +81,7 @@ class AuthExceptionHandlerTest {
                 AuthExceptionHandler.classifyStage(new java.sql.SQLException("Connection refused")));
 
         assertEquals("email_delivery",
-                AuthExceptionHandler.classifyStage(new org.springframework.mail.MailSendException("SMTP error")));
+                AuthExceptionHandler.classifyStage(new com.lordgainsborough.restaurant.service.AmbiguousEmailDeliveryException("Resend API timed out")));
         assertEquals("email_delivery",
                 AuthExceptionHandler.classifyStage(new java.net.SocketTimeoutException("connect timed out")));
 

@@ -10,8 +10,7 @@
 #   $env:DB_NAME = "lordgainsborough_dev"
 #   $env:DB_USER = "lordgainsborough"
 #   $env:DB_PASSWORD = "your-local-database-password"
-#   $env:MAIL_USERNAME = "your-brevo-smtp-username"
-#   $env:MAIL_PASSWORD = "your-brevo-smtp-password"
+#   $env:RESEND_API_KEY = "re_your_resend_api_key"
 #   $env:JWT_SECRET = "a-long-random-secret-at-least-32-bytes"
 #   $env:ABUSE_IP_HASH_SECRET = "a-separate-long-random-secret"
 #   .\mvnw spring-boot:run
@@ -21,10 +20,13 @@ DB_HOST=
 DB_NAME=
 DB_USER=
 DB_PASSWORD=
-MAIL_USERNAME=
-MAIL_PASSWORD=
 JWT_SECRET=
 ABUSE_IP_HASH_SECRET=
+
+# Email (Resend HTTPS API):
+# RESEND_API_KEY=
+# MAIL_FROM=no-reply@lordgainsboroughrestaurant.ca
+# MAIL_FROM_NAME=Lord Gainsborough
 
 # Optional (defaults shown):
 # PORT=8082
@@ -32,9 +34,6 @@ ABUSE_IP_HASH_SECRET=
 # SOCKETIO_ORIGIN=http://localhost:3000
 # DB_PORT=5432
 # DB_SSL_MODE=prefer
-# MAIL_FROM=lordgainsborough5@gmail.com
-# MAIL_FROM_NAME=Lord Gainsborough
-# BREVO_API_KEY=
 # JWT_EXPIRATION=86400000
 # MANAGEMENT_SERVER_PORT=8083
 # MANAGEMENT_SERVER_ADDRESS=127.0.0.1

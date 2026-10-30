@@ -1,90 +1,150 @@
 package com.lordgainsborough.restaurant.service;
 
-import jakarta.mail.Session;
-import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mail.MailSendException;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.mockito.ArgumentCaptor;
 
-import java.net.SocketTimeoutException;
-import java.util.Properties;
-
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 class EmailSenderServiceTest {
 
-    private final JavaMailSender mailSender = mock(JavaMailSender.class);
-    private final BrevoApiEmailService brevoApiEmailService = mock(BrevoApiEmailService.class);
+    private final ResendEmailService resendEmailService = mock(ResendEmailService.class);
     private EmailSenderService emailSenderService;
 
     @BeforeEach
     void setUp() {
-        emailSenderService = new EmailSenderService(mailSender, brevoApiEmailService);
-        ReflectionTestUtils.setField(emailSenderService, "fromEmail", "lordgainsborough5@gmail.com");
-        ReflectionTestUtils.setField(emailSenderService, "fromName", "Lord Gainsborough");
-        when(brevoApiEmailService.isConfigured()).thenReturn(false);
-        when(mailSender.createMimeMessage()).thenReturn(new MimeMessage(Session.getInstance(new Properties())));
+        emailSenderService = new EmailSenderService(resendEmailService);
     }
 
     @Test
-    void timeoutThrowsAmbiguousEmailDeliveryException() {
-        SocketTimeoutException timeout = new SocketTimeoutException("connect timed out");
-        MailSendException mailException = new MailSendException("Mail server connection failed", timeout);
-        doThrow(mailException).when(mailSender).send(any(MimeMessage.class));
+    void sendOtpEmail_WithOperationId_FormatsTemplatesAndForwardsToResend() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+
+        emailSenderService.sendOtpEmail("member@example.com", "123456", "op-otp-1");
+
+        ArgumentCaptor<String> toCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subjectCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> htmlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> opCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(resendEmailService).sendEmail(
+                toCaptor.capture(),
+                subjectCaptor.capture(),
+                htmlCaptor.capture(),
+                textCaptor.capture(),
+                opCaptor.capture()
+        );
+
+        assertEquals("member@example.com", toCaptor.getValue());
+        assertEquals("Lord Gainsborough - Your Verification Code", subjectCaptor.getValue());
+        assertEquals("op-otp-1", opCaptor.getValue());
+
+        // Verify HTML template
+        String html = htmlCaptor.getValue();
+        assertTrue(html.contains("123456"));
+        assertTrue(html.contains("Verify Your Email"));
+        assertTrue(html.contains("This code is valid for 10 minutes."));
+
+        // Verify plain-text template
+        String text = textCaptor.getValue();
+        assertTrue(text.contains("123456"));
+        assertTrue(text.contains("Lord Gainsborough - Email Verification"));
+        assertTrue(text.contains("This code expires in 10 minutes."));
+    }
+
+    @Test
+    void sendOtpEmail_WithoutOperationId_CallsOverloadWithNullOperationId() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+
+        emailSenderService.sendOtpEmail("member@example.com", "654321");
+
+        verify(resendEmailService).sendEmail(
+                eq("member@example.com"),
+                eq("Lord Gainsborough - Your Verification Code"),
+                contains("654321"),
+                contains("654321"),
+                isNull()
+        );
+    }
+
+    @Test
+    void sendPasswordResetCodeEmail_WithOperationId_FormatsTemplatesAndForwardsToResend() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+
+        emailSenderService.sendPasswordResetCodeEmail("reset@example.com", "789012", "op-reset-1");
+
+        ArgumentCaptor<String> toCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subjectCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> htmlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> opCaptor = ArgumentCaptor.forClass(String.class);
+
+        verify(resendEmailService).sendEmail(
+                toCaptor.capture(),
+                subjectCaptor.capture(),
+                htmlCaptor.capture(),
+                textCaptor.capture(),
+                opCaptor.capture()
+        );
+
+        assertEquals("reset@example.com", toCaptor.getValue());
+        assertEquals("Lord Gainsborough - Password Reset Code", subjectCaptor.getValue());
+        assertEquals("op-reset-1", opCaptor.getValue());
+
+        // Verify HTML template
+        String html = htmlCaptor.getValue();
+        assertTrue(html.contains("789012"));
+        assertTrue(html.contains("Reset Your Password"));
+        assertTrue(html.contains("This code is valid for 10 minutes."));
+
+        // Verify plain-text template
+        String text = textCaptor.getValue();
+        assertTrue(text.contains("789012"));
+        assertTrue(text.contains("Lord Gainsborough - Password Reset"));
+        assertTrue(text.contains("This code expires in 10 minutes."));
+    }
+
+    @Test
+    void sendPasswordResetCodeEmail_WithoutOperationId_CallsOverloadWithNullOperationId() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+
+        emailSenderService.sendPasswordResetCodeEmail("reset@example.com", "888999");
+
+        verify(resendEmailService).sendEmail(
+                eq("reset@example.com"),
+                eq("Lord Gainsborough - Password Reset Code"),
+                contains("888999"),
+                contains("888999"),
+                isNull()
+        );
+    }
+
+    @Test
+    void noSmtpOrBrevoFallback_ExceptionsPropagateDirectly() {
+        // When Resend fails ambiguously, no fallback occurs; exception propagates directly
+        doThrow(new AmbiguousEmailDeliveryException("Resend API timed out; delivery status unknown"))
+                .when(resendEmailService).sendEmail(any(), any(), any(), any(), any());
 
         assertThrows(AmbiguousEmailDeliveryException.class, () ->
                 emailSenderService.sendOtpEmail("test@example.com", "123456", "op-1"));
-    }
 
-    @Test
-    void connectionRefusedThrowsAmbiguousEmailDeliveryException() {
-        java.net.ConnectException connect = new java.net.ConnectException("Connection refused: connect");
-        MailSendException mailException = new MailSendException("Mail server connection failed", connect);
-        doThrow(mailException).when(mailSender).send(any(MimeMessage.class));
+        // When Resend fails definitely, no fallback occurs; exception propagates directly
+        doThrow(new DefiniteEmailRejectionException("Resend authentication failed: HTTP_401"))
+                .when(resendEmailService).sendEmail(any(), any(), any(), any(), any());
 
-        assertThrows(AmbiguousEmailDeliveryException.class, () ->
+        assertThrows(DefiniteEmailRejectionException.class, () ->
                 emailSenderService.sendOtpEmail("test@example.com", "123456", "op-2"));
     }
 
     @Test
-    void authenticationFailureThrowsDefiniteEmailRejectionException() {
-        org.springframework.mail.MailAuthenticationException authException =
-                new org.springframework.mail.MailAuthenticationException("Authentication failed: 535 Bad credentials");
-        doThrow(authException).when(mailSender).send(any(MimeMessage.class));
+    void isConfigured_DelegatesToResendEmailService() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+        assertTrue(emailSenderService.isConfigured());
 
-        assertThrows(DefiniteEmailRejectionException.class, () ->
-                emailSenderService.sendOtpEmail("test@example.com", "123456", "op-3"));
-    }
-
-    @Test
-    void rejection550ThrowsDefiniteEmailRejectionException() {
-        MailSendException mailException = new MailSendException("550 Requested action not taken: mailbox unavailable");
-        doThrow(mailException).when(mailSender).send(any(MimeMessage.class));
-
-        assertThrows(DefiniteEmailRejectionException.class, () ->
-                emailSenderService.sendOtpEmail("test@example.com", "123456", "op-4"));
-    }
-
-    @Test
-    void brevoApiUsedWhenConfigured() {
-        when(brevoApiEmailService.isConfigured()).thenReturn(true);
-
-        emailSenderService.sendOtpEmail("member@example.com", "654321", "op-brevo");
-
-        org.mockito.Mockito.verify(brevoApiEmailService).sendEmail(
-                org.mockito.ArgumentMatchers.eq("member@example.com"),
-                org.mockito.ArgumentMatchers.contains("Verification Code"),
-                org.mockito.ArgumentMatchers.contains("654321"),
-                org.mockito.ArgumentMatchers.contains("654321"),
-                org.mockito.ArgumentMatchers.eq("op-brevo")
-        );
-        org.mockito.Mockito.verifyNoInteractions(mailSender);
+        when(resendEmailService.isConfigured()).thenReturn(false);
+        assertFalse(emailSenderService.isConfigured());
     }
 }
