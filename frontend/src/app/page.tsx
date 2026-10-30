@@ -82,9 +82,9 @@ export default function Home() {
             <Clock size={32} color="var(--secondary)" style={{ marginBottom: '1rem' }} />
             <h3>Hours</h3>
             <div style={{ color: 'var(--text-light)', lineHeight: '2' }}>
-              Mon - Thu: 9:00 AM - 10:00 PM<br />
-              Fri - Sat: 9:00 AM - 11:30 PM<br />
-              Sun: 10:00 AM - 9:00 PM
+              Mon - Thu: 9:00 AM - 8:00 PM<br />
+              Fri - Sat: 9:00 AM - 8:30 PM<br />
+              Sun: 10:00 AM - 6:00 PM
             </div>
           </div>
 

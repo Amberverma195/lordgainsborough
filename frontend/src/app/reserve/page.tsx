@@ -6,6 +6,12 @@ import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight, C
 import styles from './reserve.module.css';
 import Link from 'next/link';
 import { API_BASE } from '@/lib/orders';
+import {
+  getCalendarDayOfWeek,
+  getRestaurantTodayDateString,
+  getAvailableTimesForDate,
+  validateReservationDateTime,
+} from '@/lib/reservationDates';
 
 export default function ReservePage() {
   const [loading, setLoading] = useState(false);
@@ -20,12 +26,32 @@ export default function ReservePage() {
     specialRequests: ''
   });
 
+  const restaurantToday = getRestaurantTodayDateString();
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    if (name === 'date') {
+      const newSlots = getAvailableTimesForDate(value);
+      const isCurrentTimeValid = newSlots.some((s) => s.value === formData.time);
+      setFormData((prev) => ({
+        ...prev,
+        date: value,
+        time: isCurrentTimeValid ? prev.time : '',
+      }));
+      return;
+    }
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const validation = validateReservationDateTime(formData.date, formData.time);
+    if (!validation.valid) {
+      alert(validation.reason || 'Please select a valid reservation date and time.');
+      return;
+    }
+
     setLoading(true);
     
     try {
@@ -128,51 +154,15 @@ export default function ReservePage() {
     );
   }
 
-  const getAvailableTimes = () => {
-    if (!formData.date) return [];
-    
-    const dateObj = new Date(formData.date);
-    const day = dateObj.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    
-    let startHour = 9;
-    let endHour = 20; // 8 PM
-    let endMinutes = 0;
-
-    if (day === 0) { // Sunday
-      startHour = 10;
-      endHour = 18; // 6 PM
-    } else if (day === 5 || day === 6) { // Fri, Sat
-      endHour = 20;
-      endMinutes = 30; // 8:30 PM
-    }
-
-    const times = [];
-    const current = new Date();
-    const isToday = dateObj.toDateString() === current.toDateString();
-
-    for (let hour = startHour; hour <= endHour; hour++) {
-      for (const min of [0, 30]) {
-        if (hour === endHour && min > endMinutes) break;
-        
-        // Don't show past times for today
-        if (isToday) {
-          if (hour < current.getHours() || (hour === current.getHours() && min <= current.getMinutes())) {
-            continue;
-          }
-        }
-
-        const period = hour >= 12 ? 'PM' : 'AM';
-        const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
-        const timeStr = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
-        const displayStr = `${displayHour}:${min.toString().padStart(2, '0')} ${period}`;
-        
-        times.push({ value: timeStr, label: displayStr });
-      }
-    }
-    return times;
-  };
-
-  const availableTimes = getAvailableTimes();
+  const availableTimes = getAvailableTimesForDate(formData.date);
+  const dayOfWeek = getCalendarDayOfWeek(formData.date);
+  const dayScheduleHint = formData.date && dayOfWeek >= 0
+    ? dayOfWeek === 0
+      ? 'Sunday hours: 10:00 AM – 6:00 PM'
+      : dayOfWeek === 5 || dayOfWeek === 6
+      ? 'Friday & Saturday hours: 9:00 AM – 8:30 PM'
+      : 'Monday – Thursday hours: 9:00 AM – 8:00 PM'
+    : null;
 
   return (
     <div className={styles.container}>
@@ -204,8 +194,13 @@ export default function ReservePage() {
                   value={formData.date} 
                   onChange={handleChange} 
                   required 
-                  min={new Date().toISOString().split('T')[0]}
+                  min={restaurantToday}
                 />
+                {dayScheduleHint && (
+                  <span style={{ fontSize: '0.8rem', color: 'var(--secondary)', marginTop: '0.25rem' }}>
+                    {dayScheduleHint}
+                  </span>
+                )}
               </div>
               <div className={styles.inputGroup}>
                 <label><Clock size={16} /> Time</label>
