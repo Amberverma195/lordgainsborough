@@ -19,6 +19,7 @@ import {
 } from '@/lib/orders';
 import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
 import {
+  getAuthHeaders,
   isAuthenticated,
   isPickupDisabledForUser,
   PICKUP_DISABLED_NO_SHOW_MESSAGE,
@@ -160,7 +161,7 @@ export default function CheckoutPage() {
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          ...getAuthHeaders(true),
           [ORDER_IDEMPOTENCY_KEY_HEADER]: idempotencyKey,
         },
         body: JSON.stringify(payload),
@@ -174,9 +175,22 @@ export default function CheckoutPage() {
         return;
       }
 
+      if (res.status === 401) {
+        setError(typeof data?.message === 'string'
+          ? data.message
+          : 'Authentication is required to complete this order request.');
+        return;
+      }
+
       if (res.status === 403) {
-        setPickupDisabledForUser(true);
-        setError(typeof data?.message === 'string' ? data.message : PICKUP_DISABLED_NO_SHOW_MESSAGE);
+        if (data?.code === 'PICKUP_DISABLED_NO_SHOW') {
+          setPickupDisabledForUser(true);
+          setError(typeof data?.message === 'string' ? data.message : PICKUP_DISABLED_NO_SHOW_MESSAGE);
+        } else {
+          setError(typeof data?.message === 'string'
+            ? data.message
+            : 'You are not authorized to complete this order request.');
+        }
         return;
       }
 

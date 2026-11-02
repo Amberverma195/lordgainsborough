@@ -1,6 +1,7 @@
 package com.lordgainsborough.restaurant.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -30,6 +31,7 @@ public class CustomerOrder {
     private boolean reviewed;
     @JsonIgnore
     private String trackingTokenHash;
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String idempotencyKey;
     private int customerOrderCount;
     private int customerNoShowCount;
@@ -97,6 +99,7 @@ public class CustomerOrder {
     public String getTrackingTokenHash() { return trackingTokenHash; }
     public void setTrackingTokenHash(String trackingTokenHash) { this.trackingTokenHash = trackingTokenHash; }
 
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     public String getIdempotencyKey() { return idempotencyKey; }
     public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 

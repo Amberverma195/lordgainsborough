@@ -5,12 +5,16 @@ import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.security.JwtUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.Optional;
 
 @Service
@@ -22,12 +26,53 @@ public class OrderAccessService {
     private final JwtUtil jwtUtil;
     private final UserAuthStore identityStore;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final byte[] trackingTokenHmacKey;
 
     @Autowired
-    public OrderAccessService(JwtUtil jwtUtil, UserAuthStore identityStore) {
-        this.jwtUtil = jwtUtil; this.identityStore = identityStore;
+    public OrderAccessService(
+            JwtUtil jwtUtil,
+            UserAuthStore identityStore,
+            @Value("${app.orders.tracking-token-secret:${jwt.secret:}}") String configuredSecret) {
+        this.jwtUtil = jwtUtil;
+        this.identityStore = identityStore;
+        this.trackingTokenHmacKey = initializeHmacKey(configuredSecret);
     }
+
+    public OrderAccessService(JwtUtil jwtUtil, UserAuthStore identityStore) {
+        this(jwtUtil, identityStore, null);
+    }
+
     public UserAuthStore getIdentityStore() { return identityStore; }
+
+    private byte[] initializeHmacKey(String configuredSecret) {
+        if (configuredSecret != null && !configuredSecret.isBlank()) {
+            return deriveKeyBytes(configuredSecret);
+        }
+        byte[] ephemeral = new byte[TRACKING_TOKEN_BYTES];
+        secureRandom.nextBytes(ephemeral);
+        return ephemeral;
+    }
+
+    private static byte[] deriveKeyBytes(String raw) {
+        String trimmed = raw.trim();
+        if (trimmed.length() == 64 && trimmed.matches("^[0-9a-fA-F]{64}$")) {
+            try {
+                return HexFormat.of().parseHex(trimmed);
+            } catch (Exception ignored) {
+                // fall through to digest
+            }
+        }
+        byte[] utf8 = trimmed.getBytes(StandardCharsets.UTF_8);
+        if (utf8.length == 32) {
+            return utf8;
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return md.digest(utf8);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
+    }
 
     public String generateTrackingToken() {
         byte[] token = new byte[TRACKING_TOKEN_BYTES];
@@ -40,12 +85,12 @@ public class OrderAccessService {
             return generateTrackingToken();
         }
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update("LGB_ORDER_TRACKING_SALT:".getBytes(StandardCharsets.UTF_8));
-            byte[] derived = digest.digest(idempotencyKey.trim().getBytes(StandardCharsets.UTF_8));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(this.trackingTokenHmacKey, "HmacSHA256"));
+            byte[] derived = mac.doFinal(idempotencyKey.trim().getBytes(StandardCharsets.UTF_8));
             return Base64.getUrlEncoder().withoutPadding().encodeToString(derived);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is not available", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("HmacSHA256 is not available", e);
         }
     }
 
@@ -107,14 +152,14 @@ public class OrderAccessService {
         return MessageDigest.isEqual(expected, actual);
     }
 
-    private Optional<User> getAuthenticatedUser(String authHeader) {
+    public Optional<User> getAuthenticatedUser(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return Optional.empty();
         }
         return getAuthenticatedUserFromToken(authHeader.substring(7));
     }
 
-    private Optional<User> getAuthenticatedUserFromToken(String token) {
+    public Optional<User> getAuthenticatedUserFromToken(String token) {
         if (token == null || token.isBlank() || !jwtUtil.validateToken(token)) {
             return Optional.empty();
         }
