@@ -170,7 +170,7 @@ class PostgresOrderControllerIntegrationTest {
     }
 
     static java.util.stream.Stream<Arguments> missingCustomerDetails() {
-        return java.util.stream.Stream.of("customerName", "customerEmail", "customerPhone")
+        return java.util.stream.Stream.of("customerName", "customerPhone")
                 .flatMap(field -> java.util.stream.Stream.of(
                         Arguments.of(field, null, true), Arguments.of(field, null, false),
                         Arguments.of(field, "", false), Arguments.of(field, " \t ", false)));
@@ -199,6 +199,28 @@ class PostgresOrderControllerIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM order_items", Long.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM order_messages", Long.class)).isZero();
         verify(sockets.getRoomOperations("kds"), never()).sendEvent(anyString(), any());
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"omitted", "null", "blank"})
+    void absentSubmittedEmailUsesAuthenticatedAccountEmail(String mode) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode body = json.valueToTree(request());
+        if ("omitted".equals(mode)) body.remove("customerEmail");
+        else if ("null".equals(mode)) body.putNull("customerEmail");
+        else body.put("customerEmail", "   ");
+
+        String response = mvc.perform(post("/api/orders")
+                .header("Authorization", authHeader)
+                .contentType("application/json")
+                .content(json.writeValueAsString(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("order.status").value("NEW"))
+                .andReturn().getResponse().getContentAsString();
+
+        var root = json.readTree(response);
+        String createdId = root.get("order").get("id").asText();
+        CustomerOrder saved = store.findById(createdId).orElseThrow();
+        assertThat(saved.getCustomerEmail()).isEqualTo(customer.getEmail());
     }
 
     @Test void anonymousOrderReturnsHttp401() throws Exception {
@@ -269,24 +291,26 @@ class PostgresOrderControllerIntegrationTest {
         error(request(),503,"PICKUP_ORDERS_PAUSED","Pickup orders are currently paused. Please check back later.");
     }
     @Test void relationalUserNoShowCounterBlocksBeforeMenu() {
-        JpaUser user = new JpaUser("member","Guest","guest@example.com","5195551212","MEMBER");
-        user.setNoShowCount(3); users.saveAndFlush(user);
+        customer.setNoShowCount(3);
+        users.saveAndFlush(customer);
         error(request(),403,"PICKUP_DISABLED_NO_SHOW",CustomerNoShowService.PICKUP_DISABLED_MESSAGE);
-
     }
     @Test void relationalOrderNoShowCountsCannotBeBypassedByStaleUserCounter() {
-        users.saveAndFlush(new JpaUser("member","Guest","guest@example.com","5195551212","MEMBER"));
+        customer.setNoShowCount(0);
+        users.saveAndFlush(customer);
         for (int i=0;i<3;i++) { var order = new JpaCustomerOrder(null,"Guest","guest@example.com","5195551212","2026-01-01");
             order.setStatus("NO_SHOW"); orders.saveAndFlush(order); }
         assertThat(createOrder(request()).getStatusCode().value()).isEqualTo(403);
     }
     @Test void noShowLookupUsesNormalizedPhoneFallback() {
-        var user = new JpaUser("other-member","Other","other@example.com","+1 (519) 555-1212","MEMBER");
-        user.setPhoneNormalized("5195551212"); user.setNoShowCount(3); users.saveAndFlush(user);
+        var user = new JpaUser("other-member","Other","other@example.com","+1 (519) 555-8888","MEMBER");
+        user.setPhoneNormalized("5195558888"); user.setNoShowCount(3); users.saveAndFlush(user);
+        assertThat(store.pickupDisabled("unregistered@example.com", "(519) 555-8888")).isTrue();
+        assertThat(store.pickupDisabled(null, "519.555.8888")).isTrue();
         String otherToken = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
         var order = request();
         order.setCustomerEmail("other@example.com");
-        order.setCustomerPhone("+1 (519) 555-1212");
+        order.setCustomerPhone("+1 (519) 555-8888");
         var response = controller.createOrder(null, "Bearer " + otherToken, null, order);
         assertThat(response.getStatusCode().value()).isEqualTo(403);
         assertThat(response.getBody()).isEqualTo(Map.of("code", "PICKUP_DISABLED_NO_SHOW", "message", CustomerNoShowService.PICKUP_DISABLED_MESSAGE));
@@ -372,11 +396,11 @@ class PostgresOrderControllerIntegrationTest {
                 .andExpect(jsonPath("id").value(id))
                 .andExpect(jsonPath("status").value("NEW"));
     }
-    @Test void strangerJwtCannotAccessOrderEvenWithSamePhone() throws Exception {
+    @Test void strangerJwtCannotAccessOrder() throws Exception {
         var response = create();
         String id = response.getOrder().getId();
-        JpaUser stranger = new JpaUser("stranger-id", "Stranger", "stranger@example.com", customer.getPhone(), "MEMBER");
-        stranger.setPhoneNormalized(customer.getPhoneNormalized());
+        JpaUser stranger = new JpaUser("stranger-id", "Stranger", "stranger@example.com", "+1 (519) 555-7777", "MEMBER");
+        stranger.setPhoneNormalized("5195557777");
         users.saveAndFlush(stranger);
         String strangerToken = jwtUtil.generateToken(stranger.getId(), stranger.getEmail(), stranger.getTokenVersion());
 

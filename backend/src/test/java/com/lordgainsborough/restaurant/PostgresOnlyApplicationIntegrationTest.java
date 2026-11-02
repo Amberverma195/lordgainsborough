@@ -91,13 +91,29 @@ class PostgresOnlyApplicationIntegrationTest {
     JsonNode send(String path,Map<String,?> body,int status) throws Exception {
         return response(post(path).header("Idempotency-Key","integration-operation").contentType("application/json").content(json.writeValueAsString(body)),status);
     }
+    static String normalizePhone(String phone) {
+        if (phone == null) return "";
+        String digits = phone.replaceAll("\\D", "");
+        if (digits.startsWith("1") && digits.length() > 10) digits = digits.substring(1);
+        return digits.length() > 10 ? digits.substring(0, 10) : digits;
+    }
     OrderCreationResponse order(String address,String phone) {
         var existing = users.findByEmailIgnoreCase(address);
+        String normPhone = normalizePhone(phone);
         JpaUser u = existing.orElseGet(() -> {
-            String digits = phone.replaceAll("\\D", "");
-            return account(UUID.randomUUID().toString(), address, digits.length() >= 10 ? digits.substring(0, 10) : "5195551212", "MEMBER");
+            boolean phoneTaken = !normPhone.isBlank() && users.existsByPhoneNormalized(normPhone);
+            if (phoneTaken) {
+                var user = new JpaUser();
+                user.setId(UUID.randomUUID().toString());
+                user.setEmail(address);
+                user.setName("Member " + address);
+                user.setPassword(PasswordUtil.hashPassword("CorrectPassword1!"));
+                user.setRole("MEMBER");
+                return users.saveAndFlush(user);
+            }
+            return account(UUID.randomUUID().toString(), address, normPhone.isBlank() ? "5195551212" : normPhone, "MEMBER");
         });
-        var o=new CustomerOrder();o.setCustomerName(u.getName());o.setCustomerEmail(address);o.setCustomerPhone(u.getPhone());
+        var o=new CustomerOrder();o.setCustomerName(u.getName());o.setCustomerEmail(address);o.setCustomerPhone(phone);
         var item=new CustomerOrder.OrderItem();item.setMenuItemId(jdbc.queryForObject("SELECT id FROM menu_items ORDER BY id LIMIT 1",String.class));item.setQuantity(2);o.setItems(List.of(item));
         var result=orders.createOrder(null, "Bearer " + token(u), null, o);
         assertThat(result.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)result.getBody();
