@@ -72,7 +72,7 @@ class OrderAccessServiceTest {
     }
 
     @Test
-    void normalizesEmailAndUsesPhoneOwnershipFallback() {
+    void normalizesEmailAndDeniesAccessToUnverifiedPhoneFallback() {
         User owner = new User();
         owner.setEmail(" AMBER@EXAMPLE.COM ");
         when(jwtUtil.validateToken("jwt")).thenReturn(true);
@@ -80,10 +80,17 @@ class OrderAccessServiceTest {
         when(userRepository.findByEmailIgnoreCase("amber@example.com")).thenReturn(Optional.of(owner));
         when(jwtUtil.validateTokenForUser("jwt", owner)).thenReturn(true);
         assertTrue(service.canAccess(order, "Bearer jwt", null));
-        owner.setEmail("different@example.com"); owner.setPhone("+1 (519) 614-3615");
-        assertTrue(service.canAccess(order, "Bearer jwt", null));
-        owner.setPhone(null); owner.setPhoneNormalized("5196143615");
-        assertTrue(service.canAccessWithJwtToken(order, "jwt", null));
+
+        // Different email with matching phone must be DENIED access because phone ownership is not verified
+        owner.setEmail("different@example.com");
+        owner.setPhone("+1 (519) 614-3615");
+        when(jwtUtil.getEmailFromToken("jwt")).thenReturn("different@example.com");
+        when(userRepository.findByEmailIgnoreCase("different@example.com")).thenReturn(Optional.of(owner));
+        assertFalse(service.canAccess(order, "Bearer jwt", null));
+
+        owner.setPhone(null);
+        owner.setPhoneNormalized("5196143615");
+        assertFalse(service.canAccessWithJwtToken(order, "jwt", null));
     }
 
     @Test

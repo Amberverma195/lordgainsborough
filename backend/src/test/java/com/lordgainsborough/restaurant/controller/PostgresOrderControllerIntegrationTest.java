@@ -22,6 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.*;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.math.BigDecimal;
@@ -53,6 +54,11 @@ class PostgresOrderControllerIntegrationTest {
     private TransactionTemplate transactions;
     private SocketIOServer sockets;
     private CustomerOrderPresentationService unusedPresentation;
+
+    private JwtUtil jwtUtil;
+    private JpaUser customer;
+    private String customerToken;
+    private String authHeader;
 
     private OrderAccessService access;
     private MockMvc mvc;
@@ -95,13 +101,15 @@ class PostgresOrderControllerIntegrationTest {
         context.getEnvironment().setActiveProfiles("test");
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
                 "pg017", Map.of("app.orders.postgres.enabled", "true")));
-        context.registerBean(JwtUtil.class, () -> mock(JwtUtil.class));
+        context.register(JwtUtil.class);
         context.registerBean(OrderRealtimeService.class, () -> new OrderRealtimeService(sockets, unusedPresentation));
         context.registerBean(OrderAccessService.class, () -> new OrderAccessService(context.getBean(JwtUtil.class),context.getBean(PostgresUserAuthStore.class)));
         context.registerBean(PostgresUserAuthStore.class, () -> new PostgresUserAuthStore(context.getBean(JpaUserRepository.class),context.getBean(JpaCustomerOrderRepository.class),context.getBean(JpaOrderReviewRepository.class),context.getBean("orderJpaTransactionManager",org.springframework.orm.jpa.JpaTransactionManager.class),java.time.Clock.systemDefaultZone()));
         context.register(JpaConfig.class, PostgresOrderPersistenceConfiguration.class, OrderController.class);
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl,"jwt.expiration","86400000","jwt.secret","fixture-only-secret-at-least-32-bytes")));
-        context.refresh(); access=context.getBean(OrderAccessService.class);
+        context.refresh();
+        jwtUtil = context.getBean(JwtUtil.class);
+        access = context.getBean(OrderAccessService.class);
         store = context.getBean(PostgresCustomerOrderStore.class);
         controller = context.getBean(OrderController.class);
         orders = context.getBean(JpaCustomerOrderRepository.class);
@@ -129,6 +137,12 @@ class PostgresOrderControllerIntegrationTest {
         menu.saveAndFlush(new JpaMenuItem("dish", "Steak", "", new BigDecimal("17.99"), "Mains", null));
         clearInvocations(sockets.getRoomOperations("kds"), sockets);
         reset(unusedPresentation);
+
+        customer = new JpaUser("guest-id", "Guest", "guest@example.com", "+1 (519)-555-1212", "MEMBER");
+        customer.setPhoneNormalized("5195551212");
+        users.saveAndFlush(customer);
+        customerToken = jwtUtil.generateToken(customer.getId(), customer.getEmail(), customer.getTokenVersion());
+        authHeader = "Bearer " + customerToken;
     }
 
     private CustomerOrder request() {
@@ -141,12 +155,15 @@ class PostgresOrderControllerIntegrationTest {
         var item = new CustomerOrder.OrderItem(); item.setMenuItemId(id); item.setName(name);
         item.setQuantity(quantity); item.setUnitPrice(0.01); item.setTotal(-9); item.setNotes("No salt"); return item;
     }
+    private ResponseEntity<?> createOrder(CustomerOrder order) {
+        return controller.createOrder(null, authHeader, null, order);
+    }
     private OrderCreationResponse create() {
-        var response = controller.createOrder(request()); assertThat(response.getStatusCode().value()).isEqualTo(200);
+        var response = createOrder(request()); assertThat(response.getStatusCode().value()).isEqualTo(200);
         return (OrderCreationResponse) response.getBody();
     }
     private void error(CustomerOrder order, int status, String code, String message) {
-        var response = controller.createOrder(order);
+        var response = createOrder(order);
         assertThat(response.getStatusCode().value()).isEqualTo(status);
         assertThat(response.getBody()).isEqualTo(Map.of("code", code, "message", message));
         assertThat(orders.count()).isZero();
@@ -162,11 +179,19 @@ class PostgresOrderControllerIntegrationTest {
     @ParameterizedTest
     @MethodSource("missingCustomerDetails")
     void missingContactFieldReturnsConsistentHttp400WithoutWriting(String field, String value, boolean omit) throws Exception {
+        JpaUser bareUser = new JpaUser("bare-id", null, "bare@example.com", null, "MEMBER");
+        users.saveAndFlush(bareUser);
+        String bareToken = jwtUtil.generateToken(bareUser.getId(), bareUser.getEmail(), bareUser.getTokenVersion());
+
         com.fasterxml.jackson.databind.node.ObjectNode body = json.valueToTree(request());
+        body.put("customerEmail", "bare@example.com");
         if (omit) body.remove(field);
         else if (value == null) body.putNull(field);
         else body.put(field, value);
-        String response = mvc.perform(post("/api/orders").contentType("application/json").content(json.writeValueAsString(body)))
+        String response = mvc.perform(post("/api/orders")
+                .header("Authorization", "Bearer " + bareToken)
+                .contentType("application/json")
+                .content(json.writeValueAsString(body)))
                 .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
         assertThat(json.readTree(response)).isEqualTo(json.valueToTree(Map.of(
                 "code", "MISSING_CUSTOMER_DETAILS", "message", "Customer name, email and phone are required.")));
@@ -176,10 +201,19 @@ class PostgresOrderControllerIntegrationTest {
         verify(sockets.getRoomOperations("kds"), never()).sendEvent(anyString(), any());
     }
 
-    @Test void validCreationRepricesAndReloadsOrderedChildrenWithoutUserAssociation() {
+    @Test void anonymousOrderReturnsHttp401() throws Exception {
+        mvc.perform(post("/api/orders")
+                .contentType("application/json")
+                .content(json.writeValueAsString(request())))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+        assertThat(orders.count()).isZero();
+    }
+
+    @Test void validCreationRepricesAndReloadsOrderedChildrenForAuthenticatedCustomer() {
         var request = request(); request.getItems().add(item("dish", "Other forgery", 3));
         request.setSubtotal(-5); request.setTax(Double.NaN); request.setTotal(Double.POSITIVE_INFINITY);
-        var response = (OrderCreationResponse) controller.createOrder(request).getBody();
+        var response = (OrderCreationResponse) createOrder(request).getBody();
         String id = response.getOrder().getId();
         for (int i = 0; i < 3; i++) {
             CustomerOrder loaded = store.findById(id).orElseThrow();
@@ -189,7 +223,7 @@ class PostgresOrderControllerIntegrationTest {
             assertThat(loaded.getSubtotal()).isEqualTo(89.95); assertThat(loaded.getTax()).isEqualTo(11.69);
             assertThat(loaded.getTotal()).isEqualTo(101.64); assertThat(loaded.getMessages()).isEmpty();
         }
-        assertThat(users.count()).isZero();
+        assertThat(users.count()).isEqualTo(1);
         assertThat(jdbc.queryForList("SELECT item_index FROM order_items WHERE order_id=? ORDER BY item_index", Integer.class, id))
                 .containsExactly(0, 1);
         assertThat(jdbc.queryForObject("SELECT subtotal FROM customer_orders WHERE id=?", BigDecimal.class, id))
@@ -204,7 +238,7 @@ class PostgresOrderControllerIntegrationTest {
         order.setReadyAt(order.getCreatedAt()); order.setPickedUpAt(order.getCreatedAt()); order.setNoShowAt(order.getCreatedAt());
         order.setTrackingTokenHash("attacker"); order.getMessages().add(new CustomerOrder.OrderMessage());
         order.setSpecialInstructions("  " + "x".repeat(501) + "  "); order.setPickupDate(" ");
-        var result = (OrderCreationResponse) controller.createOrder(order).getBody();
+        var result = (OrderCreationResponse) createOrder(order).getBody();
         var saved = store.findById(result.getOrder().getId()).orElseThrow();
         assertThat(saved.getId()).isNotEqualTo("attacker"); assertThat(saved.getStatus()).isEqualTo("NEW");
         assertThat(saved.isReviewed()).isFalse(); assertThat(saved.getMessages()).isEmpty();
@@ -219,7 +253,7 @@ class PostgresOrderControllerIntegrationTest {
     @Test void lowerReadyBoundaryAndBlankInstructionsAndQuantityNormalization() {
         var row = settings.findById("default").orElseThrow(); row.setDefaultReadyMinutes(1); settings.saveAndFlush(row);
         var order = request(); order.setSpecialInstructions("  "); order.getItems().getFirst().setQuantity(-2);
-        var result = (OrderCreationResponse) controller.createOrder(order).getBody();
+        var result = (OrderCreationResponse) createOrder(order).getBody();
         assertThat(result.getOrder().getAverageReadyMinutes()).isEqualTo(5);
         assertThat(result.getOrder().getSpecialInstructions()).isNull();
         assertThat(result.getOrder().getItems().getFirst().getQuantity()).isEqualTo(1);
@@ -244,12 +278,18 @@ class PostgresOrderControllerIntegrationTest {
         users.saveAndFlush(new JpaUser("member","Guest","guest@example.com","5195551212","MEMBER"));
         for (int i=0;i<3;i++) { var order = new JpaCustomerOrder(null,"Guest","guest@example.com","5195551212","2026-01-01");
             order.setStatus("NO_SHOW"); orders.saveAndFlush(order); }
-        assertThat(controller.createOrder(request()).getStatusCode().value()).isEqualTo(403);
+        assertThat(createOrder(request()).getStatusCode().value()).isEqualTo(403);
     }
     @Test void noShowLookupUsesNormalizedPhoneFallback() {
-        var user = new JpaUser("member","Guest","other@example.com","+1 (519) 555-1212","MEMBER");
+        var user = new JpaUser("other-member","Other","other@example.com","+1 (519) 555-1212","MEMBER");
         user.setPhoneNormalized("5195551212"); user.setNoShowCount(3); users.saveAndFlush(user);
-        error(request(),403,"PICKUP_DISABLED_NO_SHOW",CustomerNoShowService.PICKUP_DISABLED_MESSAGE);
+        String otherToken = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
+        var order = request();
+        order.setCustomerEmail("other@example.com");
+        order.setCustomerPhone("+1 (519) 555-1212");
+        var response = controller.createOrder(null, "Bearer " + otherToken, null, order);
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertThat(response.getBody()).isEqualTo(Map.of("code", "PICKUP_DISABLED_NO_SHOW", "message", CustomerNoShowService.PICKUP_DISABLED_MESSAGE));
     }
     @Test void unknownItemRetainsExactErrorContract() {
         var order=request(); order.setItems(List.of(item("unknown","Unknown",1)));
@@ -261,7 +301,7 @@ class PostgresOrderControllerIntegrationTest {
     }
     @Test void staleIdUsesTrimmedCaseInsensitiveUnambiguousName() {
         var order=request(); order.setItems(List.of(item("stale"," sTeAk ",1)));
-        var response=(OrderCreationResponse)controller.createOrder(order).getBody();
+        var response=(OrderCreationResponse)createOrder(order).getBody();
         assertThat(response.getOrder().getItems().getFirst().getMenuItemId()).isEqualTo("dish");
     }
     @Test void duplicateNameFallbackFailsClosedEvenIfOneProductUnavailable() {
@@ -283,7 +323,10 @@ class PostgresOrderControllerIntegrationTest {
         error(order,400,"CART_ITEM_CHANGED","An item in your cart is no longer on the menu. Please remove it and try again.");
     }
     @Test void httpCreationPreservesEnvelopeAndStatusFields() throws Exception {
-        var response=mvc.perform(post("/api/orders").contentType("application/json").content(json.writeValueAsString(request())))
+        var response=mvc.perform(post("/api/orders")
+                .header("Authorization", authHeader)
+                .contentType("application/json")
+                .content(json.writeValueAsString(request())))
                 .andExpect(status().isOk()).andExpect(jsonPath("order.status").value("NEW"))
                 .andExpect(jsonPath("order.items[0].unitPrice").value(17.99))
                 .andExpect(jsonPath("trackingToken").isString()).andExpect(jsonPath("order.trackingTokenHash").doesNotExist())
@@ -297,7 +340,7 @@ class PostgresOrderControllerIntegrationTest {
         var row=menu.findById("dish").orElseThrow(); row.setPrice(new BigDecimal("0.05")); menu.saveAndFlush(row);
         var tax=settings.findById("default").orElseThrow(); tax.setTaxRate(new BigDecimal("0.1500")); settings.saveAndFlush(tax);
         var order=request(); order.getItems().getFirst().setQuantity(1);
-        var result=(OrderCreationResponse)controller.createOrder(order).getBody();
+        var result=(OrderCreationResponse)createOrder(order).getBody();
         assertThat(result.getOrder().getTax()).isEqualTo(0.01); assertThat(result.getOrder().getTotal()).isEqualTo(0.06);
     }
     @Test void overflowRejectedBeforeAnyWrite() {
@@ -320,7 +363,25 @@ class PostgresOrderControllerIntegrationTest {
     @Test void legacyJwtCannotAuthorizePostgresOrder() {
         var response=create();
         assertThat(controller.getOrder(response.getOrder().getId(),"Bearer valid-looking-legacy-token",null).getStatusCode().value()).isEqualTo(404);
+    }
+    @Test void authenticatedOwnerCanGetOrderOverHttp() throws Exception {
+        var response = create();
+        String id = response.getOrder().getId();
+        mvc.perform(get("/api/orders/" + id).header("Authorization", authHeader))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("id").value(id))
+                .andExpect(jsonPath("status").value("NEW"));
+    }
+    @Test void strangerJwtCannotAccessOrderEvenWithSamePhone() throws Exception {
+        var response = create();
+        String id = response.getOrder().getId();
+        JpaUser stranger = new JpaUser("stranger-id", "Stranger", "stranger@example.com", customer.getPhone(), "MEMBER");
+        stranger.setPhoneNormalized(customer.getPhoneNormalized());
+        users.saveAndFlush(stranger);
+        String strangerToken = jwtUtil.generateToken(stranger.getId(), stranger.getEmail(), stranger.getTokenVersion());
 
+        mvc.perform(get("/api/orders/" + id).header("Authorization", "Bearer " + strangerToken))
+                .andExpect(status().isNotFound());
     }
     @Test void rawTokenOnlyInCreationEnvelopeAndHashOnlyInDatabase() throws Exception {
         var response=create(); var saved=store.findById(response.getOrder().getId()).orElseThrow();
@@ -416,7 +477,7 @@ class PostgresOrderControllerIntegrationTest {
         jdbc.execute("CREATE FUNCTION reject_order_item() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled child failure'; END $$");
         jdbc.execute("CREATE TRIGGER reject_order_item BEFORE INSERT ON order_items FOR EACH ROW EXECUTE FUNCTION reject_order_item()");
         try {
-            assertThatThrownBy(() -> controller.createOrder(request())).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> createOrder(request())).isInstanceOf(RuntimeException.class);
             assertThat(orders.count()).isZero(); assertThat(jdbc.queryForObject("SELECT count(*) FROM order_items",Long.class)).isZero();
             verify(sockets.getRoomOperations("kds"),never()).sendEvent(eq("order.created"),any());
         } finally { jdbc.execute("DROP TRIGGER reject_order_item ON order_items"); jdbc.execute("DROP FUNCTION reject_order_item()"); }
@@ -438,7 +499,7 @@ class PostgresOrderControllerIntegrationTest {
         jdbc.execute("CREATE FUNCTION reject_order_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled commit failure'; END $$");
         jdbc.execute("CREATE CONSTRAINT TRIGGER reject_order_commit AFTER INSERT ON customer_orders DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_order_commit()");
         try {
-            assertThatThrownBy(() -> controller.createOrder(request())).isInstanceOf(RuntimeException.class);
+            assertThatThrownBy(() -> createOrder(request())).isInstanceOf(RuntimeException.class);
             assertThat(orders.count()).isZero();
             assertThat(jdbc.queryForObject("SELECT count(*) FROM order_items",Long.class)).isZero();
             verify(sockets.getRoomOperations("kds"),never()).sendEvent(eq("order.created"),any());

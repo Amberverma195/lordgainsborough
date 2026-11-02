@@ -92,14 +92,36 @@ class PostgresOnlyApplicationIntegrationTest {
         return response(post(path).header("Idempotency-Key","integration-operation").contentType("application/json").content(json.writeValueAsString(body)),status);
     }
     OrderCreationResponse order(String address,String phone) {
-        var o=new CustomerOrder();o.setCustomerName("Guest");o.setCustomerEmail(address);o.setCustomerPhone(phone);
+        var existing = users.findByEmailIgnoreCase(address);
+        JpaUser u = existing.orElseGet(() -> {
+            String digits = phone.replaceAll("\\D", "");
+            return account(UUID.randomUUID().toString(), address, digits.length() >= 10 ? digits.substring(0, 10) : "5195551212", "MEMBER");
+        });
+        var o=new CustomerOrder();o.setCustomerName(u.getName());o.setCustomerEmail(address);o.setCustomerPhone(u.getPhone());
         var item=new CustomerOrder.OrderItem();item.setMenuItemId(jdbc.queryForObject("SELECT id FROM menu_items ORDER BY id LIMIT 1",String.class));item.setQuantity(2);o.setItems(List.of(item));
-        var result=orders.createOrder(o);assertThat(result.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)result.getBody();
+        var result=orders.createOrder(null, "Bearer " + token(u), null, o);
+        assertThat(result.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)result.getBody();
     }
     String signupCode(String address,String phone) throws Exception {
         send("/api/auth/signup/send-otp",Map.of("email",address,"phone",phone),202);
         var code=org.mockito.ArgumentCaptor.forClass(String.class);
         verify(email).sendOtpEmail(eq(address),code.capture(),anyString());return code.getValue();
+    }
+    @Test void anonymousOrderSubmissionIsRejectedWithHttp401() throws Exception {
+        var o = new CustomerOrder();
+        o.setCustomerName("Anonymous");
+        o.setCustomerEmail("anon@example.com");
+        o.setCustomerPhone("5195551111");
+        var item = new CustomerOrder.OrderItem();
+        item.setMenuItemId(jdbc.queryForObject("SELECT id FROM menu_items ORDER BY id LIMIT 1", String.class));
+        item.setQuantity(1);
+        o.setItems(List.of(item));
+
+        mvc.perform(post("/api/orders")
+                .contentType("application/json")
+                .content(json.writeValueAsString(o)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
     }
     @Test void defaultApplicationHasOnlyPostgresStoresAndCurrentValidSchema() {
         context.getBean(Flyway.class).validate();
@@ -174,7 +196,9 @@ class PostgresOnlyApplicationIntegrationTest {
     }
     @Test void accountHistoryDeduplicatesEmailAndPhoneAndExcludesOtherCustomers() throws Exception {
         var member=account("member","member@example.com","5195551111","MEMBER");
-        var own=order(member.getEmail(),member.getPhone());order("other@example.com","5195552222");
+        var own=order(member.getEmail(),member.getPhone());
+        order("other@example.com","5195552222");
+        order("different@example.com",member.getPhone());
         var history=response(get("/api/auth/orders").header("Authorization","Bearer "+token(member)),200);
         assertThat(history.size()).isEqualTo(1);assertThat(history.get(0).get("id").asText()).isEqualTo(own.getOrder().getId());
         assertThat(history.toString()).doesNotContain("trackingTokenHash","hibernateLazyInitializer");

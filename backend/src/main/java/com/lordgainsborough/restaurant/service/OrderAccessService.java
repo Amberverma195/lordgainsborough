@@ -168,27 +168,7 @@ public class OrderAccessService {
 
     private boolean ownsOrder(User user, CustomerOrder order) {
         String userEmail = user.getEmail();
-        if (userEmail != null && order.getCustomerEmail() != null
-                && userEmail.trim().equalsIgnoreCase(order.getCustomerEmail().trim())) {
-            return true;
-        }
-
-        String userPhone = user.getPhoneNormalized();
-        if (userPhone == null || userPhone.isBlank()) {
-            userPhone = normalizePhone(user.getPhone());
-        }
-        String orderPhone = normalizePhone(order.getCustomerPhone());
-        return userPhone.length() == 10 && userPhone.equals(orderPhone);
-    }
-
-    private String normalizePhone(String phone) {
-        if (phone == null) {
-            return "";
-        }
-        String digits = phone.replaceAll("\\D", "");
-        if (digits.startsWith("1") && digits.length() > 10) {
-            digits = digits.substring(1);
-        }
-        return digits.length() > 10 ? digits.substring(0, 10) : digits;
+        return userEmail != null && order.getCustomerEmail() != null
+                && userEmail.trim().equalsIgnoreCase(order.getCustomerEmail().trim());
     }
 }

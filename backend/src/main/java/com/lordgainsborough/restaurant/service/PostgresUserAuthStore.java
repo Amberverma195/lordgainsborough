@@ -201,18 +201,11 @@ public class PostgresUserAuthStore implements UserAuthStore {
         return reads.execute(tx -> users.findByEmailIgnoreCase(jwt.getEmailFromToken(token))
                 .filter(u -> jwt.validateTokenForIdentity(token, u.getId(), u.getTokenVersion()) && u.getId().equals(user.getId()))
                 .map(u -> {
-                    String phone = u.getPhoneNormalized();
-                    if (phone == null || phone.isBlank()) phone = normalizePhone(u.getPhone());
-                    boolean validPhone = phone.length() == 10 && u.getPhone() != null && !u.getPhone().isBlank();
                     List<CustomerOrder> found = new PostgresCustomerHistoryReader(orders).load(
-                            List.of(u.getEmail().toLowerCase(Locale.ROOT)), validPhone ? List.of(u.getPhone()) : List.of());
+                            List.of(u.getEmail().toLowerCase(Locale.ROOT)), List.of());
                     Map<String, CustomerOrder> distinct = new LinkedHashMap<>();
-                    // Email first and exact raw-phone fallback, with normalized equality checked again.
                     for (var order : found) if (u.getEmail().equalsIgnoreCase(order.getCustomerEmail()))
                         distinct.putIfAbsent(order.getId(), order);
-                    if (validPhone) for (var order : found)
-                        if (u.getPhone().equals(order.getCustomerPhone()) && phone.equals(normalizePhone(order.getCustomerPhone())))
-                            distinct.putIfAbsent(order.getId(), order);
                     List<CustomerOrder> result = new ArrayList<>(distinct.values());
                     for (int start = 0; start < result.size(); start += 128) {
                         var batch = result.subList(start, Math.min(start + 128, result.size()));
