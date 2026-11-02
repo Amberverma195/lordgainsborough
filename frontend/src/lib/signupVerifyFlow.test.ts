@@ -197,6 +197,27 @@ describe('Signup and Verify Flow UX & Mechanics', () => {
       expect(getResendLabel(0, false, false, true)).toBe('Resend limit reached');
     });
 
+    it('does not start resend timer right away on initial verify page load and starts only after resend', () => {
+      const computeActiveCooldown = (
+        rawCooldown: number,
+        hasResent: boolean,
+        resendsRemaining: number | undefined
+      ) => {
+        const resendConsumed = resendsRemaining !== undefined && resendsRemaining < 5;
+        return (hasResent || resendConsumed) ? rawCooldown : 0;
+      };
+
+      // 1. Initial page load (no resend clicked yet, 5 resends remaining)
+      expect(computeActiveCooldown(30, false, 5)).toBe(0);
+      expect(computeActiveCooldown(30, false, undefined)).toBe(0);
+
+      // 2. User clicks resend (hasResent becomes true)
+      expect(computeActiveCooldown(30, true, 5)).toBe(30);
+
+      // 3. Resend consumed from prior request / refreshed page (4 resends remaining)
+      expect(computeActiveCooldown(25, false, 4)).toBe(25);
+    });
+
     it('blocks resend attempts while cooldown is active', async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);

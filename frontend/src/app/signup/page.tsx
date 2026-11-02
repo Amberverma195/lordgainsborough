@@ -153,7 +153,13 @@ export default function SignupPage() {
       if (res.ok || res.status === 202) {
         const body = await readSignupOtpResponse(res);
         clearAllSignupSession();
-        const challengeState = applyBackendChallengeState(existingChallenge, body, cleanEmail);
+        const initialChallengeBody = {
+          ...body,
+          nextResendAt: body.nextResendAt && Date.parse(body.nextResendAt) <= Date.parse(body.serverTime || '')
+            ? body.nextResendAt
+            : body.serverTime,
+        };
+        const challengeState = applyBackendChallengeState(existingChallenge, initialChallengeBody, cleanEmail);
         saveSignupOtpChallengeState(challengeState);
         savePendingSignupCredentials({
           name: formData.name.trim(),

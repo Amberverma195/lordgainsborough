@@ -193,7 +193,7 @@ public class SignupOtpChallengePersistence {
         challenge.setOtpDigest(otpDigest);
         challenge.setResendCount(0);
         challenge.setFailedVerifyAttempts(0);
-        challenge.setNextResendAt(now.plus(RESEND_COOLDOWN));
+        challenge.setNextResendAt(now);
         challenge.setOtpExpiresAt(now.plus(OTP_TTL));
         challenge.setChallengeExpiresAt(now.plus(CHALLENGE_TTL));
         challenge.setCreatedAt(now);

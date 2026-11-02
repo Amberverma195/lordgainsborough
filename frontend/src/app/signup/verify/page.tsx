@@ -57,6 +57,7 @@ export default function SignupVerifyPage() {
   const syncSeqRef = useRef(0);
   const challengeRef = useRef<SignupOtpChallengeState | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasResentRef = useRef(false);
 
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) {
@@ -261,13 +262,14 @@ export default function SignupVerifyPage() {
 
   const handleResend = async () => {
     if (!pendingSignup || resending || loading) return;
-    if (cooldownSeconds > 0 || isResendExhausted(challenge) || isChallengeExpiredState(challenge, nowTick)) {
+    if (activeCooldownSeconds > 0 || isResendExhausted(challenge) || isChallengeExpiredState(challenge, nowTick)) {
       return;
     }
 
     // Invalidate any in-flight background status sync so it cannot overwrite this resend
     syncSeqRef.current++;
 
+    hasResentRef.current = true;
     setResending(true);
     setError('');
     setInfoMessage('');
@@ -414,8 +416,11 @@ export default function SignupVerifyPage() {
       )
     : 0;
 
+  const resendConsumed = challenge?.resendsRemaining !== undefined && challenge.resendsRemaining < 5;
+  const activeCooldownSeconds = (hasResentRef.current || resendConsumed) ? cooldownSeconds : 0;
+
   const resendDisabled =
-    resending || loading || cooldownSeconds > 0 || exhausted || challengeExpired;
+    resending || loading || activeCooldownSeconds > 0 || exhausted || challengeExpired;
 
   let resendLabel = 'Resend Code';
   if (resending) {
@@ -424,8 +429,8 @@ export default function SignupVerifyPage() {
     resendLabel = 'Session expired';
   } else if (exhausted) {
     resendLabel = 'Resend limit reached';
-  } else if (cooldownSeconds > 0) {
-    resendLabel = `Resend available in ${cooldownSeconds}s`;
+  } else if (activeCooldownSeconds > 0) {
+    resendLabel = `Resend available in ${activeCooldownSeconds}s`;
   }
 
   return (
@@ -521,17 +526,6 @@ export default function SignupVerifyPage() {
             disabled={resendDisabled}
           >
             {resendLabel}
-          </button>
-
-          <button
-            type="button"
-            className={styles.backLink}
-            onClick={() => {
-              clearAllSignupSession();
-              router.push('/signup');
-            }}
-          >
-            Back to Signup / Change Email
           </button>
         </div>
       </motion.div>

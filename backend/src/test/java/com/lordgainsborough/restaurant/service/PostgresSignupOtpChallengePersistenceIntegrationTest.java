@@ -278,7 +278,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
         assertEquals(digest, challenge.getOtpDigest());
         assertEquals(0, challenge.getResendCount());
         assertEquals(0, challenge.getFailedVerifyAttempts());
-        assertEquals(FIXED_NOW.plus(SignupOtpChallengePersistence.RESEND_COOLDOWN), challenge.getNextResendAt());
+        assertEquals(FIXED_NOW, challenge.getNextResendAt());
         assertEquals(FIXED_NOW.plus(SignupOtpChallengePersistence.OTP_TTL), challenge.getOtpExpiresAt());
         assertEquals(FIXED_NOW.plus(SignupOtpChallengePersistence.CHALLENGE_TTL), challenge.getChallengeExpiresAt());
         assertEquals(FIXED_NOW, challenge.getCreatedAt());
@@ -598,6 +598,7 @@ public class PostgresSignupOtpChallengePersistenceIntegrationTest {
     void test19_resendWithinCooldownDenied() {
         String email = "resend-cool@example.com";
         SignupOtpChallenge ch = persistence.buildNewActiveChallenge(email, persistence.digestOtp("111111"), "ch-res1", "op-res1", "k-1");
+        ch.setNextResendAt(clock.instant().plus(SignupOtpChallengePersistence.RESEND_COOLDOWN));
         persistence.tryInsert(ch);
 
         clock.advance(Duration.ofSeconds(15)); // cooldown is 30s
