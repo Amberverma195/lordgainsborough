@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import styles from './menu.module.css';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar, Clock } from 'lucide-react';
+import { Calendar, Clock, ChevronDown } from 'lucide-react';
 import { MenuItem } from '@/lib/mockData';
 import { API_BASE, backendAssetUrl, fetchStoreSettings } from '@/lib/orders';
 import { isPickupDisabledForUser, PICKUP_DISABLED_NO_SHOW_MESSAGE } from '@/lib/auth';
@@ -42,6 +42,7 @@ export default function MenuPage() {
   const [pickupTime, setPickupTime] = useState('');
   const [pickupOrdersEnabled, setPickupOrdersEnabled] = useState(true);
   const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
+  const [pickupCollapsed, setPickupCollapsed] = useState(false);
   const { addToCart } = useCart();
 
   const timeSlots = useMemo(() => generateTimeSlots(), []);
@@ -116,85 +117,146 @@ export default function MenuPage() {
 
   return (
     <div className={styles.container}>
-      <motion.h1 
-        className={styles.title}
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        Culinary Selection
-      </motion.h1>
-      <motion.p 
-        className={styles.subtitle}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.2 }}
-      >
-        A curated journey of flavors, crafted with passion.
-      </motion.p>
+      <h1 className={styles.srOnly}>Lord Gainsborough Menu</h1>
 
       <motion.div
         className={`${styles.pickupSection} premium-card`}
-        initial={{ opacity: 0, y: 10 }}
+        initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
+        transition={{ duration: 0.25 }}
       >
-        <h2 className={styles.pickupTitle}>Pickup Details</h2>
-        {pickupDisabledForUser ? (
-          <p className={styles.pickupHint}>{PICKUP_DISABLED_NO_SHOW_MESSAGE}</p>
-        ) : !pickupOrdersEnabled ? (
-          <p className={styles.pickupHint}>Pickup orders are currently paused. Please check back later.</p>
-        ) : (
-          <>
-            <p className={styles.pickupSubtitle}>Select when you&apos;d like to pick up your order</p>
-            <div className={styles.pickupFields}>
-              <div className={styles.pickupField}>
-                <label><Calendar size={16} /> Pickup Date</label>
-                <input
-                  type="date"
-                  min={getTodayString()}
-                  value={pickupDate}
-                  onChange={(e) => handlePickupDateChange(e.target.value)}
-                  required
-                />
-              </div>
-              <div className={styles.pickupField}>
-                <label><Clock size={16} /> Pickup Time</label>
-                <select
-                  value={pickupTime}
-                  onChange={(e) => handlePickupTimeChange(e.target.value)}
-                  required
-                >
-                  <option value="">Select a time</option>
-                  {timeSlots.map((slot) => (
-                    <option key={slot} value={slot}>{slot}</option>
-                  ))}
-                </select>
-              </div>
+        <div
+          className={styles.pickupHeader}
+          onClick={() => setPickupCollapsed(prev => !prev)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={!pickupCollapsed}
+          aria-controls="pickup-details-content"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setPickupCollapsed(prev => !prev);
+            }
+          }}
+        >
+          <div className={styles.pickupHeaderLeft}>
+            <div className={styles.pickupHeaderTitleRow}>
+              <h2 className={styles.pickupTitle}>Pickup Details</h2>
+              {pickupDisabledForUser ? (
+                <span className={styles.pickupStatusBadgeDisabled}>Pickup Disabled</span>
+              ) : !pickupOrdersEnabled ? (
+                <span className={styles.pickupStatusBadgeDisabled}>Orders Paused</span>
+              ) : pickupReady ? (
+                <span className={styles.pickupReadyBadge}>
+                  <Calendar size={13} />
+                  <span>{pickupDate}</span>
+                  <span className={styles.badgeDivider}>•</span>
+                  <Clock size={13} />
+                  <span>{pickupTime}</span>
+                </span>
+              ) : (
+                <span className={styles.pickupRequiredBadge}>
+                  Required for ordering
+                </span>
+              )}
             </div>
-            {!pickupReady && (
-              <p className={styles.pickupHint}>Please select a pickup date and time before adding items to your cart.</p>
+            {pickupCollapsed && (
+              <p className={styles.pickupCollapsedHint}>
+                {pickupReady ? 'Click to change pickup time' : 'Click to select pickup date & time'}
+              </p>
             )}
-          </>
-        )}
+          </div>
+
+          <div className={styles.pickupHeaderRight}>
+            <span className={styles.collapseLabel}>
+              {pickupCollapsed ? 'Expand' : 'Collapse'}
+            </span>
+            <span
+              className={`${styles.collapseChevron} ${pickupCollapsed ? styles.chevronCollapsed : ''}`}
+              aria-hidden="true"
+            >
+              <ChevronDown size={18} />
+            </span>
+          </div>
+        </div>
+
+        <AnimatePresence initial={false}>
+          {!pickupCollapsed && (
+            <motion.div
+              id="pickup-details-content"
+              key="pickup-content"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.22, ease: 'easeInOut' }}
+              className={styles.pickupContent}
+            >
+              {pickupDisabledForUser ? (
+                <p className={styles.pickupHint}>{PICKUP_DISABLED_NO_SHOW_MESSAGE}</p>
+              ) : !pickupOrdersEnabled ? (
+                <p className={styles.pickupHint}>Pickup orders are currently paused. Please check back later.</p>
+              ) : (
+                <>
+                  <p className={styles.pickupSubtitle}>Select when you&apos;d like to pick up your order</p>
+                  <div className={styles.pickupFields}>
+                    <div className={styles.pickupField}>
+                      <label htmlFor="pickup-date-input"><Calendar size={16} /> Pickup Date</label>
+                      <input
+                        id="pickup-date-input"
+                        type="date"
+                        min={getTodayString()}
+                        value={pickupDate}
+                        onChange={(e) => handlePickupDateChange(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className={styles.pickupField}>
+                      <label htmlFor="pickup-time-select"><Clock size={16} /> Pickup Time</label>
+                      <select
+                        id="pickup-time-select"
+                        value={pickupTime}
+                        onChange={(e) => handlePickupTimeChange(e.target.value)}
+                        required
+                      >
+                        <option value="">Select a time</option>
+                        {timeSlots.map((slot) => (
+                          <option key={slot} value={slot}>{slot}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {!pickupReady && (
+                    <p className={styles.pickupHint}>Please select a pickup date and time before adding items to your cart.</p>
+                  )}
+                </>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
 
       {menuError ? (
         <div className={styles.errorState}>{menuError}</div>
       ) : (
         <>
-          <div className={styles.filters}>
-            {categories.map((cat, index) => (
-              <motion.button
-                key={cat}
-                className={`${styles.filterBtn} ${activeCategory === cat ? styles.activeFilter : ''}`}
-                onClick={() => setActiveCategory(cat)}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.05 * index }}
-              >
-                {cat}
-              </motion.button>
-            ))}
+          <div className={styles.filterBarWrapper}>
+            <div className={styles.filters} role="tablist" aria-label="Menu categories">
+              {categories.map((cat, index) => (
+                <motion.button
+                  key={cat}
+                  role="tab"
+                  aria-selected={activeCategory === cat}
+                  className={`${styles.filterBtn} ${activeCategory === cat ? styles.activeFilter : ''}`}
+                  onClick={() => setActiveCategory(cat)}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.03 * index }}
+                  whileTap={{ scale: 0.96 }}
+                >
+                  {cat}
+                </motion.button>
+              ))}
+            </div>
           </div>
 
           <motion.div 
