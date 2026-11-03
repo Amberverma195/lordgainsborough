@@ -7,7 +7,9 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
         SignupAbuseProperties.class,
         LoginRateLimitProperties.class,
-        PasswordResetProperties.class
+        PasswordResetProperties.class,
+        ReservationRateLimitProperties.class,
+        OrderRateLimitProperties.class
 })
 public class SignupAbuseConfig {
 }

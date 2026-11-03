@@ -18,5 +18,6 @@ public interface CustomerOrderStore {
     StoreSettings settings();
     boolean pickupDisabled(String email, String phone);
     boolean reviewExists(String id);
+    default long countActiveOrders(String email, String phone) { return 0; }
     default boolean usesPostgres() { return false; }
 }

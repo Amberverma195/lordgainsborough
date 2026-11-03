@@ -9,11 +9,12 @@ import java.util.*;
 public class PostgresReservationStore implements ReservationStore {
     private final JpaReservationRepository repository;
     private final TransactionTemplate transactions;
-    private final ReservationMapper mapper=new ReservationMapper();
+    private final ReservationMapper mapper;
     private final Clock clock;
     private final JpaTransactionManager manager;
     public PostgresReservationStore(JpaReservationRepository repository,JpaTransactionManager manager,Clock clock) {
         this.manager=manager; this.repository=repository; this.clock=clock.withZone(ZoneId.systemDefault());
+        this.mapper=new ReservationMapper(this.clock);
         transactions=new TransactionTemplate(manager); transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
     public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }

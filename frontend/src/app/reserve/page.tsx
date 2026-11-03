@@ -63,6 +63,8 @@ export default function ReservePage() {
       
       if (res.ok) {
         setSuccess(true);
+      } else if (res.status === 429) {
+        alert('Too many reservation requests have been submitted from your device. Please wait a few minutes before trying again.');
       } else {
         alert('Failed to submit reservation request. Please check your information and try again.');
       }
@@ -284,6 +286,7 @@ export default function ReservePage() {
                 name="specialRequests" 
                 placeholder="Dietary requirements, special occasions..."
                 rows={3}
+                maxLength={1000}
                 value={formData.specialRequests}
                 onChange={handleChange}
               />

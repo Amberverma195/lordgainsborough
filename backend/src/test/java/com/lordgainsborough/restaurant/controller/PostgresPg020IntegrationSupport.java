@@ -85,7 +85,8 @@ abstract class PostgresPg020IntegrationSupport {
         context.register(JpaConfig.class,PostgresOrderPersistenceConfiguration.class,PostgresKdsPersistenceConfiguration.class,
             PostgresReviewPersistenceConfiguration.class,PostgresReservationPersistenceConfiguration.class,
             OrderController.class,KdsController.class,ReviewController.class,ReservationController.class,
-            CustomerNoShowService.class,CustomerOrderPresentationService.class,KdsAccessService.class);
+            CustomerNoShowService.class,CustomerOrderPresentationService.class,KdsAccessService.class,
+            ReservationRateLimiter.class);
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl,"jwt.expiration","86400000","jwt.secret","fixture-only-secret-at-least-32-bytes")));
         context.refresh(); access=context.getBean(OrderAccessService.class);jdbc=new JdbcTemplate(context.getBean(PGSimpleDataSource.class));
         orders=context.getBean(JpaCustomerOrderRepository.class);reviews=context.getBean(JpaOrderReviewRepository.class);

@@ -1,10 +1,13 @@
-
 package com.lordgainsborough.restaurant.controller;
 import com.lordgainsborough.restaurant.model.Reservation;
+import com.lordgainsborough.restaurant.service.ReservationRateLimiter;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.Arguments;
+import org.springframework.web.server.ResponseStatusException;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.*;
@@ -12,12 +15,18 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 class PostgresReservationControllerIntegrationTest extends PostgresPg020IntegrationSupport {
     private Reservation request() {
-        var r=new Reservation();r.setName("Guest");r.setEmail("guest@example.com");r.setPhone("5195551212");r.setDate("2026-11-01");r.setTime("01:30");r.setPartySize(4);r.setSpecialRequests("window seat");return r;
+        var r=new Reservation();r.setName("Guest");r.setEmail("guest@example.com");r.setPhone("5195551212");
+        LocalDate futureDate = LocalDate.now(ZoneId.of("America/Toronto")).plusDays(14);
+        r.setDate(futureDate.toString());
+        r.setTime("18:00");
+        r.setPartySize(4);
+        r.setSpecialRequests("window seat");
+        return r;
     }
     @Test void publicCreateIgnoresTamperedFieldsAndRoundTripsEveryFieldWithoutTimezoneShift() throws Exception {
         var request=request();request.setId("client-id");request.setStatus("CONFIRMED");request.setCreatedAt(java.time.LocalDateTime.MIN);
         var response=mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(request)))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.date").value("2026-11-01")).andExpect(jsonPath("$.time").value("01:30"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("PENDING")).andExpect(jsonPath("$.date").value(request.getDate())).andExpect(jsonPath("$.time").value("18:00"))
             .andReturn().getResponse().getContentAsString();
         var dto=json.readValue(response,Reservation.class);assertThat(json.readTree(response).size()).isEqualTo(10);assertThat(dto.getId()).isNotEqualTo("client-id").hasSize(36);
         assertThat(dto.getCreatedAt()).isAfter(java.time.LocalDateTime.now().minusMinutes(1));assertThat(count("users")).isEqualTo(1);
@@ -28,15 +37,29 @@ class PostgresReservationControllerIntegrationTest extends PostgresPg020Integrat
         var result=new ArrayList<Arguments>();
         for(String field:List.of("name","email","phone","date","time"))for(String value:Arrays.asList(null,""," "))result.add(Arguments.of(field,value));
         for(String field:List.of("name","email","phone","date","time"))result.add(Arguments.of(field,"x".repeat(field.equals("phone")?51:field.equals("date")||field.equals("time")?21:256)));
-        result.add(Arguments.of("partySize",0));result.add(Arguments.of("partySize",-1));result.add(Arguments.of("specialRequests","bad"+(char)0));return result.stream();
+        result.add(Arguments.of("partySize",0));result.add(Arguments.of("partySize",-1));
+        result.add(Arguments.of("partySize",11));result.add(Arguments.of("partySize",10000));
+        result.add(Arguments.of("specialRequests","bad"+(char)0));
+        result.add(Arguments.of("specialRequests","x".repeat(1001)));
+        result.add(Arguments.of("date","2020-01-01"));
+        result.add(Arguments.of("date","2026-02-31"));
+        result.add(Arguments.of("date","invalid-date"));
+        result.add(Arguments.of("time","23:00"));
+        result.add(Arguments.of("time","03:00"));
+        result.add(Arguments.of("time","12:15"));
+        result.add(Arguments.of("time","invalid-time"));
+        return result.stream();
     }
     @ParameterizedTest @MethodSource("invalidInputs") void invalidInputsReturn400WithNoReservationOrOtherWrites(String field,Object value) throws Exception {
         var payload=json.convertValue(request(),new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});payload.put(field,value);
         mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(payload))).andExpect(status().isBadRequest());assertThat(count("reservations")).isZero();assertThat(count("users")).isEqualTo(1);
     }
-    @Test void arbitraryRepresentableDateTimeAndStatusStringsRemainAccepted() {
-        var request=request();request.setDate("Sat Nov 1");request.setTime("7 PM local");var saved=reservationController.createReservation(request);
-        assertThat(saved.getDate()).isEqualTo("Sat Nov 1");assertThat(saved.getTime()).isEqualTo("7 PM local");
+    @Test void arbitraryDateTimeStringsAreRejectedWhileAdminStatusUpdatesRemainAccepted() {
+        var badDateRequest=request();badDateRequest.setDate("Sat Nov 1");
+        assertThatThrownBy(() -> reservationController.createReservation(badDateRequest)).isInstanceOf(ResponseStatusException.class);
+        var badTimeRequest=request();badTimeRequest.setTime("7 PM local");
+        assertThatThrownBy(() -> reservationController.createReservation(badTimeRequest)).isInstanceOf(ResponseStatusException.class);
+        var saved=reservationController.createReservation(request());
         for(String status:List.of("private custom status",""," confirmed "))assertThat(reservationController.updateReservationStatus(saved.getId(),Map.of("status",status)).getStatus()).isEqualTo(status);
     }
     @Test void statusAbsentRetainsWholeRecordAndInvalidStatusCannotPartiallyUpdate() throws Exception {
@@ -61,6 +84,19 @@ class PostgresReservationControllerIntegrationTest extends PostgresPg020Integrat
         mvc.perform(delete("/api/reservations/missing")).andExpect(status().isNotFound());
         mvc.perform(patch("/api/reservations/missing/status").contentType("application/json").content("{}")).andExpect(status().isNotFound());
         mvc.perform(get("/api/reservations").header("Authorization","Bearer invalid")).andExpect(status().isNotFound());
+    }
+    @Test void rateLimitingEnforcedOnPublicReservationEndpoint() throws Exception {
+        var limiter = context.getBean(ReservationRateLimiter.class);
+        limiter.clearForTests();
+        var req = request();
+        for (int i = 0; i < 10; i++) {
+            mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(req)))
+                .andExpect(status().isOk());
+        }
+        mvc.perform(post("/api/reservations").contentType("application/json").content(json.writeValueAsString(req)))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(header().exists("Retry-After"));
+        limiter.clearForTests();
     }
     @Test void insertUpdateAndDeleteFailuresRollBackWithoutAffectingOtherTables() {
         failureTrigger("reservations","INSERT",()->{assertThatThrownBy(()->reservationController.createReservation(request())).isInstanceOf(RuntimeException.class);assertThat(count("reservations")).isZero();});

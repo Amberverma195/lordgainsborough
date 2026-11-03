@@ -55,6 +55,13 @@ public interface JpaCustomerOrderRepository extends JpaRepository<JpaCustomerOrd
 
     long countByCustomerPhoneAndStatus(String customerPhone, String status);
 
+    @org.springframework.data.jpa.repository.Query("select count(o) from JpaCustomerOrder o where " +
+            "((:email is not null and lower(o.customerEmail) = lower(:email)) or (:phone is not null and o.customerPhone = :phone)) " +
+            "and o.status in ('NEW', 'ACCEPTED', 'READY')")
+    long countActiveOrders(
+            @org.springframework.data.repository.query.Param("email") String email,
+            @org.springframework.data.repository.query.Param("phone") String phone);
+
     /**
      * Targeted query method fetching an order with child items in a single query via entity graph.
      * Prevents N+1 queries when order line items are needed.

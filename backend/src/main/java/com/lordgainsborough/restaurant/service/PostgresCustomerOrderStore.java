@@ -122,6 +122,16 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
         return pickupRestrictions.isPickupDisabledForCustomer(email,phone);
     }
 
+    @Override
+    public long countActiveOrders(String email, String phone) {
+        String safeEmail = (email != null && !email.isBlank()) ? email.trim() : null;
+        String safePhone = (phone != null && !phone.isBlank()) ? phone.trim() : null;
+        if (safeEmail == null && safePhone == null) {
+            return 0;
+        }
+        return transactions.execute(status -> orders.countActiveOrders(safeEmail, safePhone));
+    }
+
     private long noShows(String email, String phone) {
         if (email != null && !email.isBlank())
             return orders.countByCustomerEmailIgnoreCaseAndStatus(email.trim(), "NO_SHOW");

@@ -1,15 +1,21 @@
 package com.lordgainsborough.restaurant.controller;
 
+import com.lordgainsborough.restaurant.config.OrderRateLimitProperties;
 import com.lordgainsborough.restaurant.dto.OrderCreationResponse;
 import com.lordgainsborough.restaurant.dto.OrderStatusResponse;
 import com.lordgainsborough.restaurant.model.CustomerOrder;
 import com.lordgainsborough.restaurant.model.MenuItem;
 import com.lordgainsborough.restaurant.model.User;
+import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.service.CustomerNoShowService;
-import com.lordgainsborough.restaurant.service.OrderAccessService;
-import com.lordgainsborough.restaurant.service.OrderRealtimeService;
 import com.lordgainsborough.restaurant.service.CustomerOrderStore;
+import com.lordgainsborough.restaurant.service.OrderAccessService;
 import com.lordgainsborough.restaurant.service.OrderMoney;
+import com.lordgainsborough.restaurant.service.OrderRateLimiter;
+import com.lordgainsborough.restaurant.service.OrderRealtimeService;
+import com.lordgainsborough.restaurant.service.OrderSchedulingValidator;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -21,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 @RestController
@@ -29,24 +36,55 @@ public class OrderController {
     private final CustomerOrderStore orderStore;
     private final OrderRealtimeService realtimeService;
     private final OrderAccessService orderAccessService;
+    private final OrderRateLimiter rateLimiter;
+    private final ClientIpResolver clientIpResolver;
+    private final OrderRateLimitProperties properties;
+    private final OrderSchedulingValidator schedulingValidator;
 
     @Autowired
     public OrderController(CustomerOrderStore orderStore, OrderRealtimeService realtimeService,
-            OrderAccessService orderAccessService) {
+            OrderAccessService orderAccessService,
+            @Autowired(required = false) OrderRateLimiter rateLimiter,
+            @Autowired(required = false) ClientIpResolver clientIpResolver,
+            @Autowired(required = false) OrderRateLimitProperties properties,
+            @Autowired(required = false) OrderSchedulingValidator schedulingValidator) {
         this.orderStore = orderStore;
         this.realtimeService = realtimeService;
         this.orderAccessService = orderAccessService;
+        this.rateLimiter = rateLimiter;
+        this.clientIpResolver = clientIpResolver;
+        this.properties = properties;
+        this.schedulingValidator = schedulingValidator;
+    }
+
+    public OrderController(CustomerOrderStore orderStore, OrderRealtimeService realtimeService,
+            OrderAccessService orderAccessService,
+            OrderRateLimiter rateLimiter,
+            ClientIpResolver clientIpResolver,
+            OrderRateLimitProperties properties) {
+        this(orderStore, realtimeService, orderAccessService, rateLimiter, clientIpResolver, properties, null);
+    }
+
+    public OrderController(CustomerOrderStore orderStore, OrderRealtimeService realtimeService,
+            OrderAccessService orderAccessService) {
+        this(orderStore, realtimeService, orderAccessService, null, null, null, null);
     }
 
     public CustomerOrderStore getOrderStore() { return orderStore; }
     public OrderAccessService getOrderAccessService() { return orderAccessService; }
+    public OrderRateLimiter getRateLimiter() { return rateLimiter; }
+    public ClientIpResolver getClientIpResolver() { return clientIpResolver; }
+    public OrderRateLimitProperties getProperties() { return properties; }
+    public OrderSchedulingValidator getSchedulingValidator() { return schedulingValidator; }
 
     @PostMapping
     public ResponseEntity<?> createOrder(
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKeyHeader,
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestHeader(value = OrderAccessService.TRACKING_TOKEN_HEADER, required = false) String trackingTokenHeader,
-            @RequestBody CustomerOrder order) {
+            @RequestBody CustomerOrder order,
+            @Autowired(required = false) HttpServletRequest servletRequest,
+            @Autowired(required = false) HttpServletResponse servletResponse) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
                     "code", "AUTHENTICATION_REQUIRED",
@@ -95,6 +133,33 @@ public class OrderController {
                     "message", "Your cart is empty."));
         }
 
+        if (properties != null) {
+            if (order.getItems().size() > properties.getMaxCartItems()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "code", "CART_SIZE_EXCEEDED",
+                        "message", "Cart contains too many items (maximum " + properties.getMaxCartItems() + " lines allowed)."));
+            }
+
+            int totalQuantity = 0;
+            for (CustomerOrder.OrderItem item : order.getItems()) {
+                if (item == null) {
+                    return ResponseEntity.badRequest().body(cartChanged());
+                }
+                if (item.getQuantity() > properties.getMaxItemQuantity()) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "code", "INVALID_ITEM_QUANTITY",
+                            "message", "Item quantity exceeds maximum limit of " + properties.getMaxItemQuantity() + " per item."));
+                }
+                int normalizedQty = Math.max(1, item.getQuantity());
+                totalQuantity += normalizedQty;
+            }
+            if (totalQuantity > properties.getMaxTotalQuantity()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "code", "TOTAL_QUANTITY_EXCEEDED",
+                        "message", "Total order quantity exceeds limit of " + properties.getMaxTotalQuantity() + " items."));
+            }
+        }
+
         if (!orderStore.settings().getPickupOrdersEnabled()) {
             return ResponseEntity.status(503).body(Map.of(
                     "code", "PICKUP_ORDERS_PAUSED",
@@ -107,8 +172,58 @@ public class OrderController {
                     "message", CustomerNoShowService.PICKUP_DISABLED_MESSAGE));
         }
 
-        if (order.getPickupDate() == null || order.getPickupDate().isBlank()) {
-            order.setPickupDate(LocalDate.now().toString());
+        if (properties != null && properties.getMaxActiveOrders() > 0) {
+            long activeOrders = orderStore.countActiveOrders(order.getCustomerEmail(), order.getCustomerPhone());
+            if (activeOrders >= properties.getMaxActiveOrders()) {
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                        "code", "ACTIVE_ORDERS_LIMIT_EXCEEDED",
+                        "message", "You have reached the maximum number of active orders (" + properties.getMaxActiveOrders() + "). Please wait until your orders are completed."));
+            }
+        }
+
+        if (rateLimiter != null) {
+            String accountIdentifier = (user.getEmail() != null && !user.getEmail().isBlank())
+                    ? user.getEmail().trim()
+                    : user.getId();
+            OptionalLong accountRetry = rateLimiter.consumeAccountRequest(accountIdentifier);
+            if (accountRetry.isPresent()) {
+                if (servletResponse != null) {
+                    servletResponse.addHeader("Retry-After", String.valueOf(accountRetry.getAsLong()));
+                }
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                        "code", "RATE_LIMIT_EXCEEDED",
+                        "message", "Too many orders placed for this account. Please try again later."));
+            }
+
+            if (clientIpResolver != null && servletRequest != null) {
+                String clientIp = clientIpResolver.resolve(
+                        servletRequest.getRemoteAddr(),
+                        servletRequest.getHeader("X-Forwarded-For"),
+                        servletRequest.getHeader("X-Real-IP"));
+                OptionalLong ipRetry = rateLimiter.consumeIpRequest(clientIp);
+                if (ipRetry.isPresent()) {
+                    if (servletResponse != null) {
+                        servletResponse.addHeader("Retry-After", String.valueOf(ipRetry.getAsLong()));
+                    }
+                    return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of(
+                            "code", "RATE_LIMIT_EXCEEDED",
+                            "message", "Too many order requests from this IP address. Please try again later."));
+                }
+            }
+        }
+
+        if (schedulingValidator != null) {
+            Map<String, String> schedulingError = schedulingValidator.validate(order);
+            if (schedulingError != null) {
+                return ResponseEntity.badRequest().body(schedulingError);
+            }
+        } else {
+            if (order.getPickupDate() == null || order.getPickupDate().isBlank()) {
+                order.setPickupDate(LocalDate.now(OrderSchedulingValidator.RESTAURANT_ZONE).toString());
+            }
+            if (order.getPickupTime() == null || order.getPickupTime().isBlank()) {
+                order.setPickupTime("asap");
+            }
         }
 
         // Reprice against authoritative menu data. Name fallback repairs carts saved
@@ -144,6 +259,14 @@ public class OrderController {
             else normalizeItemsAndTotals(order, orderStore.settings().getTaxRate());
         } catch (IllegalArgumentException invalidMoney) {
             return ResponseEntity.badRequest().body(cartChanged());
+        }
+
+        if (properties != null && properties.getMaxOrderTotal() > 0) {
+            if (order.getTotal() > properties.getMaxOrderTotal()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "code", "ORDER_TOTAL_EXCEEDED",
+                        "message", "Order total exceeds maximum limit of $" + String.format(java.util.Locale.US, "%.2f", properties.getMaxOrderTotal()) + "."));
+            }
         }
 
         String trackingToken = idempotencyKey != null
@@ -225,12 +348,20 @@ public class OrderController {
 
     public ResponseEntity<?> createOrder(
             String idempotencyKeyHeader,
+            String authHeader,
+            String trackingTokenHeader,
             CustomerOrder order) {
-        return createOrder(idempotencyKeyHeader, null, null, order);
+        return createOrder(idempotencyKeyHeader, authHeader, trackingTokenHeader, order, null, null);
+    }
+
+    public ResponseEntity<?> createOrder(
+            String idempotencyKeyHeader,
+            CustomerOrder order) {
+        return createOrder(idempotencyKeyHeader, null, null, order, null, null);
     }
 
     public ResponseEntity<?> createOrder(CustomerOrder order) {
-        return createOrder(null, null, null, order);
+        return createOrder(null, null, null, order, null, null);
     }
 
     @GetMapping("/{id}")

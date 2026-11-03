@@ -20,6 +20,18 @@ public class MenuController {
     @Autowired
     private com.lordgainsborough.restaurant.service.PostgresCatalogStore catalog;
 
+    @Autowired(required = false)
+    private com.lordgainsborough.restaurant.service.MenuImageValidator imageValidator = new com.lordgainsborough.restaurant.service.MenuImageValidator();
+
+    public MenuController() {
+    }
+
+    public MenuController(com.lordgainsborough.restaurant.service.PostgresCatalogStore catalog,
+                          com.lordgainsborough.restaurant.service.MenuImageValidator imageValidator) {
+        this.catalog = catalog;
+        this.imageValidator = imageValidator;
+    }
+
     @GetMapping
     public List<MenuItem> getAllMenuItems() {
         return catalog.menu();
@@ -98,13 +110,27 @@ public class MenuController {
 
     @PostMapping("/upload-image")
     public ResponseEntity<String> uploadImage(@RequestParam("file") MultipartFile file) {
+        if (imageValidator == null) {
+            imageValidator = new com.lordgainsborough.restaurant.service.MenuImageValidator();
+        }
+
+        com.lordgainsborough.restaurant.service.MenuImageValidator.ValidationResult validation = imageValidator.validate(file);
+        if (!validation.isValid()) {
+            return ResponseEntity.badRequest().body(validation.getErrorMessage());
+        }
+
         try {
-            String fileName = UUID.randomUUID().toString() + "_" + file.getOriginalFilename();
-            Path uploadDir = Paths.get("uploads/menu");
+            String safeFileName = UUID.randomUUID().toString() + "." + validation.getFormat().getExtension();
+            Path uploadDir = Paths.get("uploads/menu").toAbsolutePath().normalize();
             Files.createDirectories(uploadDir);
-            Path filePath = uploadDir.resolve(fileName);
+
+            Path filePath = uploadDir.resolve(safeFileName).normalize();
+            if (!filePath.startsWith(uploadDir)) {
+                return ResponseEntity.badRequest().body("Invalid upload path.");
+            }
+
             Files.write(filePath, file.getBytes());
-            return ResponseEntity.ok("/uploads/menu/" + fileName);
+            return ResponseEntity.ok("/uploads/menu/" + safeFileName);
         } catch (IOException e) {
             return ResponseEntity.internalServerError().body("Failed to upload image");
         }

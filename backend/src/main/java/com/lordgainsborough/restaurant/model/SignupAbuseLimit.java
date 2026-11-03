@@ -14,7 +14,10 @@ public class SignupAbuseLimit {
         RESET_EMAIL_OPERATION_IP,
         RESET_VERIFICATION_IP,
         RESET_GLOBAL_EMAIL_OPERATION,
-        RESET_IDEMPOTENCY
+        RESET_IDEMPOTENCY,
+        RESERVATION_REQUEST_IP,
+        ORDER_REQUEST_IP,
+        ORDER_REQUEST_ACCOUNT
     }
 
     private String id;
