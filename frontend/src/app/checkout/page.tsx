@@ -19,6 +19,12 @@ import {
 } from '@/lib/orders';
 import { formatPhoneInput, getPhoneDigitCount } from '@/lib/phone';
 import {
+  loadPickupSelections,
+  savePickupDate,
+  savePickupTime,
+  clearPickupSelections,
+} from '@/lib/pickupSelection';
+import {
   getAuthHeaders,
   isAuthenticated,
   isPickupDisabledForUser,
@@ -79,12 +85,11 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      const savedDate = sessionStorage.getItem('pickupDate');
-      const savedTime = sessionStorage.getItem('pickupTime');
+      const selections = loadPickupSelections();
       setForm(prev => ({
         ...prev,
-        pickupDate: savedDate || prev.pickupDate,
-        pickupTime: savedTime || prev.pickupTime,
+        pickupDate: selections.pickupDate || prev.pickupDate,
+        pickupTime: selections.pickupTime || prev.pickupTime,
       }));
     }, 0);
 
@@ -220,8 +225,7 @@ export default function CheckoutPage() {
 
       clearCheckoutIdempotencyKey();
       clearCart();
-      sessionStorage.removeItem('pickupDate');
-      sessionStorage.removeItem('pickupTime');
+      clearPickupSelections();
       completed = true;
       router.replace(`/orders/${encodeURIComponent(order.id)}/confirmation`);
     } catch (requestError) {
@@ -402,7 +406,11 @@ export default function CheckoutPage() {
                         min={getTodayString()}
                         required
                         value={form.pickupDate}
-                        onChange={e => setForm(prev => ({ ...prev, pickupDate: e.target.value }))}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setForm(prev => ({ ...prev, pickupDate: val }));
+                          savePickupDate(val);
+                        }}
                       />
                     </div>
                     <div className={styles.pickupField}>
@@ -412,7 +420,11 @@ export default function CheckoutPage() {
                         required
                         className={styles.pickupSelect}
                         value={form.pickupTime}
-                        onChange={e => setForm(prev => ({ ...prev, pickupTime: e.target.value }))}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setForm(prev => ({ ...prev, pickupTime: val }));
+                          savePickupTime(val);
+                        }}
                       >
                         <option value="asap">As soon as possible</option>
                         {timeSlots.map(slot => (

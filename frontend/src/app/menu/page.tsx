@@ -6,32 +6,20 @@ import styles from './menu.module.css';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, Clock, ChevronDown } from 'lucide-react';
 import { MenuItem } from '@/lib/mockData';
-import { API_BASE, backendAssetUrl, fetchStoreSettings } from '@/lib/orders';
+import { API_BASE, backendAssetUrl, fetchStoreSettings, formatPickupTimeLabel } from '@/lib/orders';
 import { isPickupDisabledForUser, PICKUP_DISABLED_NO_SHOW_MESSAGE } from '@/lib/auth';
 import { useCart } from '@/context/CartContext';
 import MenuSkeleton from '@/components/MenuSkeleton';
 
-function getTodayString(): string {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0');
-  const day = String(today.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function generateTimeSlots(): string[] {
-  const slots: string[] = [];
-  for (let hour = 11; hour <= 21; hour++) {
-    for (const minute of [0, 30]) {
-      if (hour === 21 && minute === 30) break;
-      const displayHour = hour > 12 ? hour - 12 : hour;
-      const ampm = hour >= 12 ? 'PM' : 'AM';
-      const minStr = String(minute).padStart(2, '0');
-      slots.push(`${displayHour}:${minStr} ${ampm}`);
-    }
-  }
-  return slots;
-}
+import {
+  generatePickupTimeSlots,
+  loadPickupSelections,
+  savePickupDate,
+  savePickupTime,
+  isPickupTimeValid,
+  isTimeSlotInPast,
+} from '@/lib/pickupSelection';
+import { getRestaurantTodayDateString } from '@/lib/reservationDates';
 
 export default function MenuPage() {
   const [activeCategory, setActiveCategory] = useState('All');
@@ -45,13 +33,20 @@ export default function MenuPage() {
   const [pickupCollapsed, setPickupCollapsed] = useState(false);
   const { addToCart } = useCart();
 
-  const timeSlots = useMemo(() => generateTimeSlots(), []);
+  const timeSlots = useMemo(() => generatePickupTimeSlots(), []);
+  const todayString = useMemo(() => getRestaurantTodayDateString(), []);
   const pickupAvailable = pickupOrdersEnabled && !pickupDisabledForUser;
   const pickupReady = pickupAvailable && pickupDate !== '' && pickupTime !== '';
 
   useEffect(() => {
-    sessionStorage.removeItem('pickupDate');
-    sessionStorage.removeItem('pickupTime');
+    // Preserve valid selections when navigating back; reset stale or invalid entries
+    const selections = loadPickupSelections();
+    if (selections.pickupDate) {
+      setPickupDate(selections.pickupDate);
+    }
+    if (selections.pickupTime) {
+      setPickupTime(selections.pickupTime);
+    }
   }, []);
 
   useEffect(() => {
@@ -82,22 +77,18 @@ export default function MenuPage() {
 
   const handlePickupDateChange = (value: string) => {
     setPickupDate(value);
-    if (value && pickupTime) {
-      sessionStorage.setItem('pickupDate', value);
-      sessionStorage.setItem('pickupTime', pickupTime);
-    } else {
-      sessionStorage.removeItem('pickupDate');
+    savePickupDate(value);
+
+    // If time was previously selected, verify it remains valid for the new date
+    if (value && pickupTime && !isPickupTimeValid(value, pickupTime)) {
+      setPickupTime('');
+      savePickupTime('');
     }
   };
 
   const handlePickupTimeChange = (value: string) => {
     setPickupTime(value);
-    if (pickupDate && value) {
-      sessionStorage.setItem('pickupDate', pickupDate);
-      sessionStorage.setItem('pickupTime', value);
-    } else {
-      sessionStorage.removeItem('pickupTime');
-    }
+    savePickupTime(value);
   };
 
   const handleAddToCart = (item: MenuItem) => {
@@ -152,7 +143,7 @@ export default function MenuPage() {
                   <span>{pickupDate}</span>
                   <span className={styles.badgeDivider}>•</span>
                   <Clock size={13} />
-                  <span>{pickupTime}</span>
+                  <span>{formatPickupTimeLabel(pickupTime)}</span>
                 </span>
               ) : (
                 <span className={styles.pickupRequiredBadge}>
@@ -204,7 +195,7 @@ export default function MenuPage() {
                       <input
                         id="pickup-date-input"
                         type="date"
-                        min={getTodayString()}
+                        min={todayString}
                         value={pickupDate}
                         onChange={(e) => handlePickupDateChange(e.target.value)}
                         required
@@ -219,9 +210,17 @@ export default function MenuPage() {
                         required
                       >
                         <option value="">Select a time</option>
-                        {timeSlots.map((slot) => (
-                          <option key={slot} value={slot}>{slot}</option>
-                        ))}
+                        <option value="asap" disabled={isTimeSlotInPast(pickupDate, 'asap')}>
+                          As soon as possible
+                        </option>
+                        {timeSlots.map((slot) => {
+                          const past = isTimeSlotInPast(pickupDate, slot);
+                          return (
+                            <option key={slot} value={slot} disabled={past}>
+                              {slot}{past ? ' (Past)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                   </div>
