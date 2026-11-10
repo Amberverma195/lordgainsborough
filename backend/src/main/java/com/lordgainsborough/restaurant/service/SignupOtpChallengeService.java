@@ -593,10 +593,13 @@ public class SignupOtpChallengeService {
     }
 
     /**
-     * Public challenge status for verification UI sync. Does not reveal account existence
-     * beyond whether a matching challenge document is present for the email (+ optional id).
+     * Challenge status for the originating signup attempt only. An email/challenge ID
+     * is not a credential; failed possession checks receive the same result as missing data.
      */
-    public ChallengeStatusResult getChallengeStatus(String email, String challengeId) {
+    public ChallengeStatusResult getChallengeStatus(String email, String challengeId, String attemptToken) {
+        if (attemptToken == null || attemptToken.isBlank() || attemptToken.length() > 512) {
+            return new ChallengeStatusResult.Missing();
+        }
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             return new ChallengeStatusResult.Missing();
@@ -610,6 +613,11 @@ public class SignupOtpChallengeService {
         }
 
         SignupOtpChallenge challenge = found.get();
+        // Check before building any view, including expired, locked, and in-flight states.
+        // Legacy challenges without an attempt-token hash are intentionally not public.
+        if (!verifyAttemptToken(challenge, attemptToken)) {
+            return new ChallengeStatusResult.Missing();
+        }
         if (challengeId != null
                 && !challengeId.isBlank()
                 && challenge.getChallengeId() != null

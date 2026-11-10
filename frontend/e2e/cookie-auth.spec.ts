@@ -126,6 +126,20 @@ test('signup, cart persistence, checkout, and live order updates use the cookie 
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Create Account', exact: true }).click();
   await expect(page).toHaveURL(/\/signup\/verify/);
+  const challenge = await page.evaluate(() => JSON.parse(sessionStorage.getItem('signupOtpChallenge') || 'null'));
+  expect(challenge.attemptToken).toBeTruthy();
+  const statusUrl = `/api/auth/signup/otp-status?${new URLSearchParams({ email, challengeId: challenge.challengeId })}`;
+  const anonymousStatus = await page.request.get(statusUrl);
+  expect(anonymousStatus.status()).toBe(404);
+  expect((await anonymousStatus.json()).challengeId).toBeUndefined();
+  expect((await page.request.get(statusUrl, { headers: { 'X-Signup-Attempt-Token': 'wrong-token' } })).status()).toBe(404);
+  const ownedStatus = await page.request.get(statusUrl, { headers: { 'X-Signup-Attempt-Token': challenge.attemptToken } });
+  expect(ownedStatus.status()).toBe(200);
+  expect(ownedStatus.headers()['cache-control']).toBe('no-store');
+  expect((await ownedStatus.json()).challengeId).toBe(challenge.challengeId);
+  // Refresh must retain ownership and restore the original challenge metadata.
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: 'Digit 1', exact: true })).toBeVisible();
   let code = '';
   await expect.poll(async () => {
     const messages = await (await fetch('http://127.0.0.1:8025/messages')).json();

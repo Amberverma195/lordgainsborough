@@ -157,7 +157,7 @@ describe('Signup and Verify Flow UX & Mechanics', () => {
       expect(cached).not.toBeNull();
 
       // Page mount calls status sync:
-      const { body } = await fetchSignupOtpStatus(stored!.email, cached?.challengeId);
+      const { body } = await fetchSignupOtpStatus(stored!.email, cached?.challengeId, cached?.attemptToken);
       expect(body.challengeId).toBe('chal-123');
 
       // Verify that NO POST /auth/signup/send-otp was ever called

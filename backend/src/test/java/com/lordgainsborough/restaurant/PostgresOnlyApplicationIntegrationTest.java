@@ -124,6 +124,30 @@ class PostgresOnlyApplicationIntegrationTest {
         verify(email).sendOtpEmail(eq(address),code.capture(),anyString());return code.getValue();
     }
 
+    @Test void signupStatusRequiresAttemptTokenAndNeverLeaksUnownedChallengeMetadata() throws Exception {
+        var pending=send("/api/auth/signup/send-otp",Map.of("email","status-owner@example.com","phone","5195551191",
+                "name","Status Owner","password","CorrectPassword1!"),202);
+        String id=pending.get("challengeId").asText(), token=pending.get("attemptToken").asText();
+        assertThat(token).isNotBlank();
+        var anonymous=response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com"),404);
+        var identified=response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com").param("challengeId",id),404);
+        var wrong=response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com").param("challengeId",id)
+                .header("X-Signup-Attempt-Token","wrong-token"),404);
+        var missing=response(get("/api/auth/signup/otp-status").param("email","missing@example.com")
+                .header("X-Signup-Attempt-Token",token),404);
+        assertThat(anonymous).isEqualTo(identified).isEqualTo(wrong).isEqualTo(missing);
+        for(String field:List.of("challengeId","nextResendAt","otpExpiresAt","challengeExpiresAt","resendsRemaining","attemptToken"))
+            assertThat(anonymous.hasNonNull(field)).as(field).isFalse();
+        response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com").param("challengeId","wrong-id")
+                .header("X-Signup-Attempt-Token",token),404);
+        var result=mvc.perform(get("/api/auth/signup/otp-status").param("email","status-owner@example.com").param("challengeId",id)
+                .header("X-Signup-Attempt-Token",token)).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"));
+        var owned=json.readTree(result.andReturn().getResponse().getContentAsString());
+        assertThat(owned.get("challengeId").asText()).isEqualTo(id);
+        assertThat(owned.get("resendsRemaining").asInt()).isEqualTo(5);
+        assertThat(owned.hasNonNull("attemptToken")).isFalse();
+    }
+
     org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder messageRequest(String path,String tracking,String text) throws Exception {
         var request=post(path).contentType("application/json").content(json.writeValueAsString(Map.of("text",text)));
         if(tracking!=null) request.header(OrderAccessService.TRACKING_TOKEN_HEADER,tracking);

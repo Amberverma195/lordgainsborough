@@ -237,10 +237,10 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void getSignupOtpStatusReturnsActiveChallengeMetadata() {
-        when(signupOtpChallengeService.getChallengeStatus(eq("new@example.com"), org.mockito.ArgumentMatchers.isNull()))
+        when(signupOtpChallengeService.getChallengeStatus(eq("new@example.com"), org.mockito.ArgumentMatchers.isNull(), eq("owned-attempt-token")))
                 .thenReturn(new SignupOtpChallengeService.ChallengeStatusResult.Active(sampleView()));
 
-        ResponseEntity<SignupOtpResponse> response = controller.getSignupOtpStatus("new@example.com", null);
+        ResponseEntity<SignupOtpResponse> response = controller.getSignupOtpStatus("new@example.com", null, "owned-attempt-token");
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(SignupOtpCode.OTP_ALREADY_ACTIVE, response.getBody().getCode());
@@ -436,10 +436,10 @@ class AuthControllerSignupOtpResponseTest {
 
     @Test
     void getSignupOtpStatusNeverExposesAttemptToken() {
-        when(signupOtpChallengeService.getChallengeStatus(eq("public@example.com"), org.mockito.ArgumentMatchers.isNull()))
+        when(signupOtpChallengeService.getChallengeStatus(eq("public@example.com"), org.mockito.ArgumentMatchers.isNull(), eq("owned-attempt-token")))
                 .thenReturn(new SignupOtpChallengeService.ChallengeStatusResult.Active(sampleView()));
 
-        ResponseEntity<SignupOtpResponse> response = controller.getSignupOtpStatus("public@example.com", null);
+        ResponseEntity<SignupOtpResponse> response = controller.getSignupOtpStatus("public@example.com", null, "owned-attempt-token");
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNull(response.getBody().getAttemptToken());

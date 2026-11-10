@@ -246,7 +246,8 @@ export function clearAllSignupSession(): void {
 
 export async function fetchSignupOtpStatus(
   email: string,
-  challengeId?: string
+  challengeId?: string,
+  attemptToken?: string
 ): Promise<{ res: Response; body: SignupOtpResponse }> {
   const params = new URLSearchParams({ email });
   if (challengeId) {
@@ -254,7 +255,8 @@ export async function fetchSignupOtpStatus(
   }
   const res = await apiFetch(`${API_BASE}/auth/signup/otp-status?${params.toString()}`, {
     method: 'GET',
-    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+    headers: { Accept: 'application/json', ...(attemptToken ? { 'X-Signup-Attempt-Token': attemptToken } : {}) },
   });
   const body = await readSignupOtpResponse(res);
   return { res, body };

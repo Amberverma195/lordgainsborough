@@ -537,7 +537,8 @@ public class AuthController {
     @GetMapping("/signup/otp-status")
     public ResponseEntity<SignupOtpResponse> getSignupOtpStatus(
             @RequestParam String email,
-            @RequestParam(required = false) String challengeId) {
+            @RequestParam(required = false) String challengeId,
+            @RequestHeader(value = "X-Signup-Attempt-Token", required = false) String attemptToken) {
         if (email == null || email.isBlank()) {
             return ResponseEntity.badRequest().body(SignupOtpResponse.of(
                     SignupOtpCode.OTP_INVALID,
@@ -545,8 +546,10 @@ public class AuthController {
         }
 
         SignupOtpChallengeService.ChallengeStatusResult status =
-                signupOtpChallengeService.getChallengeStatus(email.trim().toLowerCase(), challengeId);
-        return mapChallengeStatus(status);
+                signupOtpChallengeService.getChallengeStatus(email.trim().toLowerCase(), challengeId, attemptToken);
+        var response = mapChallengeStatus(status);
+        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                .header("Cache-Control", "no-store").body(response.getBody());
     }
 
     public ResponseEntity<SignupOtpResponse> sendSignupOtp(

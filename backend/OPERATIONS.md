@@ -29,6 +29,14 @@ update their mode and install the provider CA before restarting with this change
 
 ## Signup OTP observability
 
+`GET /api/auth/signup/otp-status` requires the originating signup attempt's
+`X-Signup-Attempt-Token` header before returning challenge metadata. Email addresses
+and challenge IDs are lookup identifiers, not authorization credentials. Missing
+or incorrect tokens, mismatched IDs, and nonexistent challenges return the same
+generic response; legacy challenges without a token hash do not expose status.
+Status responses use `Cache-Control: no-store`. Never put the attempt token in a
+URL, analytics event, or cross-tab broadcast.
+
 Prometheus metrics are served from the separate management listener at
 `http://127.0.0.1:8083/actuator/prometheus` by default. Keep this listener private.
 For a secured remote scraper, explicitly set `MANAGEMENT_SERVER_ADDRESS` and firewall or

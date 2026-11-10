@@ -3,6 +3,7 @@ import {
   applyBackendChallengeState,
   cooldownSecondsFromServerClocks,
   fetchWithIdempotentRetry,
+  fetchSignupOtpStatus,
   isChallengeExpiredState,
   isResendExhausted,
   loadPendingSignupCredentials,
@@ -40,6 +41,21 @@ describe('signupOtp challenge state', () => {
   afterEach(() => {
     sessionStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it('sends the signup ownership credential only in a header, never in the status URL', async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'OTP_ALREADY_ACTIVE' }),
+      { headers: { 'Content-Type': 'application/json' } }));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', request);
+    try {
+      await fetchSignupOtpStatus('applicant@example.com', 'owned-challenge', 'private-attempt-token');
+      const [url, options] = request.mock.calls[0];
+      expect(url).toContain('challengeId=owned-challenge');
+      expect(url).not.toContain('private-attempt-token');
+      expect(options.headers['X-Signup-Attempt-Token']).toBe('private-attempt-token');
+      expect(options.cache).toBe('no-store');
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   it('refresh during cooldown uses server clocks instead of a fresh 30s timer', () => {

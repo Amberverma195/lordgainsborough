@@ -121,7 +121,8 @@ export default function SignupVerifyPage() {
     try {
       const { body } = await fetchSignupOtpStatus(
         credentials.email,
-        cached?.challengeId
+        cached?.challengeId,
+        cached?.attemptToken
       );
       if (currentSeq !== syncSeqRef.current) {
         return;
