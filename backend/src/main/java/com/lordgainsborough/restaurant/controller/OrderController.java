@@ -387,7 +387,7 @@ public class OrderController {
             @RequestHeader(value = OrderAccessService.TRACKING_TOKEN_HEADER, required = false) String trackingToken,
             @RequestBody Map<String, String> body) {
         String text = body.get("text");
-        if (text == null || text.isBlank()) {
+        if (text == null || text.isBlank() || text.length() > com.lordgainsborough.restaurant.service.OrderMessageRateLimiter.MAX_TEXT_LENGTH) {
             return ResponseEntity.badRequest().build();
         }
 

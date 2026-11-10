@@ -79,3 +79,8 @@ ABUSE_IP_HASH_SECRET=
 # Menu image upload limits:
 # MENU_UPLOAD_MAX_FILE_SIZE=5MB
 # MENU_UPLOAD_MAX_REQUEST_SIZE=10MB
+
+# Order chat: shared PostgreSQL limits. Both values must remain positive.
+# Text is limited to 2,000 characters and JSON request bodies to 16 KB.
+app.orders.messages.per-ip-per-minute=60
+app.orders.messages.per-order-per-minute=10

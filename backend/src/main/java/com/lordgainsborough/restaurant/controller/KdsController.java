@@ -52,7 +52,7 @@ public class KdsController {
     @PostMapping("/orders/{id}/messages")
     public ResponseEntity<CustomerOrder.OrderMessage> addKdsMessage(@PathVariable String id, @RequestBody Map<String,String> body) {
         String text = body.get("text");
-        if (text == null || text.isBlank()) return ResponseEntity.badRequest().build();
+        if (text == null || text.isBlank() || text.length() > OrderMessageRateLimiter.MAX_TEXT_LENGTH) return ResponseEntity.badRequest().build();
         var message = new CustomerOrder.OrderMessage(); message.setId(UUID.randomUUID().toString());
         message.setSenderRole("KDS"); message.setSenderName("Kitchen"); message.setText(text.trim());
         message.setCreatedAt(LocalDateTime.now(clock));

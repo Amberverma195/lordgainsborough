@@ -124,6 +124,108 @@ class PostgresOnlyApplicationIntegrationTest {
         verify(email).sendOtpEmail(eq(address),code.capture(),anyString());return code.getValue();
     }
 
+    org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder messageRequest(String path,String tracking,String text) throws Exception {
+        var request=post(path).contentType("application/json").content(json.writeValueAsString(Map.of("text",text)));
+        if(tracking!=null) request.header(OrderAccessService.TRACKING_TOKEN_HEADER,tracking);
+        return request;
+    }
+
+    OrderCreationResponse messageOrder(String address,String phone) {
+        var owner=account(UUID.randomUUID().toString(),address,phone,"MEMBER");
+        String id=UUID.randomUUID().toString(), tracking=access.generateTrackingToken();
+        // Chat tests need an existing order, independently of current opening hours.
+        jdbc.update("insert into customer_orders(id,customer_name,customer_email,customer_phone,pickup_date,tracking_token_hash) values (?,?,?,?,?,?)",
+                id,owner.getName(),address,phone,"2099-01-01",access.hashTrackingToken(tracking));
+        var saved=context.getBean(CustomerOrderStore.class).findById(id).orElseThrow();
+        return new OrderCreationResponse(com.lordgainsborough.restaurant.dto.OrderStatusResponse.from(saved),tracking);
+    }
+
+    @Test void messagesEnforceTextLengthForCustomerAndKitchen() throws Exception {
+        var created=messageOrder("message-length@example.com","5195551121");String id=created.getOrder().getId();
+        String customer="/api/orders/"+id+"/messages", kitchen="/api/kds/orders/"+id+"/messages";
+        for(String path:List.of(customer,kitchen)) {
+            for(String invalid:List.of(" ","a".repeat(2001)," "+"a".repeat(2000)))
+                mvc.perform(messageRequest(path,created.getTrackingToken(),invalid)).andExpect(status().isBadRequest());
+            mvc.perform(messageRequest(path,created.getTrackingToken(),"a".repeat(2000))).andExpect(status().isOk());
+            // JSON escaping expands the request bytes but must not reject legal message text.
+            mvc.perform(post(path).header(OrderAccessService.TRACKING_TOKEN_HEADER,created.getTrackingToken())
+                    .contentType("application/json").content("{\"text\":\""+"\\u0061".repeat(2000)+"\"}"))
+                    .andExpect(status().isOk());
+        }
+        assertThat(jdbc.queryForObject("select count(*) from order_messages",Integer.class)).isEqualTo(4);
+    }
+
+    @Test void messagesRejectOversizedBodiesBeforeSavingOrBroadcasting() throws Exception {
+        var created=messageOrder("message-body@example.com","5195551122");String id=created.getOrder().getId();
+        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        kitchen.on("chat.message",args->events.add(args[0].toString()));connect(kitchen);
+        for(String path:List.of("/api/orders/"+id+"/messages","/api/kds/orders/"+id+"/messages")) {
+            mvc.perform(post(path).header(OrderAccessService.TRACKING_TOKEN_HEADER,created.getTrackingToken())
+                    .contentType("application/json").content("{\"text\":\"hello\",\"padding\":\""+"x".repeat(16384)+"\"}"))
+                    .andExpect(status().isPayloadTooLarge());
+        }
+        assertThat(jdbc.queryForObject("select count(*) from order_messages",Integer.class)).isZero();
+        assertThat(events.poll(300,TimeUnit.MILLISECONDS)).isNull();
+    }
+
+    @Test void messagesLimitEachSideOfConversationAndPreserveAuthorization() throws Exception {
+        var created=messageOrder("message-rate@example.com","5195551123");String id=created.getOrder().getId();
+        String customer="/api/orders/"+id+"/messages", kitchen="/api/kds/orders/"+id+"/messages";
+        for(int i=0;i<3;i++) mvc.perform(messageRequest(customer,"invalid","hello")).andExpect(status().isNotFound());
+        for(String path:List.of(customer,kitchen)) {
+            for(int i=0;i<10;i++) mvc.perform(messageRequest(path,created.getTrackingToken(),"hello")).andExpect(status().isOk());
+            mvc.perform(messageRequest(path,created.getTrackingToken(),"blocked"))
+                    .andExpect(status().isTooManyRequests()).andExpect(header().exists("Retry-After"));
+        }
+        // A different IP cannot bypass the order quota. A bad token cannot spend it.
+        mvc.perform(messageRequest(customer,created.getTrackingToken(),"blocked").with(r->{r.setRemoteAddr("198.51.100.21");return r;}))
+                .andExpect(status().isTooManyRequests());
+        mvc.perform(messageRequest(customer,"invalid","unauthorized")).andExpect(status().isNotFound());
+        assertThat(jdbc.queryForObject("select count(*) from order_messages",Integer.class)).isEqualTo(20);
+    }
+
+    @Test void messagesIpLimitCannotBeBypassedWithForwardedHeaders() throws Exception {
+        var created=messageOrder("message-ip@example.com","5195551124");String path="/api/orders/"+created.getOrder().getId()+"/messages";
+        for(int i=0;i<60;i++) {
+            mvc.perform(messageRequest(path,"invalid","hello").header("X-Forwarded-For","203.0.113."+i)
+                    .with(r->{r.setRemoteAddr("198.51.100.20");return r;})).andExpect(status().isNotFound());
+        }
+        mvc.perform(messageRequest(path,created.getTrackingToken(),"blocked").header("X-Forwarded-For","203.0.113.250")
+                .with(r->{r.setRemoteAddr("198.51.100.20");return r;}))
+                .andExpect(status().isTooManyRequests()).andExpect(header().exists("Retry-After"));
+        assertThat(jdbc.queryForObject("select count(*) from order_messages",Integer.class)).isZero();
+    }
+
+    @Test void messagesShareAtomicLimitsAcrossInstancesAndResetAfterWindow() throws Exception {
+        var fixed=java.time.Clock.fixed(java.time.Instant.parse("2026-11-09T15:30:20Z"),java.time.ZoneOffset.UTC);
+        var store=context.getBean(AbuseCounterStore.class);var hasher=context.getBean(AbuseIpHasher.class);
+        var first=new OrderMessageRateLimiter(store,hasher,fixed,60,10);
+        var second=new OrderMessageRateLimiter(store,hasher,fixed,60,10);
+        var pool=Executors.newFixedThreadPool(8);
+        try {
+            List<Future<Boolean>> results=new ArrayList<>();
+            for(int i=0;i<24;i++) {var instance=i%2==0?first:second;results.add(pool.submit(()->instance.consumeOrder("shared-order",false).isEmpty()));}
+            int admitted=0;for(var result:results) if(result.get(10,TimeUnit.SECONDS)) admitted++;
+            assertThat(admitted).isEqualTo(10);
+            assertThat(second.consumeOrder("shared-order",true)).isEmpty();
+            var next=new OrderMessageRateLimiter(store,hasher,java.time.Clock.offset(fixed,java.time.Duration.ofMinutes(1)),60,10);
+            assertThat(next.consumeOrder("shared-order",false)).isEmpty();
+        } finally {pool.shutdownNow();}
+    }
+
+    @Test void messagesFailClosedWhenDistributedCountersAreUnavailable() throws Exception {
+        var created=messageOrder("message-failure@example.com","5195551125");String path="/api/orders/"+created.getOrder().getId()+"/messages";
+        jdbc.execute("CREATE FUNCTION reject_message_counter() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled counter failure'; END $$");
+        jdbc.execute("CREATE TRIGGER reject_message_counter BEFORE INSERT ON signup_abuse_limits FOR EACH ROW EXECUTE FUNCTION reject_message_counter()");
+        try {
+            assertThatThrownBy(()->mvc.perform(messageRequest(path,created.getTrackingToken(),"must not save"))).isInstanceOf(Exception.class);
+            assertThat(jdbc.queryForObject("select count(*) from order_messages",Integer.class)).isZero();
+        } finally {
+            jdbc.execute("DROP TRIGGER reject_message_counter ON signup_abuse_limits");
+            jdbc.execute("DROP FUNCTION reject_message_counter()");
+        }
+    }
+
     void deletionData(String id, String address, String orderId) {
         jdbc.update("insert into carts(id,user_id) values (?,?)", "cart-"+id, id);
         jdbc.update("insert into cart_items(id,cart_id,name,price,quantity) values (?,?, 'Dish',10,1)", "ci-"+id,"cart-"+id);

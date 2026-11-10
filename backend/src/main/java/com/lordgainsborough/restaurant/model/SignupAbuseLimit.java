@@ -17,7 +17,9 @@ public class SignupAbuseLimit {
         RESET_IDEMPOTENCY,
         RESERVATION_REQUEST_IP,
         ORDER_REQUEST_IP,
-        ORDER_REQUEST_ACCOUNT
+        ORDER_REQUEST_ACCOUNT,
+        ORDER_MESSAGE_IP,
+        ORDER_MESSAGE_ORDER
     }
 
     private String id;
