@@ -5,8 +5,6 @@ import com.lordgainsborough.restaurant.dto.LoginRequest;
 import com.lordgainsborough.restaurant.dto.LoginResponse;
 import com.lordgainsborough.restaurant.dto.PasswordResetResendRequest;
 import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
-import com.lordgainsborough.restaurant.dto.ProfileVerificationRequest;
-import com.lordgainsborough.restaurant.dto.ProfileVerificationResponse;
 import com.lordgainsborough.restaurant.dto.ResetPasswordRequest;
 import com.lordgainsborough.restaurant.dto.SendOtpRequest;
 import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
@@ -42,9 +40,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -54,7 +50,6 @@ import java.util.regex.Pattern;
 public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
-    private static final int PROFILE_UPDATE_COOLDOWN_DAYS = 7;
     private static final int PASSWORD_MIN_LENGTH = 8;
     private static final int PASSWORD_MAX_LENGTH = 128;
     private static final Pattern LOWERCASE_PATTERN = Pattern.compile("[a-z]");
@@ -514,76 +509,8 @@ public class AuthController {
         return ResponseEntity.ok(history.get());
     }
 
-    @PostMapping("/profile/send-verification")
-    public ResponseEntity<?> sendProfileVerification(
-            @RequestHeader(value = "Authorization", required = false) String authHeader,
-            @RequestBody ProfileVerificationRequest request) {
-        Optional<User> userOpt = getAuthenticatedUser(authHeader);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing or invalid token.");
-        }
-
-        User user = userOpt.get();
-        if (!canUpdateProfile(user)) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body("You can update your profile again on " + formatNextUpdateDate(user) + ".");
-        }
-
-        if (request.getEmail() == null || request.getEmail().isBlank()) {
-            return ResponseEntity.badRequest().body("Email is required.");
-        }
-
-        String normalizedPhone = normalizePhone(request.getPhone());
-        if (normalizedPhone.length() != 10) {
-            return ResponseEntity.badRequest().body("Please enter a valid 10-digit phone number.");
-        }
-
-        boolean emailChanged = !request.getEmail().trim().equalsIgnoreCase(user.getEmail());
-        boolean phoneChanged = !normalizedPhone.equals(normalizePhone(user.getPhone()));
-
-        if (!emailChanged && !phoneChanged) {
-            ProfileVerificationResponse response = new ProfileVerificationResponse();
-            response.setRequiresEmailOtp(false);
-            response.setRequiresPhoneOtp(false);
-            return ResponseEntity.ok(response);
-        }
-
-        if (emailChanged && userAuthStore.existsByEmailIgnoreCase(request.getEmail().trim())) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body("An account with this email already exists.");
-        }
-
-        if (phoneChanged && phoneAlreadyRegisteredByAnotherUser(normalizedPhone, user.getId())) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body("An account already exists with this phone number.");
-        }
-
-        ProfileVerificationResponse response = new ProfileVerificationResponse();
-
-        try {
-            if (emailChanged) {
-                String otp = generateOtp();
-                String key = profileEmailOtpKey(request.getEmail().trim());
-                otpService.storeOtpForKey(key, otp);
-                emailSenderService.sendOtpEmail(request.getEmail().trim(), otp);
-                response.setRequiresEmailOtp(true);
-                response.setEmailOtpSentTo(request.getEmail().trim());
-            }
-
-            if (phoneChanged) {
-                String otp = generateOtp();
-                String key = profilePhoneOtpKey(user.getId());
-                otpService.storeOtpForKey(key, otp);
-                emailSenderService.sendOtpEmail(user.getEmail(), otp);
-                response.setRequiresPhoneOtp(true);
-                response.setPhoneOtpSentTo(user.getEmail());
-            }
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            logSafeAuthFailure("profile_verification_otp_send", e);
-            return ResponseEntity.status(500).body("Failed to send verification email. Please try again in a moment.");
-        }
-    }
-
+    // Profile editing is name-only. Email/phone verification needs a complete
+    // verified-change workflow and distributed send limits before being exposed.
     @PutMapping("/profile")
     public ResponseEntity<?> updateProfile(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
@@ -1039,11 +966,6 @@ public class AuthController {
         return response;
     }
 
-    private String generateOtp() {
-        SecureRandom random = new SecureRandom();
-        return String.valueOf(100000 + random.nextInt(900000));
-    }
-
     private AuthResponse createAuthResponse(User user, String token) {
         AuthResponse response = new AuthResponse();
         response.setToken(token);
@@ -1070,29 +992,6 @@ public class AuthController {
         }
 
         return userAuthStore.authenticate(token, jwtUtil);
-    }
-
-    private boolean canUpdateProfile(User user) {
-        if (user.getLastProfileUpdateAt() == null) {
-            return true;
-        }
-        return LocalDateTime.now().isAfter(user.getLastProfileUpdateAt().plusDays(PROFILE_UPDATE_COOLDOWN_DAYS));
-    }
-
-    private String formatNextUpdateDate(User user) {
-        if (user.getLastProfileUpdateAt() == null) {
-            return null;
-        }
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("MMMM d, yyyy");
-        return user.getLastProfileUpdateAt().plusDays(PROFILE_UPDATE_COOLDOWN_DAYS).format(formatter);
-    }
-
-    private String profileEmailOtpKey(String email) {
-        return "profile-email:" + email.trim().toLowerCase();
-    }
-
-    private String profilePhoneOtpKey(String userId) {
-        return "profile-phone:" + userId;
     }
 
     private boolean looksLikeEmail(String identifier) {

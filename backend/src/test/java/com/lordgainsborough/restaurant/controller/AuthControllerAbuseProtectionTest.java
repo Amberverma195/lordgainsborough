@@ -40,6 +40,46 @@ import static org.mockito.Mockito.when;
 
 class AuthControllerAbuseProtectionTest {
 
+    @Test
+    void removedProfileVerificationEndpointCannotSendEmails() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        // Repeated requests, with or without a bearer token, must never reach an email sender.
+        for (String authorization : java.util.List.of("", "Bearer fixture-token")) {
+            for (String recipient : java.util.List.of("member@example.com", "another-person@example.com")) {
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .post("/api/auth/profile/send-verification")
+                            .header("Authorization", authorization)
+                            .contentType("application/json")
+                            .content("{\"email\":\"" + recipient + "\",\"phone\":\"5195551234\"}"))
+                            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+                }
+            }
+        }
+        org.mockito.Mockito.verifyNoInteractions(emailSenderService, otpService, userRepository);
+    }
+
+    @Test
+    void nameOnlyProfileUpdateStillWorksWithoutSendingEmail() throws Exception {
+        var user = new com.lordgainsborough.restaurant.model.User();
+        user.setId("profile-member");
+        user.setEmail("member@example.com");
+        user.setName("Member");
+        when(jwtUtil.validateToken("profile-token")).thenReturn(true);
+        when(userRepository.authenticate("profile-token", jwtUtil)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.updateName(user, "profile-token", "Updated Member", jwtUtil)).thenAnswer(invocation -> {
+            user.setName("Updated Member");
+            return java.util.Optional.of(user);
+        });
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/auth/profile")
+                        .header("Authorization", "Bearer profile-token")
+                        .contentType("application/json").content("{\"name\":\"Updated Member\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.name").value("Updated Member"));
+        org.mockito.Mockito.verifyNoInteractions(emailSenderService, otpService);
+    }
+
     private static final Instant NOW = Instant.parse("2026-07-13T10:00:00Z");
 
     private final EmailSenderService emailSenderService = mock(EmailSenderService.class);
