@@ -123,6 +123,129 @@ class PostgresOnlyApplicationIntegrationTest {
         var code=org.mockito.ArgumentCaptor.forClass(String.class);
         verify(email).sendOtpEmail(eq(address),code.capture(),anyString());return code.getValue();
     }
+
+    void deletionData(String id, String address, String orderId) {
+        jdbc.update("insert into carts(id,user_id) values (?,?)", "cart-"+id, id);
+        jdbc.update("insert into cart_items(id,cart_id,name,price,quantity) values (?,?, 'Dish',10,1)", "ci-"+id,"cart-"+id);
+        jdbc.update("insert into order_messages(id,order_id,sender_role,sender_name,text) values (?,?,'MEMBER','Member','Hello')", "msg-"+id,orderId);
+        jdbc.update("insert into order_reviews(id,order_id,customer_name,customer_email,customer_phone) values (?,?,'Member',?,'5195551111')", "review-"+id,orderId,address);
+        jdbc.update("insert into order_review_items(id,review_id,item_name,rating) values (?,?,'Dish',5)", "ri-"+id,"review-"+id);
+        jdbc.update("insert into password_reset_otp_challenges(email_key,challenge_id,user_id,purpose,status,challenge_expires_at) values (?,?,?,'PASSWORD_RESET','ACTIVE',now()+interval '1 hour')", "reset-"+id,"challenge-"+id,id);
+        jdbc.update("insert into signup_otp_challenges(email_key,normalized_email,challenge_id,status,otp_digest,challenge_expires_at) values (?,?,?,'ACTIVE','digest',now()+interval '1 hour')", "signup-"+id,address,"signup-challenge-"+id);
+    }
+    org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder deleteRequest(String token, String password) throws Exception {
+        return delete("/api/auth/me").header("Authorization","Bearer "+token)
+                .contentType("application/json").content(json.writeValueAsString(Map.of("password",password)));
+    }
+
+    @Test void deleteAccountRemovesAllDependentsAndRevokesIdentity() throws Exception {
+        var owner=account("delete-owner","delete@example.com","5195551111","MEMBER");
+        var other=account("delete-other","other@example.com","5195552222","MEMBER");
+        String oldToken=token(owner);
+        String ownOrder=order(owner.getEmail(),owner.getPhone()).getOrder().getId();
+        String otherOrder=order(other.getEmail(),other.getPhone()).getOrder().getId();
+        deletionData(owner.getId(),owner.getEmail(),ownOrder);
+        deletionData(other.getId(),other.getEmail(),otherOrder);
+        jdbc.update("update customer_orders set customer_email='DELETE@EXAMPLE.COM' where id=?",ownOrder);
+        // Matching a phone alone must not grant destructive ownership.
+        jdbc.update("update customer_orders set customer_phone=? where id=?",owner.getPhone(),otherOrder);
+
+        mvc.perform(deleteRequest(oldToken,"CorrectPassword1!")).andExpect(status().isNoContent());
+        assertThat(users.existsById(owner.getId())).isFalse();
+        assertThat(users.existsById(other.getId())).isTrue();
+        for(String table:List.of("customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+            assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+oldToken)).andExpect(status().isUnauthorized());
+        mvc.perform(deleteRequest(oldToken,"CorrectPassword1!")).andExpect(status().isUnauthorized());
+        var replacement=account("delete-replacement",owner.getEmail(),"5195551111","MEMBER");
+        assertThat(identities.authenticate(oldToken,jwt)).isEmpty();
+        assertThat(identities.authenticate(token(replacement),jwt)).isPresent();
+    }
+
+    @Test void deleteAccountRejectsInvalidCredentialsAndThrottlesFailures() throws Exception {
+        var owner=account("delete-credentials","credentials@example.com","5195553333","MEMBER");
+        mvc.perform(delete("/api/auth/me").contentType("application/json").content("{\"password\":\"CorrectPassword1!\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(deleteRequest("invalid","CorrectPassword1!")).andExpect(status().isUnauthorized());
+        mvc.perform(deleteRequest(token(owner)," ")).andExpect(status().isBadRequest());
+        mvc.perform(deleteRequest(token(owner),"wrong")).andExpect(status().isForbidden());
+        boolean throttled=false;
+        for(int i=0;i<20;i++) {
+            var result=mvc.perform(deleteRequest(token(owner),"wrong")).andReturn().getResponse();
+            if(result.getStatus()==429) { assertThat(result.getHeader("Retry-After")).isNotBlank();throttled=true;break; }
+            assertThat(result.getStatus()).isEqualTo(403);
+        }
+        assertThat(throttled).isTrue();
+        assertThat(users.existsById(owner.getId())).isTrue();
+    }
+
+    @Test void deleteAccountRollsBackAllDataWhenUserDeletionFails() throws Exception {
+        var owner=account("delete-rollback","rollback@example.com","5195554444","MEMBER");
+        String ownOrder=order(owner.getEmail(),owner.getPhone()).getOrder().getId();
+        deletionData(owner.getId(),owner.getEmail(),ownOrder);
+        jdbc.execute("CREATE FUNCTION reject_account_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled deletion failure'; END $$");
+        jdbc.execute("CREATE TRIGGER reject_account_delete BEFORE DELETE ON users FOR EACH ROW EXECUTE FUNCTION reject_account_delete()");
+        try {
+            assertThatThrownBy(()->mvc.perform(deleteRequest(token(owner),"CorrectPassword1!"))).isInstanceOf(Exception.class);
+            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+                assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
+            assertThat(identities.authenticate(token(owner),jwt)).isPresent();
+        } finally {
+            jdbc.execute("DROP TRIGGER reject_account_delete ON users");
+            jdbc.execute("DROP FUNCTION reject_account_delete()");
+        }
+    }
+
+    @Test void deleteAccountRejectsStaleAuthenticatedCheckoutAndCartWrites() throws Exception {
+        var owner=account("delete-stale","stale@example.com","5195555555","MEMBER");
+        String savedToken=token(owner);
+        var draft=new CustomerOrder();draft.setCustomerName(owner.getName());draft.setCustomerEmail(owner.getEmail());draft.setCustomerPhone(owner.getPhone());
+        mvc.perform(deleteRequest(savedToken,"CorrectPassword1!")).andExpect(status().isNoContent());
+        assertThatThrownBy(()->context.getBean(PostgresCustomerOrderStore.class).createAuthenticated(draft,savedToken,jwt,ignored->{}))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        mvc.perform(put("/api/cart").header("Authorization","Bearer "+savedToken).contentType("application/json").content("[]"))
+                .andExpect(status().isUnauthorized());
+        assertThat(jdbc.queryForObject("select count(*) from customer_orders",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from carts",Integer.class)).isZero();
+    }
+
+    @Test void deleteAccountNotifiesKitchenAndRevokesLiveOrderRooms() throws Exception {
+        var owner=account("delete-live","live-delete@example.com","5195556666","MEMBER");
+        var created=order(owner.getEmail(),owner.getPhone());String id=created.getOrder().getId();
+        var customer=client("orderId="+id,Map.of("token",token(owner)));
+        var guest=client("orderId="+id,Map.of("trackingToken",created.getTrackingToken()));
+        connect(customer);connect(guest);waitRoom(id,2);
+        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        kitchen.on("order.deleted",args->events.add(args[0].toString()));connect(kitchen);
+        mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andExpect(status().isNoContent());
+        assertThat(events.poll(5,TimeUnit.SECONDS)).contains(id);
+        waitRoom(id,0);
+        assertThat(access.getAuthenticatedUserFromToken(token(owner))).isEmpty();
+        assertThat(context.getBean(SocketOrderAuthorizationService.class).authorize(id,null,null,created.getTrackingToken(),"127.0.0.1")).isEmpty();
+    }
+
+    @Test void deleteAccountExcludesConcurrentCheckoutAndCartUpdates() throws Exception {
+        var owner=account("delete-race","delete-race@example.com","5195557777","MEMBER");
+        String auth=token(owner);
+        var draft=new CustomerOrder();draft.setCustomerName(owner.getName());draft.setCustomerEmail(owner.getEmail());draft.setCustomerPhone(owner.getPhone());
+        draft.setPickupDate("2099-01-01");
+        var barrier=new CyclicBarrier(3);var pool=Executors.newFixedThreadPool(3);
+        try {
+            var deletion=pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return mvc.perform(deleteRequest(auth,"CorrectPassword1!")).andReturn().getResponse().getStatus();});
+            var checkout=pool.submit(()->{
+                barrier.await(5,TimeUnit.SECONDS);
+                try { context.getBean(PostgresCustomerOrderStore.class).createAuthenticated(draft,auth,jwt,ignored->{});return 200; }
+                catch(org.springframework.web.server.ResponseStatusException expired) { return expired.getStatusCode().value(); }
+            });
+            var cart=pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return mvc.perform(put("/api/cart").header("Authorization","Bearer "+auth).contentType("application/json").content("[]")).andReturn().getResponse().getStatus();});
+            assertThat(deletion.get(15,TimeUnit.SECONDS)).isEqualTo(204);
+            assertThat(checkout.get(15,TimeUnit.SECONDS)).isIn(200,401);
+            assertThat(cart.get(15,TimeUnit.SECONDS)).isIn(200,401);
+            assertThat(users.existsById(owner.getId())).isFalse();
+            assertThat(jdbc.queryForObject("select count(*) from customer_orders",Integer.class)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from carts",Integer.class)).isZero();
+        } finally {pool.shutdownNow();}
+    }
     @Test void anonymousOrderSubmissionIsRejectedWithHttp401() throws Exception {
         var o = new CustomerOrder();
         o.setCustomerName("Anonymous");

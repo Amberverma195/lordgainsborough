@@ -61,14 +61,30 @@ public class PostgresCustomerOrderStore implements CustomerOrderStore {
     }
 
     public CustomerOrder create(CustomerOrder order, Consumer<CustomerOrder> afterCommit) {
+        return transactions.execute(status -> persistOrder(order, afterCommit));
+    }
+
+    @Override
+    public CustomerOrder createAuthenticated(CustomerOrder order, String token,
+            com.lordgainsborough.restaurant.security.JwtUtil jwt, Consumer<CustomerOrder> afterCommit) {
         return transactions.execute(status -> {
+            // Share the account lock with cart writes/deletion. Authentication done in the
+            // controller is only a snapshot; it must still hold when the order commits.
+            var owner = users.findForCartByEmailIgnoreCase(order.getCustomerEmail())
+                    .filter(u -> jwt.validateTokenForIdentity(token, u.getId(), u.getTokenVersion()));
+            if (owner.isEmpty()) throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNAUTHORIZED, "Your session has expired. Please sign in again.");
+            return persistOrder(order, afterCommit);
+        });
+    }
+
+    private CustomerOrder persistOrder(CustomerOrder order, Consumer<CustomerOrder> afterCommit) {
             JpaCustomerOrder entity = mapper.toJpa(order);
             entity.setId(null); // Never merge a client-chosen parent identifier.
             CustomerOrder saved = mapper.fromJpa(orders.saveAndFlush(entity));
             attachCounts(saved);
             OrderNotifications.afterCommit(() -> afterCommit.accept(saved));
             return saved;
-        });
     }
 
     public Optional<CustomerOrder.OrderMessage> appendMessage(String id, Predicate<CustomerOrder> authorized,

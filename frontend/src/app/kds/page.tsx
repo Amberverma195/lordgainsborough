@@ -175,12 +175,16 @@ export default function KdsPage() {
 
     const handleDisconnect = () => setConnected(false);
     const handleConnectError = () => setConnected(false);
+    const removeDeletedOrder = ({ id }: { id: string }) => {
+      setOrders(previous => previous.filter(order => order.id !== id));
+    };
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connect_error', handleConnectError);
     socket.on('order.created', upsertOrder);
     socket.on('order.updated', upsertOrder);
+    socket.on('order.deleted', removeDeletedOrder);
 
     return () => {
       socket.off('connect', handleConnect);
@@ -188,6 +192,7 @@ export default function KdsPage() {
       socket.off('connect_error', handleConnectError);
       socket.off('order.created', upsertOrder);
       socket.off('order.updated', upsertOrder);
+      socket.off('order.deleted', removeDeletedOrder);
       socket.disconnect();
       socketRef.current = null;
       setConnected(false);

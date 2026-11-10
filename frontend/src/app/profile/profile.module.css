@@ -598,3 +598,41 @@
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+.deleteAccountBtn, .confirmDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid #f87171;
+  border-radius: 8px;
+  color: #fca5a5;
+  background: rgba(185, 28, 28, 0.15);
+  font: inherit;
+  cursor: pointer;
+}
+
+.confirmDeleteBtn {
+  color: white;
+  background: #b91c1c;
+}
+
+.confirmDeleteBtn:disabled { opacity: 0.55; cursor: wait; }
+.deleteAccountBtn:hover, .confirmDeleteBtn:not(:disabled):hover { background: #991b1b; color: white; }
+
+.deleteDialog {
+  margin: auto;
+  width: min(520px, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 2rem;
+  background: var(--background, #161616);
+  color: var(--text, #fff);
+}
+
+.deleteDialog::backdrop { background: rgba(0, 0, 0, 0.75); }
+.deleteDialog h3 { margin: 0 0 1rem; }
+.deleteDialog p { line-height: 1.6; margin-bottom: 1.25rem; }
+.deleteDialog .modalActions { flex-wrap: wrap; }

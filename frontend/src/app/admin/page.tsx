@@ -361,12 +361,22 @@ export default function AdminPage() {
   useEffect(() => {
     if (isAuthorized !== true) return;
     // Revisit the current dataset after activity in a customer/kitchen tab.
-    const task = window.setTimeout(() => {
+    const refreshCurrentData = () => {
       if (activeTab === 'reservations') void fetchReservations();
       if (activeTab === 'reviews') void fetchReviews();
       if (activeTab === 'orders') void fetchOrders();
-    }, 0);
-    return () => window.clearTimeout(task);
+    };
+    const task = window.setTimeout(refreshCurrentData, 0);
+    // Account deletion also removes orders/reviews outside this admin session.
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && (activeTab === 'orders' || activeTab === 'reviews')) refreshCurrentData();
+    }, 30000);
+    window.addEventListener('focus', refreshCurrentData);
+    return () => {
+      window.clearTimeout(task);
+      window.clearInterval(poll);
+      window.removeEventListener('focus', refreshCurrentData);
+    };
   }, [activeTab, isAuthorized, fetchReservations, fetchReviews, fetchOrders]);
 
   // --- Category CRUD ---

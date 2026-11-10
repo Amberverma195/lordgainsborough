@@ -12,6 +12,10 @@ public interface CustomerOrderStore {
     Optional<CustomerOrder> findById(String id);
     Optional<CustomerOrder> findByIdempotencyKey(String idempotencyKey);
     CustomerOrder create(CustomerOrder order, Consumer<CustomerOrder> afterCommit);
+    default CustomerOrder createAuthenticated(CustomerOrder order, String token,
+            com.lordgainsborough.restaurant.security.JwtUtil jwt, Consumer<CustomerOrder> afterCommit) {
+        return create(order, afterCommit);
+    }
     Optional<CustomerOrder.OrderMessage> appendMessage(String id, Predicate<CustomerOrder> authorized,
             CustomerOrder.OrderMessage message, Consumer<CustomerOrder> afterCommit);
     Optional<MenuItem> resolveMenuItem(String id, String name);

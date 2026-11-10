@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MenuItem } from '@/lib/mockData';
 import { API_BASE, clearCheckoutIdempotencyKey } from '@/lib/orders';
+import { ACCOUNT_DELETED_KEY, clearDeletedAccountData } from '@/lib/accountDeletion';
 
 export interface CartItem extends MenuItem {
   quantity: number;
@@ -103,6 +104,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isSyncingRef = useRef(false);
   const pendingServerSavesRef = useRef(0);
   const cartRef = useRef<CartItem[]>([]);
+  const syncGenerationRef = useRef(0);
 
   // --- Server API calls ---
 
@@ -174,6 +176,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const init = async () => {
+      const generation = syncGenerationRef.current;
       // 1. Load localStorage cart
       let localCart: CartItem[] = [];
       const savedCart = localStorage.getItem(CART_STORAGE_KEY);
@@ -190,6 +193,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (token) {
         isSyncingRef.current = true;
         const serverCart = await fetchServerCart(token);
+        if (generation !== syncGenerationRef.current || token !== getToken()) return;
         const merged = mergeCartItems(localCart, serverCart);
         cartRef.current = merged;
         setCart(merged);
@@ -225,6 +229,17 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const handleStorageChange = async (event: StorageEvent | Event) => {
       const storageKey = 'key' in event ? event.key : null;
+      if (storageKey === ACCOUNT_DELETED_KEY) {
+        syncGenerationRef.current += 1;
+        clearPendingServerSave();
+        cartRef.current = [];
+        setCart([]);
+        setIsCartOpen(false);
+        setInitialised(true);
+        clearDeletedAccountData(false);
+        window.location.replace('/login?accountDeleted=1');
+        return;
+      }
       if (storageKey && !AUTH_STORAGE_KEYS.has(storageKey)) return;
       if (pendingServerSavesRef.current > 0) return;
 
@@ -232,9 +247,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (token && !isSyncingRef.current) {
         // User just logged in — merge local cart with server cart
         isSyncingRef.current = true;
+        const generation = syncGenerationRef.current;
         try {
           const localCart = [...cartRef.current];
           const serverCart = await fetchServerCart(token);
+          if (generation !== syncGenerationRef.current || token !== getToken()) return;
           const merged = mergeCartItems(localCart, serverCart);
           cartRef.current = merged;
           setCart(merged);
@@ -248,7 +265,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [fetchServerCart, saveServerCart]);
+  }, [clearPendingServerSave, fetchServerCart, saveServerCart]);
 
   // --- Cart mutation functions ---
 
@@ -310,6 +327,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const toggleCart = () => setIsCartOpen(!isCartOpen);
 
   const clearCart = () => {
+    syncGenerationRef.current += 1;
     clearPendingServerSave();
     clearCheckoutIdempotencyKey();
     cartRef.current = [];

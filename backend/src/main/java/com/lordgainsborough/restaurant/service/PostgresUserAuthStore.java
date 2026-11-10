@@ -216,6 +216,27 @@ public class PostgresUserAuthStore implements UserAuthStore {
                     return result;
                 }));
     }
+    @Override
+    public Optional<List<String>> deleteAccount(User checked, String token, JwtUtil jwt) {
+        return writes.execute(tx -> users.findForAuthById(checked.getId())
+                .filter(u -> jwt.validateTokenForIdentity(token, u.getId(), u.getTokenVersion())
+                        && Objects.equals(u.getEmail(), jwt.getEmailFromToken(token))
+                        && Objects.equals(u.getPassword(), checked.getPassword()))
+                .map(u -> {
+                    // The user lock also excludes cart writes and authenticated checkout.
+                    // Orders have no user FK: use the same email ownership rule as order access.
+                    List<String> ids = jdbc.queryForList(
+                            "select id from customer_orders where lower(customer_email) = lower(?) order by id for update",
+                            String.class, u.getEmail());
+                    jdbc.update("delete from customer_orders where lower(customer_email) = lower(?)", u.getEmail());
+                    jdbc.update("delete from signup_otp_challenges where lower(normalized_email) = lower(?)", u.getEmail());
+                    // Existing FKs cascade through cart/items and password-reset challenges.
+                    if (jdbc.update("delete from users where id = ?", u.getId()) != 1)
+                        throw new IllegalStateException("Account deletion lost its owner");
+                    return ids;
+                }));
+    }
+
     public PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key) {
         if (!(service.getPersistence().getStore() instanceof PostgresPasswordResetOtpChallengeStore reset)
                 || reset.getTransactionManager() != manager || reset.getDataSource() != manager.getDataSource())

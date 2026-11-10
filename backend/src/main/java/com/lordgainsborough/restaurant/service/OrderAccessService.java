@@ -43,6 +43,7 @@ public class OrderAccessService {
     }
 
     public UserAuthStore getIdentityStore() { return identityStore; }
+    public JwtUtil getJwtUtil() { return jwtUtil; }
 
     private byte[] initializeHmacKey(String configuredSecret) {
         if (configuredSecret != null && !configuredSecret.isBlank()) {

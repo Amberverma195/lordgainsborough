@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -19,12 +19,19 @@ import {
 import { formatLoginIdentifier } from '@/lib/phone';
 import { API_BASE } from '@/lib/orders';
 
+function subscribeToLocation(callback: () => void) {
+  window.addEventListener('popstate', callback);
+  return () => window.removeEventListener('popstate', callback);
+}
+
 export default function LoginPage() {
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const accountDeleted = useSyncExternalStore(subscribeToLocation,
+    () => new URLSearchParams(window.location.search).get('accountDeleted') === '1', () => false);
   const [cooldown, setCooldown] = useState<ServerCooldownState | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const requestInFlight = useRef(false);
@@ -106,6 +113,7 @@ export default function LoginPage() {
           <p>Sign in to your Lord Gainsborough account</p>
         </div>
 
+        {accountDeleted && <p role="status">Your account and its orders and cart have been deleted.</p>}
         {error && <div className={styles.errorBanner}>{error}</div>}
 
         <form className={styles.form} onSubmit={handleLogin}>

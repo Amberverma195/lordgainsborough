@@ -4,11 +4,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link';
 import styles from './profile.module.css';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Phone, Package, Clock, LogOut, User, Pencil, ShieldCheck, MonitorCog } from 'lucide-react';
+import { Mail, Phone, Package, Clock, LogOut, User, Pencil, ShieldCheck, MonitorCog, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import { persistAuth, clearAuth, getAuthHeaders } from '@/lib/auth';
+import { useCart } from '@/context/CartContext';
+import { clearDeletedAccountData } from '@/lib/accountDeletion';
 import { canAccessKds, isAdminRole } from '@/lib/roles';
 import {
   API_BASE,
@@ -44,6 +46,14 @@ interface UserData {
 
 export default function ProfilePage() {
   const router = useRouter();
+  const { clearCart } = useCart();
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const deletionInFlight = useRef(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -249,6 +259,45 @@ export default function ProfilePage() {
     router.push('/login');
   };
 
+  const closeDeleteDialog = () => {
+    if (deletionInFlight.current) return;
+    deleteDialogRef.current?.close();
+    setDeletePassword('');
+    setDeleteError('');
+    deleteButtonRef.current?.focus();
+  };
+
+  const handleDeleteAccount = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (deletionInFlight.current) return;
+    deletionInFlight.current = true;
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      const response = await fetch(`${AUTH_API}/me`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ password: deletePassword }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setDeleteError(body?.message || 'Could not delete your account. Please try again.');
+        return;
+      }
+      socketsRef.current.forEach(socket => socket.disconnect());
+      setDeletePassword('');
+      clearDeletedAccountData();
+      // Authentication is cleared first, so this only clears the browser cart.
+      clearCart();
+      window.location.replace('/login?accountDeleted=1');
+    } catch {
+      setDeleteError('Unable to connect to the server. Please try again.');
+    } finally {
+      deletionInFlight.current = false;
+      setDeleteLoading(false);
+    }
+  };
+
   if (isLoggedIn === null || isLoggedIn === false) {
     return (
       <div className={styles.spinnerContainer}>
@@ -313,6 +362,12 @@ export default function ProfilePage() {
             </button>
             <button className={styles.logoutBtn} onClick={() => setShowLogoutModal(true)}>
               <LogOut size={16} /> Logout
+            </button>
+            <button ref={deleteButtonRef} className={styles.deleteAccountBtn} onClick={() => {
+              deleteDialogRef.current?.showModal();
+              deleteCancelRef.current?.focus();
+            }}>
+              <Trash2 size={16} /> Delete account
             </button>
           </div>
         </motion.div>
@@ -457,6 +512,26 @@ export default function ProfilePage() {
           )}
         </motion.div>
       </div>
+
+      <dialog ref={deleteDialogRef} className={styles.deleteDialog} aria-labelledby="delete-account-title"
+        aria-describedby="delete-account-description" onCancel={event => { event.preventDefault(); closeDeleteDialog(); }}>
+        <form onSubmit={handleDeleteAccount}>
+          <h3 id="delete-account-title">Delete your account?</h3>
+          <p id="delete-account-description">This permanently deletes your account, saved cart, and all orders, including active orders, messages, and reviews. This cannot be undone.</p>
+          <div className={styles.editField}>
+            <label htmlFor="delete-password">Confirm your current password</label>
+            <input id="delete-password" type="password" autoComplete="current-password" required maxLength={128}
+              value={deletePassword} onChange={event => setDeletePassword(event.target.value)} disabled={deleteLoading} />
+          </div>
+          {deleteError && <p className={styles.editError} role="alert">{deleteError}</p>}
+          <div className={styles.modalActions}>
+            <button ref={deleteCancelRef} type="button" className={styles.cancelBtn} onClick={closeDeleteDialog} disabled={deleteLoading}>Cancel</button>
+            <button type="submit" className={styles.confirmDeleteBtn} disabled={deleteLoading || !deletePassword.trim()}>
+              {deleteLoading ? 'Deleting...' : 'Permanently delete account'}
+            </button>
+          </div>
+        </form>
+      </dialog>
 
       <AnimatePresence>
         {showEditModal && (

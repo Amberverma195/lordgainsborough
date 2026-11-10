@@ -63,6 +63,21 @@ public class OrderRealtimeService {
         sendEvent("order:" + order.getId(), "chat.message", payload);
     }
 
+    public void ordersDeleted(java.util.List<String> ids) {
+        for (String id : ids) {
+            sendEvent("kds", "order.deleted", Map.of("id", id));
+            sendEvent("order:" + id, "order.deleted", Map.of("id", id));
+            try {
+                for (var client : socketIoServer.getRoomOperations("order:" + id).getClients()) {
+                    client.leaveRoom("order:" + id);
+                    client.disconnect();
+                }
+            } catch (RuntimeException failure) {
+                log.warn("Unable to close deleted order room {}", id);
+            }
+        }
+    }
+
     private void sendEvent(String room, String event, Object payload) {
         try {
             socketIoServer.getRoomOperations(room).sendEvent(event, payload);

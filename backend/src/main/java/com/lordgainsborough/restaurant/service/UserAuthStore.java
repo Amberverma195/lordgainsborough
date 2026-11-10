@@ -22,6 +22,10 @@ public interface UserAuthStore {
     }
     Optional<User> updateName(User user, String token, String name, JwtUtil jwt);
     Optional<List<CustomerOrder>> history(User user, String token, JwtUtil jwt);
+    /** Returns deleted order IDs only after commit; empty means the identity changed. */
+    default Optional<List<String>> deleteAccount(User checked, String token, JwtUtil jwt) {
+        throw new UnsupportedOperationException("Account deletion not supported");
+    }
     PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key);
     default Optional<User> confirmLogin(User checked) { return Optional.of(checked); }
     default Optional<User> authenticate(String token, JwtUtil jwt) {

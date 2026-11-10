@@ -276,7 +276,9 @@ public class OrderController {
 
         CustomerOrder saved;
         try {
-            saved = orderStore.create(order, this::notifyCreated);
+            saved = orderStore.usesPostgres()
+                    ? orderStore.createAuthenticated(order, authHeader.substring(7), orderAccessService.getJwtUtil(), this::notifyCreated)
+                    : orderStore.create(order, this::notifyCreated);
         } catch (DataIntegrityViolationException duplicate) {
             if (idempotencyKey != null) {
                 Optional<CustomerOrder> existing = orderStore.findByIdempotencyKey(idempotencyKey);
