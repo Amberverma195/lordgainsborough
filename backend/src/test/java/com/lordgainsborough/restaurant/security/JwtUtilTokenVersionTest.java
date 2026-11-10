@@ -30,6 +30,17 @@ class JwtUtilTokenVersionTest {
     }
 
     @Test
+    void socketTicketsAreShortLivedAndCannotAuthenticateAccountApis() {
+        String ticket = jwtUtil.generateOrderSocketTicket("order-1");
+        assertTrue(jwtUtil.validateOrderSocketTicket(ticket, "order-1"));
+        assertFalse(jwtUtil.validateOrderSocketTicket(ticket, "order-2"));
+        assertFalse(jwtUtil.validateOrderSocketTicket("invalid", "order-1"));
+        assertFalse(jwtUtil.validateToken(ticket));
+        assertFalse(jwtUtil.validateTokenForUser(ticket, user));
+        assertFalse(jwtUtil.validateOrderSocketTicket(jwtUtil.generateToken(user.getId(), user.getEmail()), "order-1"));
+    }
+
+    @Test
     void incrementingUserTokenVersionInvalidatesAnOlderJwt() {
         String oldToken = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
 

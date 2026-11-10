@@ -1,3 +1,4 @@
+import { apiFetch } from '@/lib/apiFetch';
 import { API_BASE } from '@/lib/orders';
 
 export type SignupOtpCode =
@@ -251,7 +252,7 @@ export async function fetchSignupOtpStatus(
   if (challengeId) {
     params.set('challengeId', challengeId);
   }
-  const res = await fetch(`${API_BASE}/auth/signup/otp-status?${params.toString()}`, {
+  const res = await apiFetch(`${API_BASE}/auth/signup/otp-status?${params.toString()}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
   });

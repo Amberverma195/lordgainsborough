@@ -1,12 +1,14 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import { CalendarDays, Check, ChefHat, Clock3, PackageCheck, RefreshCw, ShoppingBag, UserX, Wifi, WifiOff, X } from 'lucide-react';
 import { useRequireKdsAccess } from '@/hooks/useRequireKdsAccess';
 import {
-  API_BASE,
+  KDS_API_BASE,
   CustomerOrder,
   OrderStatus,
   SOCKET_URL,
@@ -122,8 +124,8 @@ export default function KdsPage() {
     setLoading(true);
     setNotice('');
     try {
-      const url = `${API_BASE}/kds/orders?date=${selectedDate}`;
-      const res = await fetch(url, { cache: 'no-store' });
+      const url = `${KDS_API_BASE}/kds/orders?date=${selectedDate}`;
+      const res = await apiFetch(url, { cache: 'no-store' });
 
       if (!res.ok) {
         throw new Error('Unable to load KDS orders.');
@@ -214,7 +216,7 @@ export default function KdsPage() {
   const updateOrderStatus = async (order: CustomerOrder, status: OrderStatus) => {
     setNotice('');
     try {
-      const res = await fetch(`${API_BASE}/kds/orders/${order.id}/status`, {
+      const res = await apiFetch(`${KDS_API_BASE}/kds/orders/${order.id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -236,7 +238,7 @@ export default function KdsPage() {
   const updateReadyTime = async (order: CustomerOrder, minutes: number) => {
     setNotice('');
     try {
-      const res = await fetch(`${API_BASE}/kds/orders/${order.id}/ready-time`, {
+      const res = await apiFetch(`${KDS_API_BASE}/kds/orders/${order.id}/ready-time`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ averageReadyMinutes: clampReadyMinutes(minutes) }),

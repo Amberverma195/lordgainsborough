@@ -1,5 +1,8 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -233,7 +236,7 @@ export default function ForgotPasswordPage() {
     try {
       const idempotencyKey = crypto.randomUUID();
       const res = await fetchPasswordResetWithRetry((key) =>
-        fetch(`${API_BASE}/auth/forgot-password/send-otp`, {
+        apiFetch(`${API_BASE}/auth/forgot-password/send-otp`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -286,7 +289,7 @@ export default function ForgotPasswordPage() {
     try {
       const idempotencyKey = crypto.randomUUID();
       const res = await fetchPasswordResetWithRetry((key) =>
-        fetch(`${API_BASE}/auth/forgot-password/resend-otp`, {
+        apiFetch(`${API_BASE}/auth/forgot-password/resend-otp`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -348,7 +351,7 @@ export default function ForgotPasswordPage() {
     try {
       const idempotencyKey = crypto.randomUUID();
       const res = await fetchPasswordResetWithRetry((key) =>
-        fetch(`${API_BASE}/auth/forgot-password/reset`, {
+        apiFetch(`${API_BASE}/auth/forgot-password/reset`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

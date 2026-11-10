@@ -380,6 +380,17 @@ public class OrderController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/{id}/socket-ticket")
+    public ResponseEntity<Map<String, String>> getSocketTicket(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestHeader(value = OrderAccessService.TRACKING_TOKEN_HEADER, required = false) String trackingToken) {
+        return orderStore.findById(id).filter(order -> canAccess(order, authHeader, trackingToken))
+                .map(order -> ResponseEntity.ok().header("Cache-Control", "no-store")
+                        .body(Map.of("ticket", orderAccessService.getJwtUtil().generateOrderSocketTicket(id))))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     @PostMapping("/{id}/messages")
     public ResponseEntity<CustomerOrder.OrderMessage> addCustomerMessage(
             @PathVariable String id,

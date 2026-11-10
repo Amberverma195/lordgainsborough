@@ -1,5 +1,6 @@
+import { apiFetch } from './apiFetch';
+
 export interface AuthData {
-  token?: string;
   name?: string;
   email?: string;
   phone?: string;
@@ -13,9 +14,8 @@ export const PICKUP_DISABLED_NO_SHOW_MESSAGE =
   'Pickup disabled due to recent no-show history';
 
 export function persistAuth(data: AuthData) {
-  if (data.token) {
-    localStorage.setItem('authToken', data.token);
-  }
+  localStorage.removeItem('authToken'); // Scrub tokens left by the previous browser-storage implementation.
+  if (data.email) localStorage.setItem('sessionUser', data.email);
   if (data.name) {
     localStorage.setItem('userName', data.name);
   }
@@ -30,7 +30,6 @@ export function persistAuth(data: AuthData) {
   }
   if (data.role) {
     localStorage.setItem('userRole', data.role);
-    document.cookie = `userRole=${encodeURIComponent(data.role)}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
   }
   if (data.noShowCount !== undefined) {
     localStorage.setItem('userNoShowCount', String(data.noShowCount));
@@ -42,6 +41,7 @@ export function persistAuth(data: AuthData) {
 
 export function clearAuth() {
   localStorage.removeItem('authToken');
+  localStorage.removeItem('sessionUser');
   localStorage.removeItem('userName');
   localStorage.removeItem('userEmail');
   localStorage.removeItem('userPhone');
@@ -49,7 +49,13 @@ export function clearAuth() {
   localStorage.removeItem('userRole');
   localStorage.removeItem('userNoShowCount');
   localStorage.removeItem('userPickupDisabled');
-  document.cookie = 'userRole=; path=/; max-age=0; SameSite=Lax';
+}
+
+export async function signOut() {
+  const response = await apiFetch('/api/auth/logout', { method: 'POST' });
+  if (!response.ok) throw new Error('Unable to sign out');
+  clearAuth();
+  window.dispatchEvent(new Event('storage'));
 }
 
 export function isPickupDisabledForUser(): boolean {
@@ -59,10 +65,6 @@ export function isPickupDisabledForUser(): boolean {
 
 export function getAuthHeaders(includeJson = true): HeadersInit {
   const headers: Record<string, string> = {};
-  const token = localStorage.getItem('authToken');
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
   if (includeJson) {
     headers['Content-Type'] = 'application/json';
   }
@@ -70,11 +72,10 @@ export function getAuthHeaders(includeJson = true): HeadersInit {
 }
 
 export function getAuthHeadersOnly(): HeadersInit {
-  const token = localStorage.getItem('authToken');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {};
 }
 
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false;
-  return !!localStorage.getItem('authToken');
+  return !!localStorage.getItem('sessionUser'); // UI hint only; the server validates the HttpOnly cookie.
 }

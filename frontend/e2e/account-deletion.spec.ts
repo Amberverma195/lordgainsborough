@@ -28,7 +28,10 @@ test('profile deletion confirms password, preserves failures, and clears every o
     await page.locator('input[type=password]').fill(password);
     await page.getByRole('button', { name: 'Sign In', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'My Account', exact: true })).toBeVisible();
-    const savedToken = await page.evaluate(() => localStorage.getItem('authToken'));
+    expect(await page.evaluate(() => localStorage.getItem('authToken'))).toBeNull();
+    // Test automation can inspect HttpOnly cookies; page JavaScript cannot.
+    const savedToken = (await context.cookies()).find(cookie => cookie.name.endsWith('lgb_session'))?.value;
+    expect(savedToken).toBeTruthy();
     const otherTab = await context.newPage();
     await otherTab.goto('/profile');
     await expect(otherTab.getByRole('heading', { name: 'My Account', exact: true })).toBeVisible();

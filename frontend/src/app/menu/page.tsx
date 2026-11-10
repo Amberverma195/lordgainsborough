@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import styles from './menu.module.css';
@@ -52,7 +54,7 @@ export default function MenuPage() {
   useEffect(() => {
     async function loadMenu() {
       try {
-        const res = await fetch(`${API_BASE}/menu`);
+        const res = await apiFetch(`${API_BASE}/menu`);
         if (!res.ok) {
           throw new Error(`Menu request failed with status ${res.status}`);
         }

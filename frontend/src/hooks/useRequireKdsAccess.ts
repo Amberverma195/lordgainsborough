@@ -1,8 +1,10 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import { useEffect, useState } from 'react';
 import { notFound } from 'next/navigation';
-import { API_BASE } from '@/lib/orders';
+import { KDS_API_BASE } from '@/lib/orders';
 
 /**
  * Layer 1: page gate. Asks the backend whether this browser's IP is on the KDS allowlist.
@@ -14,7 +16,7 @@ export function useRequireKdsAccess() {
   useEffect(() => {
     const verifyAccess = async () => {
       try {
-        const res = await fetch(`${API_BASE}/kds/access`, {
+        const res = await apiFetch(`${KDS_API_BASE}/kds/access`, {
           method: 'GET',
           cache: 'no-store',
         });

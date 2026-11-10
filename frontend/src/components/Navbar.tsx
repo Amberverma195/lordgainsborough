@@ -20,7 +20,7 @@ const Navbar = () => {
     window.addEventListener('scroll', handleScroll);
     
     const checkLogin = () => {
-      setIsLoggedIn(!!localStorage.getItem('authToken'));
+      setIsLoggedIn(!!localStorage.getItem('sessionUser'));
     };
     checkLogin();
     

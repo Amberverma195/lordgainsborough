@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import styles from './profile.module.css';
@@ -7,8 +9,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Phone, Package, Clock, LogOut, User, Pencil, ShieldCheck, MonitorCog, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
+import { orderSocketAuth } from '@/lib/orderSocketAuth';
 import type { Socket } from 'socket.io-client';
-import { persistAuth, clearAuth, getAuthHeaders } from '@/lib/auth';
+import { persistAuth, clearAuth, getAuthHeaders, signOut } from '@/lib/auth';
 import { useCart } from '@/context/CartContext';
 import { clearDeletedAccountData } from '@/lib/accountDeletion';
 import { canAccessKds, isAdminRole } from '@/lib/roles';
@@ -56,6 +59,7 @@ export default function ProfilePage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
   const [editName, setEditName] = useState('');
   const [editError, setEditError] = useState('');
@@ -86,7 +90,6 @@ export default function ProfilePage() {
       nextProfileUpdateAt: (data.nextProfileUpdateAt as string) || null,
     });
     persistAuth({
-      token: data.token as string | undefined,
       name: data.name as string,
       email: data.email as string,
       phone: (data.phone as string) || '',
@@ -99,15 +102,9 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const verifySession = async () => {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        router.push('/login');
-        return;
-      }
-
       try {
-        const res = await fetch(`${AUTH_API}/me`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await apiFetch(`${AUTH_API}/me`, {
+          headers: getAuthHeaders(false),
         });
 
         if (res.ok) {
@@ -134,7 +131,7 @@ export default function ProfilePage() {
     }
     setOrdersError('');
     try {
-      const res = await fetch(`${AUTH_API}/orders`, {
+      const res = await apiFetch(`${AUTH_API}/orders`, {
         headers: getAuthHeaders(false),
       });
       if (!res.ok) {
@@ -174,11 +171,10 @@ export default function ProfilePage() {
       return;
     }
 
-    const jwt = localStorage.getItem('authToken') || '';
     const sockets = activeOrders.map(order => {
       const socket = io(SOCKET_URL, {
         query: { orderId: order.id },
-        auth: { token: jwt },
+        auth: orderSocketAuth(order.id),
         transports: ['websocket', 'polling'],
       });
       socket.on('order.updated', (updated: CustomerOrder) => {
@@ -223,14 +219,12 @@ export default function ProfilePage() {
     }
 
     setEditLoading(true);
-    const token = localStorage.getItem('authToken');
 
     try {
-      const res = await fetch(`${AUTH_API}/profile`, {
+      const res = await apiFetch(`${AUTH_API}/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ name: editName.trim() }),
       });
@@ -252,8 +246,8 @@ export default function ProfilePage() {
     }
   };
 
-  const confirmLogout = () => {
-    clearAuth();
+  const confirmLogout = async () => {
+    try { await signOut(); } catch { setLogoutError('Could not sign out. Please try again.'); return; }
     window.dispatchEvent(new Event('storage'));
     setShowLogoutModal(false);
     router.push('/login');
@@ -274,7 +268,7 @@ export default function ProfilePage() {
     setDeleteLoading(true);
     setDeleteError('');
     try {
-      const response = await fetch(`${AUTH_API}/me`, {
+      const response = await apiFetch(`${AUTH_API}/me`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
         body: JSON.stringify({ password: deletePassword }),
@@ -601,6 +595,7 @@ export default function ProfilePage() {
                 <LogOut size={32} />
               </div>
               <h3>Log Out?</h3>
+              {logoutError && <p role="alert">{logoutError}</p>}
               <p>Are you sure you want to log out of your account?</p>
               <div className={styles.modalActions}>
                 <button className={styles.cancelBtn} onClick={() => setShowLogoutModal(false)}>

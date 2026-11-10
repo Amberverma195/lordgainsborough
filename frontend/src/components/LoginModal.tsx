@@ -1,5 +1,8 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
+
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -63,7 +66,7 @@ export default function LoginModal({
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const res = await apiFetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

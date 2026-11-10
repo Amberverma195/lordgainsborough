@@ -1,8 +1,11 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
 import { io } from 'socket.io-client';
+import { orderSocketAuth } from '@/lib/orderSocketAuth';
 import { ChevronDown, Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, X } from 'lucide-react';
 import { CartItem, useCart } from '@/context/CartContext';
 import {
@@ -115,7 +118,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
       setLoading(true);
     }
     try {
-      const res = await fetch(`${API_BASE}/orders/${orderId}`, {
+      const res = await apiFetch(`${API_BASE}/orders/${orderId}`, {
         headers: buildOrderAccessHeaders(orderId),
         cache: 'no-store',
       });
@@ -146,14 +149,9 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   }, [loadOrder]);
 
   useEffect(() => {
-    const authHeaders = getAuthHeadersOnly() as Record<string, string>;
-    const jwt = authHeaders.Authorization?.replace(/^Bearer\s+/i, '') || '';
     const socket = io(SOCKET_URL, {
       query: { orderId },
-      auth: {
-        token: jwt,
-        trackingToken: getStoredTrackingToken(orderId) || '',
-      },
+      auth: orderSocketAuth(orderId, getStoredTrackingToken(orderId)),
       transports: ['websocket', 'polling'],
     });
 
@@ -235,7 +233,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
         }))
         .filter(item => item.rating > 0 || item.description.length > 0);
 
-      const res = await fetch(`${API_BASE}/orders/${order.id}/reviews`, {
+      const res = await apiFetch(`${API_BASE}/orders/${order.id}/reviews`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

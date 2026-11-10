@@ -1,5 +1,8 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -284,7 +287,7 @@ export default function SignupVerifyPage() {
 
     try {
       const res = await fetchWithIdempotentRetry((key) =>
-        fetch(`${API_BASE}/auth/signup/send-otp`, {
+        apiFetch(`${API_BASE}/auth/signup/send-otp`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -352,7 +355,7 @@ export default function SignupVerifyPage() {
     setInfoMessage('');
 
     try {
-      const res = await fetch(`${API_BASE}/auth/signup`, {
+      const res = await apiFetch(`${API_BASE}/auth/signup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

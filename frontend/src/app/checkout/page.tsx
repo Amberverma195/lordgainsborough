@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -163,7 +165,7 @@ export default function CheckoutPage() {
         total: cartTotal + tax,
       };
 
-      const res = await fetch(`${API_BASE}/orders`, {
+      const res = await apiFetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: {
           ...getAuthHeaders(true),

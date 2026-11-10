@@ -332,10 +332,10 @@ describe('signupOtpCrossTab', () => {
     const tabB = subscribeSignupOtpCrossTab((payload) => {
       if (payload.type === 'verified') {
         // Tab B reacts to verified: checks actual persistAuth() storage keys
-        const token = memory.getItem('authToken');
+        const sessionHint = memory.getItem('sessionUser');
         const email = memory.getItem('userEmail');
         const name = memory.getItem('userName');
-        sequence.push(`tabB_received_verified:hasToken=${!!token}:hasEmail=${!!email}:hasName=${!!name}`);
+        sequence.push(`tabB_received_verified:hasSessionHint=${!!sessionHint}:hasEmail=${!!email}:hasName=${!!name}`);
       }
     }, {
       tabId: 'tab-b',
@@ -345,7 +345,7 @@ describe('signupOtpCrossTab', () => {
     });
 
     // In Tab A: Persist auth FIRST using actual persistAuth keys
-    memory.setItem('authToken', 'valid-jwt-token');
+    memory.setItem('sessionUser', 'test@example.com');
     memory.setItem('userEmail', 'test@example.com');
     memory.setItem('userName', 'Amber Verma');
     memory.setItem('userRole', 'MEMBER');
@@ -364,7 +364,7 @@ describe('signupOtpCrossTab', () => {
 
     expect(sequence).toEqual([
       'tabA_persisted_auth',
-      'tabB_received_verified:hasToken=true:hasEmail=true:hasName=true',
+      'tabB_received_verified:hasSessionHint=true:hasEmail=true:hasName=true',
     ]);
 
     tabA.close();

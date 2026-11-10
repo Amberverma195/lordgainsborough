@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -55,7 +57,7 @@ export default function ReservePage() {
     setLoading(true);
     
     try {
-      const res = await fetch(`${API_BASE}/reservations`, {
+      const res = await apiFetch(`${API_BASE}/reservations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

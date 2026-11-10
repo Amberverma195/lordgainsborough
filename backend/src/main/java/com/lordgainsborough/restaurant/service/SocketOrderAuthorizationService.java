@@ -69,7 +69,8 @@ public class SocketOrderAuthorizationService {
             if (!validOrderId(orderId)) return Optional.empty();
             return orders.findById(orderId)
                     .filter(order -> orderId.equals(order.getId()))
-                    .filter(order -> access.canAccessPostgresOrder(order, jwt == null ? null : "Bearer " + jwt, trackingToken))
+                    .filter(order -> access.hasValidSocketTicket(jwt, orderId)
+                            || access.canAccessPostgresOrder(order, jwt == null ? null : "Bearer " + jwt, trackingToken))
                     .map(order -> new RoomGrant(orderId, kitchen));
         } catch (RuntimeException failure) {
             // Never reveal database errors, credentials, claims, order existence or exception payloads.

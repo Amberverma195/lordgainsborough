@@ -1,7 +1,9 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import { useState } from 'react';
-import { API_BASE, getStoredTrackingToken, ORDER_TRACKING_TOKEN_HEADER, type OrderMessage } from '@/lib/orders';
+import { API_BASE, KDS_API_BASE, getStoredTrackingToken, ORDER_TRACKING_TOKEN_HEADER, type OrderMessage } from '@/lib/orders';
 import { getAuthHeadersOnly } from '@/lib/auth';
 import styles from './OrderMessages.module.css';
 
@@ -19,7 +21,7 @@ export default function OrderMessages({ orderId, messages, kitchen = false, onSe
     const token = !kitchen && getStoredTrackingToken(orderId);
     if (token) headers[ORDER_TRACKING_TOKEN_HEADER] = token;
     try {
-      const response = await fetch(`${API_BASE}/${kitchen ? 'kds/orders' : 'orders'}/${orderId}/messages`, {
+      const response = await apiFetch(`${kitchen ? KDS_API_BASE : API_BASE}/${kitchen ? 'kds/orders' : 'orders'}/${orderId}/messages`, {
         method: 'POST', headers, body: JSON.stringify({ text: text.trim() }),
       });
       if (!response.ok) throw new Error('Message not sent');

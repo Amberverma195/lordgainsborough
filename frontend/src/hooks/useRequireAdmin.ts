@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import { useEffect, useState } from 'react';
 import { notFound } from 'next/navigation';
 import { persistAuth } from '@/lib/auth';
@@ -11,15 +13,9 @@ export function useRequireAdmin() {
 
   useEffect(() => {
     const verifyAdmin = async () => {
-      const token = localStorage.getItem('authToken');
-      if (!token) {
-        setIsAuthorized(false);
-        return;
-      }
-
       try {
-        const res = await fetch(`${API_BASE}/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const res = await apiFetch(`${API_BASE}/auth/me`, {
+          cache: 'no-store',
         });
 
         if (!res.ok) {

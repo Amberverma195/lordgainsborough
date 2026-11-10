@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MenuItem } from '@/lib/mockData';
 import { API_BASE, clearCheckoutIdempotencyKey } from '@/lib/orders';
@@ -33,7 +35,7 @@ interface CartContextType {
 }
 
 const CART_STORAGE_KEY = 'lord_gainsborough_cart';
-const AUTH_STORAGE_KEYS = new Set(['authToken', 'userRole', 'userName', 'userEmail', 'userPhone']);
+const AUTH_STORAGE_KEYS = new Set(['sessionUser', 'userRole', 'userName', 'userEmail', 'userPhone']);
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
@@ -84,9 +86,9 @@ function mergeCartItems(localItems: CartItem[], serverItems: CartItem[]): CartIt
   return Array.from(merged.values());
 }
 
-function getToken(): string | null {
+function getSessionKey(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('authToken');
+  return localStorage.getItem('sessionUser');
 }
 
 function saveLocalCart(items: CartItem[]) {
@@ -108,10 +110,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // --- Server API calls ---
 
-  const fetchServerCart = useCallback(async (token: string): Promise<CartItem[]> => {
+  const fetchServerCart = useCallback(async (sessionKey: string): Promise<CartItem[]> => {
+    if (sessionKey !== getSessionKey()) return [];
     try {
-      const res = await fetch(`${API_BASE}/cart`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_BASE}/cart`, {
+        cache: 'no-store',
       });
       if (!res.ok) return [];
       const data = await res.json();
@@ -122,14 +125,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const saveServerCart = useCallback(async (items: CartItem[], token: string) => {
+  const saveServerCart = useCallback(async (items: CartItem[], sessionKey: string) => {
+    if (sessionKey !== getSessionKey()) return;
     pendingServerSavesRef.current += 1;
     try {
-      const res = await fetch(`${API_BASE}/cart`, {
+      const res = await apiFetch(`${API_BASE}/cart`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(toServerItems(items)),
       });
@@ -151,24 +154,24 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const saveToServerNow = useCallback((items: CartItem[]) => {
-    const token = getToken();
-    if (!token) return;
+    const sessionKey = getSessionKey();
+    if (!sessionKey) return;
 
     clearPendingServerSave();
-    void saveServerCart(items, token);
+    void saveServerCart(items, sessionKey);
   }, [clearPendingServerSave, saveServerCart]);
 
   // Debounced save — fires 1s after last cart mutation
   const debouncedSaveToServer = useCallback((items: CartItem[]) => {
-    const token = getToken();
-    if (!token) return;
+    const sessionKey = getSessionKey();
+    if (!sessionKey) return;
 
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void saveServerCart(items, token);
+      void saveServerCart(items, sessionKey);
     }, 1000);
   }, [saveServerCart]);
 
@@ -176,6 +179,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const init = async () => {
+      localStorage.removeItem('authToken');
       const generation = syncGenerationRef.current;
       // 1. Load localStorage cart
       let localCart: CartItem[] = [];
@@ -189,11 +193,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // 2. If logged in, fetch server cart and merge
-      const token = getToken();
-      if (token) {
+      const sessionKey = getSessionKey();
+      if (sessionKey) {
         isSyncingRef.current = true;
-        const serverCart = await fetchServerCart(token);
-        if (generation !== syncGenerationRef.current || token !== getToken()) return;
+        const serverCart = await fetchServerCart(sessionKey);
+        if (generation !== syncGenerationRef.current || sessionKey !== getSessionKey()) return;
         const merged = mergeCartItems(localCart, serverCart);
         cartRef.current = merged;
         setCart(merged);
@@ -201,7 +205,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Persist the merged result to server if there were local-only items
         if (localCart.length > 0 && JSON.stringify(merged) !== JSON.stringify(serverCart)) {
-          await saveServerCart(merged, token);
+          await saveServerCart(merged, sessionKey);
         }
         isSyncingRef.current = false;
       } else {
@@ -243,20 +247,20 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (storageKey && !AUTH_STORAGE_KEYS.has(storageKey)) return;
       if (pendingServerSavesRef.current > 0) return;
 
-      const token = getToken();
-      if (token && !isSyncingRef.current) {
+      const sessionKey = getSessionKey();
+      if (sessionKey && !isSyncingRef.current) {
         // User just logged in — merge local cart with server cart
         isSyncingRef.current = true;
         const generation = syncGenerationRef.current;
         try {
           const localCart = [...cartRef.current];
-          const serverCart = await fetchServerCart(token);
-          if (generation !== syncGenerationRef.current || token !== getToken()) return;
+          const serverCart = await fetchServerCart(sessionKey);
+          if (generation !== syncGenerationRef.current || sessionKey !== getSessionKey()) return;
           const merged = mergeCartItems(localCart, serverCart);
           cartRef.current = merged;
           setCart(merged);
           saveLocalCart(merged);
-          await saveServerCart(merged, token);
+          await saveServerCart(merged, sessionKey);
         } finally {
           isSyncingRef.current = false;
         }

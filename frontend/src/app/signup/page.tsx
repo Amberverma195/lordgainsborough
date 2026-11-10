@@ -1,5 +1,8 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
+
 import React, { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -141,7 +144,7 @@ export default function SignupPage() {
       }
 
       const res = await fetchWithIdempotentRetry((key) =>
-        fetch(`${API_BASE}/auth/signup/send-otp`, {
+        apiFetch(`${API_BASE}/auth/signup/send-otp`, {
           method: 'POST',
           headers: {
             ...headers,

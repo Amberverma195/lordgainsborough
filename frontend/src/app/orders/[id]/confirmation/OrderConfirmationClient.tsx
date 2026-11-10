@@ -1,5 +1,8 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
+
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { CalendarDays, CheckCircle2, Clock3 } from 'lucide-react';
@@ -48,7 +51,7 @@ export default function OrderConfirmationClient({ orderId }: OrderConfirmationCl
   useEffect(() => {
     const loadOrder = async () => {
       try {
-        const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(orderId)}`, {
+        const response = await apiFetch(`${API_BASE}/orders/${encodeURIComponent(orderId)}`, {
           headers: orderAccessHeaders(orderId),
         });
         if (!response.ok) {

@@ -53,8 +53,7 @@ public class JwtUtil {
 
     public boolean validateToken(String token) {
         try {
-            claims(token);
-            return true;
+            return claims(token).get("purpose") == null;
         } catch (Exception e) {
             return false;
         }
@@ -73,12 +72,26 @@ public class JwtUtil {
             String tokenUserId = claims.get("userId", String.class);
             Object versionClaim = claims.get("tokenVersion");
             long tokenVersion = versionClaim instanceof Number number ? number.longValue() : 0L;
-            return userId != null
+            return claims.get("purpose") == null && userId != null
                     && userId.equals(tokenUserId)
                     && currentTokenVersion == tokenVersion;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** A short-lived, read-only room credential; deliberately invalid as an account JWT. */
+    public String generateOrderSocketTicket(String orderId) {
+        return Jwts.builder().subject("order:" + orderId).claim("purpose", "order-socket")
+                .claim("orderId", orderId).issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60000)).signWith(getSigningKey()).compact();
+    }
+
+    public boolean validateOrderSocketTicket(String token, String orderId) {
+        try {
+            Claims ticket = claims(token);
+            return "order-socket".equals(ticket.get("purpose")) && orderId.equals(ticket.get("orderId"));
+        } catch (Exception invalid) { return false; }
     }
 
     private Claims claims(String token) {

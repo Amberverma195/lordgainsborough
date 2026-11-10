@@ -44,6 +44,9 @@ public class OrderAccessService {
 
     public UserAuthStore getIdentityStore() { return identityStore; }
     public JwtUtil getJwtUtil() { return jwtUtil; }
+    public boolean hasValidSocketTicket(String token, String orderId) {
+        return jwtUtil.validateOrderSocketTicket(token, orderId);
+    }
 
     private byte[] initializeHmacKey(String configuredSecret) {
         if (configuredSecret != null && !configuredSecret.isBlank()) {

@@ -1,5 +1,7 @@
 'use client';
 
+import { apiFetch } from '@/lib/apiFetch';
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import styles from './admin.module.css';
@@ -242,7 +244,7 @@ export default function AdminPage() {
 
   const fetchCategories = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/categories`);
+      const res = await apiFetch(`${API_BASE}/categories`);
       const data = await res.json();
       setCategories(data);
     } catch { showNotification('Failed to load categories', 'error'); }
@@ -250,7 +252,7 @@ export default function AdminPage() {
 
   const fetchMenuItems = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/menu`);
+      const res = await apiFetch(`${API_BASE}/menu`);
       const data = await res.json();
       setMenuItems(data);
     } catch { showNotification('Failed to load menu items', 'error'); }
@@ -258,7 +260,7 @@ export default function AdminPage() {
 
   const fetchReservations = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/reservations`, {
+      const res = await apiFetch(`${API_BASE}/reservations`, {
         headers: getAuthHeaders(false),
       });
       const data = await res.json();
@@ -268,7 +270,7 @@ export default function AdminPage() {
 
   const fetchOrders = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/kds/orders/all`, {
+      const res = await apiFetch(`${API_BASE}/kds/orders/all`, {
         headers: getAuthHeaders(false),
       });
       if (!res.ok) {
@@ -289,7 +291,7 @@ export default function AdminPage() {
 
   const fetchReviews = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/kds/reviews`, {
+      const res = await apiFetch(`${API_BASE}/kds/reviews`, {
         headers: getAuthHeaders(false),
       });
       const data = await res.json();
@@ -299,7 +301,7 @@ export default function AdminPage() {
 
   const fetchStoreSettings = useCallback(async (options?: { notifyOnError?: boolean }) => {
     try {
-      const res = await fetch(`${API_BASE}/store-settings`, {
+      const res = await apiFetch(`${API_BASE}/store-settings`, {
         headers: getAuthHeaders(false),
       });
       if (res.status === 404) {
@@ -340,7 +342,7 @@ export default function AdminPage() {
     }
     const timeout = window.setTimeout(() => {
       fetchStoreSettings({ notifyOnError: true });
-      fetch(`${API_BASE}/admin/client-ip`, { headers: getAuthHeaders(false) })
+      apiFetch(`${API_BASE}/admin/client-ip`, { headers: getAuthHeaders(false) })
         .then(async res => {
           if (!res.ok) {
             return;
@@ -390,14 +392,14 @@ export default function AdminPage() {
 
     try {
       if (editingCategory) {
-        await fetch(`${API_BASE}/categories/${editingCategory.id}`, {
+        await apiFetch(`${API_BASE}/categories/${editingCategory.id}`, {
           method: 'PUT',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
         });
         showNotification('Category updated', 'success');
       } else {
-        await fetch(`${API_BASE}/categories`, {
+        await apiFetch(`${API_BASE}/categories`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
@@ -418,7 +420,7 @@ export default function AdminPage() {
       message: 'Are you sure? This will not delete items in this category.',
       onConfirm: async () => {
         try {
-          await fetch(`${API_BASE}/categories/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
+          await apiFetch(`${API_BASE}/categories/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
           showNotification('Category deleted', 'success');
           fetchCategories();
           setConfirmModal(p => ({ ...p, isOpen: false }));
@@ -440,7 +442,7 @@ export default function AdminPage() {
 
     setUserSearchLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/customers/search?q=${encodeURIComponent(query)}`, {
+      const res = await apiFetch(`${API_BASE}/admin/customers/search?q=${encodeURIComponent(query)}`, {
         headers: getAuthHeaders(false),
       });
       if (!res.ok) {
@@ -464,7 +466,7 @@ export default function AdminPage() {
     }
     setSettingsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/store-settings`, {
+      const res = await apiFetch(`${API_BASE}/store-settings`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify(storeSettings),
@@ -498,14 +500,14 @@ export default function AdminPage() {
 
     try {
       if (editingItem) {
-        await fetch(`${API_BASE}/menu/${editingItem.id}`, {
+        await apiFetch(`${API_BASE}/menu/${editingItem.id}`, {
           method: 'PUT',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
         });
         showNotification('Menu item updated', 'success');
       } else {
-        await fetch(`${API_BASE}/menu`, {
+        await apiFetch(`${API_BASE}/menu`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
@@ -519,14 +521,14 @@ export default function AdminPage() {
 
   const toggleAvailability = async (id: string) => {
     try {
-      await fetch(`${API_BASE}/menu/${id}/availability`, { method: 'PATCH', headers: getAuthHeaders(false) });
+      await apiFetch(`${API_BASE}/menu/${id}/availability`, { method: 'PATCH', headers: getAuthHeaders(false) });
       fetchMenuItems();
     } catch { showNotification('Failed to toggle availability', 'error'); }
   };
 
   const toggleMostLoved = async (id: string) => {
     try {
-      await fetch(`${API_BASE}/menu/${id}/most-loved`, { method: 'PATCH', headers: getAuthHeaders(false) });
+      await apiFetch(`${API_BASE}/menu/${id}/most-loved`, { method: 'PATCH', headers: getAuthHeaders(false) });
       fetchMenuItems();
       showNotification('Most Loved status updated', 'success');
     } catch { showNotification('Failed to update Most Loved status', 'error'); }
@@ -539,7 +541,7 @@ export default function AdminPage() {
       message: 'Are you sure you want to delete this item? This action cannot be undone.',
       onConfirm: async () => {
         try {
-          await fetch(`${API_BASE}/menu/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
+          await apiFetch(`${API_BASE}/menu/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
           showNotification('Item deleted', 'success');
           fetchMenuItems();
           setConfirmModal(p => ({ ...p, isOpen: false }));
@@ -555,7 +557,7 @@ export default function AdminPage() {
       message: 'Are you sure you want to delete this reservation? This cannot be undone.',
       onConfirm: async () => {
         try {
-          await fetch(`${API_BASE}/reservations/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
+          await apiFetch(`${API_BASE}/reservations/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
           showNotification('Reservation deleted', 'success');
           fetchReservations();
           setConfirmModal(p => ({ ...p, isOpen: false }));
@@ -566,7 +568,7 @@ export default function AdminPage() {
 
   const updateReservationStatus = async (id: string, status: string) => {
     try {
-      await fetch(`${API_BASE}/reservations/${id}/status`, {
+      await apiFetch(`${API_BASE}/reservations/${id}/status`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({ status })
@@ -578,7 +580,7 @@ export default function AdminPage() {
 
   const updateReviewStatus = async (id: string, status: 'PUBLISHED' | 'HIDDEN' | 'PENDING') => {
     try {
-      await fetch(`${API_BASE}/kds/reviews/${id}/status`, {
+      await apiFetch(`${API_BASE}/kds/reviews/${id}/status`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({ status }),
@@ -630,7 +632,7 @@ export default function AdminPage() {
     formData.append('file', file);
 
     try {
-      const res = await fetch(`${API_BASE}/menu/upload-image`, {
+      const res = await apiFetch(`${API_BASE}/menu/upload-image`, {
         method: 'POST',
         headers: getAuthHeadersOnly(),
         body: formData,

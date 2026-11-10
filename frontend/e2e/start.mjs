@@ -38,7 +38,23 @@ const smtp=new SMTPServer({authOptional:true,disabledCommands:['AUTH','STARTTLS'
         const raw=Buffer.concat(chunks).toString('utf8');const code=raw.match(/\b\d{6}\b/)?.[0];
         messages.push({to:session.envelope.rcptTo.map(r=>r.address),code});done();});}});
 await new Promise(resolve=>smtp.listen(2525,'127.0.0.1',resolve));
-const inbox=createServer((request,response)=>{response.setHeader('Content-Type','application/json');response.end(JSON.stringify(messages));});
+// Match the application's Resend REST transport while keeping all mail on loopback.
+const inbox=createServer(async(request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='POST'&&request.url==='/emails') {
+        try {
+            const chunks=[];let length=0;
+            for await(const chunk of request){length+=chunk.length;if(length>32768)throw Error('Fixture email too large');chunks.push(chunk);}
+            const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const to=Array.isArray(body.to)?body.to:[body.to];
+            if(!to.length||to.some(address=>typeof address!=='string'||!address.endsWith('@example.test')))throw Error('E2E recipients only');
+            messages.push({to,code:String(body.text||body.html||'').match(/\b\d{6}\b/)?.[0]});
+            response.statusCode=200;response.end(JSON.stringify({id:randomUUID()}));
+        } catch {response.statusCode=400;response.end(JSON.stringify({message:'Invalid fixture email'}));}
+        return;
+    }
+    response.end(JSON.stringify(messages));
+});
 await new Promise(resolve=>inbox.listen(8025,'127.0.0.1',resolve));
 const children=[];
 function start(command,args,cwd,env,log){const output=createWriteStream(path.join(artifacts,log));const child=spawn(command,args,{cwd,env:{...process.env,...env},windowsHide:true,stdio:['ignore','pipe','pipe']});child.stdout.pipe(output);child.stderr.pipe(output);children.push(child);return child;}
@@ -46,6 +62,7 @@ const backendEnv={DB_HOST:'127.0.0.1',DB_PORT:String(port),DB_NAME:database,DB_U
     SPRING_DATASOURCE_URL:`jdbc:postgresql://127.0.0.1:${port}/${database}?sslmode=disable`,SPRING_DATASOURCE_USERNAME:'postgres',SPRING_DATASOURCE_PASSWORD:'postgres',
     JWT_SECRET:randomBytes(48).toString('base64url'),ABUSE_IP_HASH_SECRET:randomBytes(48).toString('base64url'),
     MAIL_USERNAME:'local',MAIL_PASSWORD:'local',MAIL_FROM:'restaurant@example.test',BREVO_API_KEY:'',
+    RESEND_API_KEY:'re_local_e2e_fixture',RESEND_API_URL:'http://127.0.0.1:8025/emails',
     SPRING_MAIL_HOST:'127.0.0.1',SPRING_MAIL_PORT:'2525',SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:'false',SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:'false',
     SERVER_ADDRESS:'127.0.0.1',SOCKETIO_HOST:'127.0.0.1',PORT:'8082',SOCKETIO_PORT:'9092',MANAGEMENT_SERVER_PORT:'8083',
     APP_ALLOWED_ORIGINS:'http://localhost:3000',SOCKETIO_ORIGIN:'http://localhost:3000'};

@@ -140,6 +140,25 @@ class PostgresOnlyApplicationIntegrationTest {
         return new OrderCreationResponse(com.lordgainsborough.restaurant.dto.OrderStatusResponse.from(saved),tracking);
     }
 
+    @Test void socketTicketCannotAuthenticateAccountApisOrAnotherOrder() throws Exception {
+        var first=messageOrder("ticket-one@example.com","5195551181");
+        var second=messageOrder("ticket-two@example.com","5195551182");
+        String id=first.getOrder().getId();
+        mvc.perform(get("/api/orders/"+id+"/socket-ticket")).andExpect(status().isNotFound());
+        var data=response(get("/api/orders/"+id+"/socket-ticket")
+                .header(OrderAccessService.TRACKING_TOKEN_HEADER,first.getTrackingToken()),200);
+        String ticket=data.get("ticket").asText();
+        assertThat(jwt.validateToken(ticket)).isFalse();
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+ticket)).andExpect(status().isUnauthorized());
+        var authorization=context.getBean(SocketOrderAuthorizationService.class);
+        assertThat(authorization.authorize(id,null,ticket,null,"127.0.0.1")).isPresent();
+        assertThat(authorization.authorize(second.getOrder().getId(),null,ticket,null,"127.0.0.1")).isEmpty();
+        var socket=client("orderId="+id,Map.of("token",ticket));connect(socket);waitRoom(id,1);
+        var event=new CountDownLatch(1);socket.on("order.updated",args->event.countDown());
+        realtime.orderUpdated(context.getBean(CustomerOrderStore.class).findById(id).orElseThrow());
+        assertThat(event.await(5,TimeUnit.SECONDS)).isTrue();
+    }
+
     @Test void messagesEnforceTextLengthForCustomerAndKitchen() throws Exception {
         var created=messageOrder("message-length@example.com","5195551121");String id=created.getOrder().getId();
         String customer="/api/orders/"+id+"/messages", kitchen="/api/kds/orders/"+id+"/messages";
