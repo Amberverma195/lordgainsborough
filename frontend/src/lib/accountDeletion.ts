@@ -1,6 +1,7 @@
 import { clearAuth } from './auth';
 import { clearCheckoutIdempotencyKey } from './orders';
 import { clearPickupSelections } from './pickupSelection';
+import { clearAllSignupSession } from './signupOtp';
 
 export const ACCOUNT_DELETED_KEY = 'accountDeleted';
 
@@ -11,6 +12,7 @@ export function clearDeletedAccountData(broadcast = true) {
   try {
     clearCheckoutIdempotencyKey();
     clearPickupSelections();
+    clearAllSignupSession();
     const keys = Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index));
     for (const key of keys) {
       if (key?.startsWith('orderTrackingToken:') || key === 'passwordResetChallenge') sessionStorage.removeItem(key);
