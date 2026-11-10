@@ -283,12 +283,43 @@ class PostgresOnlyApplicationIntegrationTest {
                 .contentType("application/json").content(json.writeValueAsString(Map.of("password",password)));
     }
 
+    OrderCreationResponse deletionOrder(JpaUser owner,String status) {
+        String id=UUID.randomUUID().toString(), tracking=access.generateTrackingToken();
+        jdbc.update("insert into customer_orders(id,customer_name,customer_email,customer_phone,pickup_date,status,tracking_token_hash) values (?,?,?,?,?,?,?)",
+                id,owner.getName(),owner.getEmail(),owner.getPhone(),"2099-01-01",status,access.hashTrackingToken(tracking));
+        jdbc.update("insert into order_items(id,order_id,name,quantity,unit_price,total) values (?,?,'Dish',1,10,10)",UUID.randomUUID().toString(),id);
+        return new OrderCreationResponse(com.lordgainsborough.restaurant.dto.OrderStatusResponse.from(context.getBean(CustomerOrderStore.class).findById(id).orElseThrow()),tracking);
+    }
+
+    @Test void deleteAccountBlocksEveryActiveStatusWithoutDeletingDataOrResettingPenalties() throws Exception {
+        var owner=account("delete-active","active-delete@example.com","5195551189","MEMBER");
+        String id=deletionOrder(owner,"NEW").getOrder().getId();
+        deletionData(owner.getId(),owner.getEmail(),id);
+        jdbc.update("update users set no_show_count=3 where id=?",owner.getId());
+        // Orders are owned by email, including case-insensitive matches.
+        jdbc.update("update customer_orders set customer_email=upper(customer_email) where id=?",id);
+        var customer=client("orderId="+id,Map.of("token",token(owner)));connect(customer);waitRoom(id,1);
+        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        kitchen.on("order.deleted",args->events.add(args[0].toString()));connect(kitchen);
+        for(String active:List.of("NEW","ACCEPTED","READY")) {
+            jdbc.update("update customer_orders set status=? where id=?",active,id);
+            mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("ACCOUNT_HAS_ACTIVE_ORDERS"));
+            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+                assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
+            assertThat(users.findById(owner.getId()).orElseThrow().getNoShowCount()).isEqualTo(3);
+            assertThat(identities.authenticate(token(owner),jwt)).isPresent();
+            waitRoom(id,1);
+        }
+        assertThat(events.poll(300,TimeUnit.MILLISECONDS)).isNull();
+    }
+
     @Test void deleteAccountRemovesAllDependentsAndRevokesIdentity() throws Exception {
         var owner=account("delete-owner","delete@example.com","5195551111","MEMBER");
         var other=account("delete-other","other@example.com","5195552222","MEMBER");
         String oldToken=token(owner);
-        String ownOrder=order(owner.getEmail(),owner.getPhone()).getOrder().getId();
-        String otherOrder=order(other.getEmail(),other.getPhone()).getOrder().getId();
+        String ownOrder=deletionOrder(owner,"PICKED_UP").getOrder().getId();
+        String otherOrder=deletionOrder(other,"NEW").getOrder().getId();
         deletionData(owner.getId(),owner.getEmail(),ownOrder);
         deletionData(other.getId(),other.getEmail(),otherOrder);
         jdbc.update("update customer_orders set customer_email='DELETE@EXAMPLE.COM' where id=?",ownOrder);
@@ -326,7 +357,7 @@ class PostgresOnlyApplicationIntegrationTest {
 
     @Test void deleteAccountRollsBackAllDataWhenUserDeletionFails() throws Exception {
         var owner=account("delete-rollback","rollback@example.com","5195554444","MEMBER");
-        String ownOrder=order(owner.getEmail(),owner.getPhone()).getOrder().getId();
+        String ownOrder=deletionOrder(owner,"PICKED_UP").getOrder().getId();
         deletionData(owner.getId(),owner.getEmail(),ownOrder);
         jdbc.execute("CREATE FUNCTION reject_account_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled deletion failure'; END $$");
         jdbc.execute("CREATE TRIGGER reject_account_delete BEFORE DELETE ON users FOR EACH ROW EXECUTE FUNCTION reject_account_delete()");
@@ -356,7 +387,7 @@ class PostgresOnlyApplicationIntegrationTest {
 
     @Test void deleteAccountNotifiesKitchenAndRevokesLiveOrderRooms() throws Exception {
         var owner=account("delete-live","live-delete@example.com","5195556666","MEMBER");
-        var created=order(owner.getEmail(),owner.getPhone());String id=created.getOrder().getId();
+        var created=deletionOrder(owner,"PICKED_UP");String id=created.getOrder().getId();
         var customer=client("orderId="+id,Map.of("token",token(owner)));
         var guest=client("orderId="+id,Map.of("trackingToken",created.getTrackingToken()));
         connect(customer);connect(guest);waitRoom(id,2);
@@ -383,12 +414,19 @@ class PostgresOnlyApplicationIntegrationTest {
                 catch(org.springframework.web.server.ResponseStatusException expired) { return expired.getStatusCode().value(); }
             });
             var cart=pool.submit(()->{barrier.await(5,TimeUnit.SECONDS);return mvc.perform(put("/api/cart").header("Authorization","Bearer "+auth).contentType("application/json").content("[]")).andReturn().getResponse().getStatus();});
-            assertThat(deletion.get(15,TimeUnit.SECONDS)).isEqualTo(204);
-            assertThat(checkout.get(15,TimeUnit.SECONDS)).isIn(200,401);
+            int deletionStatus=deletion.get(15,TimeUnit.SECONDS), checkoutStatus=checkout.get(15,TimeUnit.SECONDS);
             assertThat(cart.get(15,TimeUnit.SECONDS)).isIn(200,401);
-            assertThat(users.existsById(owner.getId())).isFalse();
-            assertThat(jdbc.queryForObject("select count(*) from customer_orders",Integer.class)).isZero();
-            assertThat(jdbc.queryForObject("select count(*) from carts",Integer.class)).isZero();
+            if(checkoutStatus==200) {
+                assertThat(deletionStatus).isEqualTo(409);
+                assertThat(users.existsById(owner.getId())).isTrue();
+                assertThat(jdbc.queryForObject("select count(*) from customer_orders where status='NEW'",Integer.class)).isEqualTo(1);
+            } else {
+                assertThat(checkoutStatus).isEqualTo(401);
+                assertThat(deletionStatus).isEqualTo(204);
+                assertThat(users.existsById(owner.getId())).isFalse();
+                assertThat(jdbc.queryForObject("select count(*) from customer_orders",Integer.class)).isZero();
+                assertThat(jdbc.queryForObject("select count(*) from carts",Integer.class)).isZero();
+            }
         } finally {pool.shutdownNow();}
     }
     @Test void anonymousOrderSubmissionIsRejectedWithHttp401() throws Exception {

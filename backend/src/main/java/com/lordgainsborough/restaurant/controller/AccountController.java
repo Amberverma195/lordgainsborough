@@ -10,6 +10,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.Map;
+import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -51,7 +53,13 @@ public class AccountController {
             limiter.recordFailure(identifier, ip);
             return ResponseEntity.status(403).body(Map.of("message", "Your current password is incorrect."));
         }
-        var deleted = users.deleteAccount(user, token, jwt);
+        Optional<List<String>> deleted;
+        try {
+            deleted = users.deleteAccount(user, token, jwt);
+        } catch (UserAuthStore.ActiveOrdersException activeOrders) {
+            return ResponseEntity.status(409).body(Map.of(
+                    "code", "ACCOUNT_HAS_ACTIVE_ORDERS", "message", activeOrders.getMessage()));
+        }
         if (deleted.isEmpty()) return invalidSession();
         // deleteAccount returns after its transaction commits. Delivery must not undo a successful response.
         realtime.ordersDeleted(deleted.get());

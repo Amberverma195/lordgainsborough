@@ -228,6 +228,12 @@ public class PostgresUserAuthStore implements UserAuthStore {
                     List<String> ids = jdbc.queryForList(
                             "select id from customer_orders where lower(customer_email) = lower(?) order by id for update",
                             String.class, u.getEmail());
+                    // Read statuses after obtaining the order locks. The user lock excludes
+                    // new checkout commits; order locks exclude concurrent status transitions.
+                    if (Boolean.TRUE.equals(jdbc.queryForObject("""
+                            select exists(select 1 from customer_orders where lower(customer_email) = lower(?)
+                                and status in ('NEW', 'ACCEPTED', 'READY'))
+                            """, Boolean.class, u.getEmail()))) throw new ActiveOrdersException();
                     jdbc.update("delete from customer_orders where lower(customer_email) = lower(?)", u.getEmail());
                     jdbc.update("delete from signup_otp_challenges where lower(normalized_email) = lower(?)", u.getEmail());
                     // Existing FKs cascade through cart/items and password-reset challenges.

@@ -59,6 +59,16 @@ test('profile deletion confirms password, preserves failures, and clears every o
     await expect(dialog.getByRole('alert')).toHaveText('Your current password is incorrect.');
     expect((await db.query('select id from customer_orders where id=$1', [orderId])).rowCount).toBe(1);
 
+    await dialog.getByLabel('Confirm your current password').fill(password);
+    await dialog.getByRole('button', { name: 'Permanently delete account' }).click();
+    await expect(dialog.getByRole('alert')).toHaveText('Your account cannot be deleted while you have active orders. Please wait until all orders are completed.');
+    expect((await db.query('select id from users where id=$1', [id])).rowCount).toBe(1);
+    expect((await db.query('select id from carts where user_id=$1', [id])).rowCount).toBe(1);
+    expect((await context.cookies()).find(cookie => cookie.name.endsWith('lgb_session'))?.value).toBe(savedToken);
+    await expect(otherTab).toHaveURL(/\/profile$/);
+    // After the order completes, the normal deletion and failure-recovery flow remains available.
+    await db.query("update customer_orders set status='PICKED_UP' where id=$1", [orderId]);
+
     await page.route('**/api/auth/me', route => route.request().method() === 'DELETE' ? route.abort() : route.continue());
     await dialog.getByLabel('Confirm your current password').fill(password);
     await dialog.getByRole('button', { name: 'Permanently delete account' }).click();

@@ -8,6 +8,11 @@ import java.util.Optional;
 
 /** Internal identity snapshots only: callers must return explicit response DTOs, never User. */
 public interface UserAuthStore {
+    class ActiveOrdersException extends RuntimeException {
+        public ActiveOrdersException() {
+            super("Your account cannot be deleted while you have active orders. Please wait until all orders are completed.");
+        }
+    }
     record Registration(User user, SignupOtpChallengeService.VerifyOtpResult verification, boolean conflict) {}
     Optional<User> findByEmailIgnoreCase(String email);
     Optional<User> findByPhone(String normalizedPhone);
@@ -22,7 +27,9 @@ public interface UserAuthStore {
     }
     Optional<User> updateName(User user, String token, String name, JwtUtil jwt);
     Optional<List<CustomerOrder>> history(User user, String token, JwtUtil jwt);
-    /** Returns deleted order IDs only after commit; empty means the identity changed. */
+    /** Returns deleted order IDs only after commit; empty means the identity changed.
+     * @throws ActiveOrdersException if any owned order is NEW, ACCEPTED, or READY
+     */
     default Optional<List<String>> deleteAccount(User checked, String token, JwtUtil jwt) {
         throw new UnsupportedOperationException("Account deletion not supported");
     }

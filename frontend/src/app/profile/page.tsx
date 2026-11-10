@@ -511,7 +511,7 @@ export default function ProfilePage() {
         aria-describedby="delete-account-description" onCancel={event => { event.preventDefault(); closeDeleteDialog(); }}>
         <form onSubmit={handleDeleteAccount}>
           <h3 id="delete-account-title">Delete your account?</h3>
-          <p id="delete-account-description">This permanently deletes your account, saved cart, and all orders, including active orders, messages, and reviews. This cannot be undone.</p>
+          <p id="delete-account-description">Your account can only be deleted after all active orders are completed. Deletion permanently removes your account, saved cart, order history, messages, and reviews. This cannot be undone.</p>
           <div className={styles.editField}>
             <label htmlFor="delete-password">Confirm your current password</label>
             <input id="delete-password" type="password" autoComplete="current-password" required maxLength={128}

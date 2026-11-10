@@ -71,6 +71,14 @@ whether a small number of keyed client identifiers dominate the structured logs.
 
 ## Login and password-reset security
 
+Account deletion returns `409 ACCOUNT_HAS_ACTIVE_ORDERS` while the authenticated
+customer has any `NEW`, `ACCEPTED`, or `READY` orders (case-insensitive email
+ownership). The check runs inside the deletion transaction after locking the user
+and order rows. A refused deletion preserves the account, orders, saved cart,
+authentication, and no-show count, and emits no deletion events. Checkout shares
+the user lock, so a concurrently accepted order blocks deletion; if deletion
+commits first, checkout cannot create an order for the deleted account.
+
 Login request counters and password-reset request counters are PostgreSQL fixed-window counters using atomic upserts.
 Login identifier/IP cooldown state is stored separately in `login_failure_states` so
 `blockedUntil` and successful-login clearing are distributed and atomic. Password-reset
