@@ -270,6 +270,8 @@ class PostgresOnlyApplicationIntegrationTest {
     }
 
     void deletionData(String id, String address, String orderId) {
+        jdbc.update("insert into reservations(id,name,email,phone,date,time,party_size,special_requests) values (?,'Member',?,'5195551111','2099-01-01','12:00',2,'Personal reservation request')",
+                "reservation-"+id,address);
         jdbc.update("insert into carts(id,user_id) values (?,?)", "cart-"+id, id);
         jdbc.update("insert into cart_items(id,cart_id,name,price,quantity) values (?,?, 'Dish',10,1)", "ci-"+id,"cart-"+id);
         jdbc.update("insert into order_messages(id,order_id,sender_role,sender_name,text) values (?,?,'MEMBER','Member','Hello')", "msg-"+id,orderId);
@@ -305,7 +307,7 @@ class PostgresOnlyApplicationIntegrationTest {
             jdbc.update("update customer_orders set status=? where id=?",active,id);
             mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andExpect(status().isConflict())
                     .andExpect(jsonPath("$.code").value("ACCOUNT_HAS_ACTIVE_ORDERS"));
-            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges","reservations"))
                 assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
             assertThat(users.findById(owner.getId()).orElseThrow().getNoShowCount()).isEqualTo(3);
             assertThat(identities.authenticate(token(owner),jwt)).isPresent();
@@ -325,11 +327,13 @@ class PostgresOnlyApplicationIntegrationTest {
         jdbc.update("update customer_orders set customer_email='DELETE@EXAMPLE.COM' where id=?",ownOrder);
         // Matching a phone alone must not grant destructive ownership.
         jdbc.update("update customer_orders set customer_phone=? where id=?",owner.getPhone(),otherOrder);
+        jdbc.update("update reservations set email=' DELETE@EXAMPLE.COM ',phone='5195559999' where id=?","reservation-"+owner.getId());
+        jdbc.update("update reservations set phone=?,name=? where id=?",owner.getPhone(),owner.getName(),"reservation-"+other.getId());
 
         mvc.perform(deleteRequest(oldToken,"CorrectPassword1!")).andExpect(status().isNoContent());
         assertThat(users.existsById(owner.getId())).isFalse();
         assertThat(users.existsById(other.getId())).isTrue();
-        for(String table:List.of("customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+        for(String table:List.of("customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges","reservations"))
             assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+oldToken)).andExpect(status().isUnauthorized());
         mvc.perform(deleteRequest(oldToken,"CorrectPassword1!")).andExpect(status().isUnauthorized());
@@ -363,7 +367,7 @@ class PostgresOnlyApplicationIntegrationTest {
         jdbc.execute("CREATE TRIGGER reject_account_delete BEFORE DELETE ON users FOR EACH ROW EXECUTE FUNCTION reject_account_delete()");
         try {
             assertThatThrownBy(()->mvc.perform(deleteRequest(token(owner),"CorrectPassword1!"))).isInstanceOf(Exception.class);
-            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges"))
+            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges","reservations"))
                 assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
             assertThat(identities.authenticate(token(owner),jwt)).isPresent();
         } finally {
@@ -383,6 +387,36 @@ class PostgresOnlyApplicationIntegrationTest {
                 .andExpect(status().isUnauthorized());
         assertThat(jdbc.queryForObject("select count(*) from customer_orders",Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from carts",Integer.class)).isZero();
+    }
+
+    @Test void deleteAccountRemovesPastAndUpcomingReservationsInEveryStatus() throws Exception {
+        var owner=account("delete-bookings","bookings-delete@example.com","5195551187","MEMBER");
+        for(String status:List.of("PENDING","CONFIRMED","CANCELLED")) {
+            for(String date:List.of("2020-01-01","2099-01-01"))
+                jdbc.update("insert into reservations(id,name,email,phone,date,time,party_size,status,special_requests) values (?, ?, ?, ?, ?, '12:00',2,?,'Private note')",
+                        UUID.randomUUID().toString(),owner.getName()," BOOKINGS-DELETE@EXAMPLE.COM ","5195559999",date,status);
+        }
+        // No user FK is needed, and contact overlap alone must not authorize deletion.
+        jdbc.update("insert into reservations(id,name,email,phone,date,time,party_size) values ('unrelated-booking',?,'different@example.com',?,'2099-01-01','12:00',2)",owner.getName(),owner.getPhone());
+        mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andExpect(status().isNoContent());
+        assertThat(jdbc.queryForList("select id from reservations",String.class)).containsExactly("unrelated-booking");
+    }
+
+    @Test void deleteAccountRollsBackWhenReservationCleanupFails() throws Exception {
+        var owner=account("delete-booking-failure","booking-failure@example.com","5195551186","MEMBER");
+        String id=deletionOrder(owner,"PICKED_UP").getOrder().getId();
+        deletionData(owner.getId(),owner.getEmail(),id);
+        jdbc.execute("CREATE FUNCTION reject_booking_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled reservation deletion failure'; END $$");
+        jdbc.execute("CREATE TRIGGER reject_booking_delete BEFORE DELETE ON reservations FOR EACH ROW EXECUTE FUNCTION reject_booking_delete()");
+        try {
+            assertThatThrownBy(()->mvc.perform(deleteRequest(token(owner),"CorrectPassword1!"))).isInstanceOf(Exception.class);
+            for(String table:List.of("users","customer_orders","order_items","order_messages","order_reviews","order_review_items","carts","cart_items","password_reset_otp_challenges","signup_otp_challenges","reservations"))
+                assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
+            assertThat(identities.authenticate(token(owner),jwt)).isPresent();
+        } finally {
+            jdbc.execute("DROP TRIGGER reject_booking_delete ON reservations");
+            jdbc.execute("DROP FUNCTION reject_booking_delete()");
+        }
     }
 
     @Test void deleteAccountNotifiesKitchenAndRevokesLiveOrderRooms() throws Exception {

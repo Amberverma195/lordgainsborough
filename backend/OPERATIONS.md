@@ -79,6 +79,26 @@ authentication, and no-show count, and emits no deletion events. Checkout shares
 the user lock, so a concurrently accepted order blocks deletion; if deletion
 commits first, checkout cannot create an order for the deleted account.
 
+### Reservation deletion policy
+
+Successful account deletion permanently removes existing reservation rows whose
+email matches the authenticated account email, ignoring case and surrounding
+spaces. This applies to past and upcoming bookings in every status, including
+guest bookings made under that email. The complete row is deleted, including
+names, phone numbers, and free-text special requests. The confirmation dialog
+explicitly includes upcoming reservations in the deletion scope.
+
+Reservation cleanup shares the account/order deletion transaction: an active-order
+refusal or any database failure preserves reservations and rolls back the entire
+deletion. Records matching only a name or phone number are not treated as owned;
+shared or reassigned contact details must not delete another customer's bookings.
+The admin reservation list refreshes on focus and periodically while visible.
+
+No reservation-retention exception is defined by the current application. A future
+documented retention requirement must specify its purpose, duration, and the data
+that must be retained before changing this policy. This policy covers application
+database rows; it does not define backup or external email-provider retention.
+
 Login request counters and password-reset request counters are PostgreSQL fixed-window counters using atomic upserts.
 Login identifier/IP cooldown state is stored separately in `login_failure_states` so
 `blockedUntil` and successful-login clearing are distributed and atomic. Password-reset

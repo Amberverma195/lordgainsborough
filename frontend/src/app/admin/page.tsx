@@ -371,7 +371,7 @@ export default function AdminPage() {
     const task = window.setTimeout(refreshCurrentData, 0);
     // Account deletion also removes orders/reviews outside this admin session.
     const poll = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && (activeTab === 'orders' || activeTab === 'reviews')) refreshCurrentData();
+      if (document.visibilityState === 'visible' && ['orders', 'reviews', 'reservations'].includes(activeTab)) refreshCurrentData();
     }, 30000);
     window.addEventListener('focus', refreshCurrentData);
     return () => {

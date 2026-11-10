@@ -116,7 +116,7 @@ export default function LoginPage() {
           <p>Sign in to your Lord Gainsborough account</p>
         </div>
 
-        {accountDeleted && <p role="status">Your account and its orders and cart have been deleted.</p>}
+        {accountDeleted && <p role="status">Your account, orders, cart, and reservations have been deleted.</p>}
         {error && <div className={styles.errorBanner}>{error}</div>}
 
         <form className={styles.form} onSubmit={handleLogin}>

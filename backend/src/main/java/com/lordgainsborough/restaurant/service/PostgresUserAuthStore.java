@@ -235,6 +235,9 @@ public class PostgresUserAuthStore implements UserAuthStore {
                                 and status in ('NEW', 'ACCEPTED', 'READY'))
                             """, Boolean.class, u.getEmail()))) throw new ActiveOrdersException();
                     jdbc.update("delete from customer_orders where lower(customer_email) = lower(?)", u.getEmail());
+                    // Reservations have no user FK. Remove the full record (including
+                    // free-text requests) by verified email, never by a shared phone/name.
+                    jdbc.update("delete from reservations where lower(btrim(email)) = lower(btrim(?))", u.getEmail());
                     jdbc.update("delete from signup_otp_challenges where lower(normalized_email) = lower(?)", u.getEmail());
                     // Existing FKs cascade through cart/items and password-reset challenges.
                     if (jdbc.update("delete from users where id = ?", u.getId()) != 1)

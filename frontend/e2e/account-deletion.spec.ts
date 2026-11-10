@@ -18,6 +18,8 @@ test('profile deletion confirms password, preserves failures, and clears every o
       await db.query("insert into users(id,name,email,password,role) values ($1,'Deletion Test',$2,$3,'MEMBER')", [userId, email, hashSync(password, 10)]);
     }
     await db.query("insert into customer_orders(id,customer_name,customer_email,customer_phone,pickup_date,status) values ($1,'Deletion Test',$2,'5195551111','2099-01-01','NEW')", [orderId, address]);
+    await db.query("insert into reservations(id,name,email,phone,date,time,party_size,special_requests) values ($1,'Deletion Test',$2,'5195551111','2099-01-01','12:00',2,'Private booking note')", [id, address]);
+    await db.query("insert into reservations(id,name,email,phone,date,time,party_size) values ($1,'Deletion Test',$2,'5195551111','2099-01-01','12:00',2)", [otherId, `other-${otherId}@example.test`]);
     await db.query("insert into order_items(id,order_id,name,quantity,unit_price,total) values ($1,$2,'Test Dish',1,10,10)", [randomUUID(), orderId]);
     const cartId = randomUUID();
     await db.query('insert into carts(id,user_id) values ($1,$2)', [cartId, id]);
@@ -47,6 +49,7 @@ test('profile deletion confirms password, preserves failures, and clears every o
     await open.click();
     const dialog = page.getByRole('dialog', { name: 'Delete your account?' });
     await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('including upcoming reservations');
     await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(dialog).not.toBeVisible();
@@ -64,6 +67,7 @@ test('profile deletion confirms password, preserves failures, and clears every o
     await expect(dialog.getByRole('alert')).toHaveText('Your account cannot be deleted while you have active orders. Please wait until all orders are completed.');
     expect((await db.query('select id from users where id=$1', [id])).rowCount).toBe(1);
     expect((await db.query('select id from carts where user_id=$1', [id])).rowCount).toBe(1);
+    expect((await db.query('select id from reservations where id=$1', [id])).rowCount).toBe(1);
     expect((await context.cookies()).find(cookie => cookie.name.endsWith('lgb_session'))?.value).toBe(savedToken);
     await expect(otherTab).toHaveURL(/\/profile$/);
     // After the order completes, the normal deletion and failure-recovery flow remains available.
@@ -89,17 +93,18 @@ test('profile deletion confirms password, preserves failures, and clears every o
     release();
     for (const tab of [page, otherTab]) {
       await expect(tab).toHaveURL(/\/login\?accountDeleted=1$/);
-      await expect(tab.getByRole('status')).toHaveText('Your account and its orders and cart have been deleted.');
+      await expect(tab.getByRole('status')).toHaveText('Your account, orders, cart, and reservations have been deleted.');
       const remaining = await tab.evaluate(() => ({ token: localStorage.getItem('authToken'),
         cart: JSON.parse(localStorage.getItem('lord_gainsborough_cart') || '[]'),
         privateKeys: Object.keys(sessionStorage).filter(key => key.startsWith('orderTrackingToken:') || ['pickupDate', 'checkoutIdempotencyKey'].includes(key)) }));
       expect(remaining).toEqual({ token: null, cart: [], privateKeys: [] });
     }
-    for (const table of ['users', 'carts', 'customer_orders']) {
+    for (const table of ['users', 'carts', 'customer_orders', 'reservations']) {
       const column = table === 'carts' ? 'user_id' : 'id';
       expect((await db.query(`select * from ${table} where ${column}=$1`, [table === 'customer_orders' ? orderId : id])).rowCount).toBe(0);
     }
     expect((await db.query('select id from users where id=$1', [otherId])).rowCount).toBe(1);
+    expect((await db.query('select id from reservations where id=$1', [otherId])).rowCount).toBe(1);
     const stale = await page.request.get('http://127.0.0.1:8082/api/auth/me', { headers: { Authorization: `Bearer ${savedToken}` } });
     expect(stale.status()).toBe(401);
     expect(errors).toEqual([]);
