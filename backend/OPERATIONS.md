@@ -79,6 +79,18 @@ authentication, and no-show count, and emits no deletion events. Checkout shares
 the user lock, so a concurrently accepted order blocks deletion; if deletion
 commits first, checkout cannot create an order for the deleted account.
 
+Deletion and kitchen no-show updates can contend on user/order locks in opposite
+orders. Both deletion and kitchen status updates retry only PostgreSQL deadlock
+errors (`40P01`), with at most three complete transaction attempts and a short
+jittered backoff. The failed transaction finishes rollback before a new
+`REQUIRES_NEW` transaction starts. Deletion rechecks identity, password/token
+version, and active orders on each attempt.
+Constraint failures, active-order refusals, lock timeouts, and other errors are not
+retried. Interruptions stop retries. Deletion events are emitted only after a
+successful final commit, never for rolled-back or refused attempts. Kitchen status
+events likewise run only after their final successful commit. The regression test
+forces each transaction to be the deadlock victim in turn.
+
 ### Reservation deletion policy
 
 Successful account deletion permanently removes existing reservation rows whose

@@ -463,6 +463,81 @@ class PostgresOnlyApplicationIntegrationTest {
             }
         } finally {pool.shutdownNow();}
     }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={true,false})
+    void deleteAccountRetriesDeadlockAgainstKitchenNoShowAndRechecksActiveOrders(boolean deletionVictim) throws Exception {
+        var owner=account("delete-deadlock","delete-deadlock@example.com","5195551185","MEMBER");
+        String id=deletionOrder(owner,"READY").getOrder().getId();
+        String remaining=deletionOrder(owner,"NEW").getOrder().getId();
+        deletionData(owner.getId(),owner.getEmail(),id);
+        var kitchen=client("role=KDS",null);var updates=new LinkedBlockingQueue<String>();var deletions=new LinkedBlockingQueue<String>();
+        kitchen.on("order.updated",args->updates.add(args[0].toString()));
+        kitchen.on("order.deleted",args->deletions.add(args[0].toString()));connect(kitchen);
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(
+                "com.lordgainsborough.restaurant.service.PostgresDeadlockRetry");
+        var retries=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        retries.start();logger.addAppender(retries);
+        var pool=Executors.newFixedThreadPool(2);
+        long gateKey=1357902468L;
+        String dbName=jdbc.queryForObject("select current_database()",String.class);
+        assertThat(dbName).matches("lgb_test_[a-f0-9]{32}");
+        var connections=context.getBean(com.zaxxer.hikari.HikariDataSource.class);
+        // This private fixture database controls which transaction detects the cycle
+        // first. Evict idle connections so deletion receives the fixture timeout.
+        jdbc.execute("ALTER DATABASE "+dbName+" SET deadlock_timeout='"+(deletionVictim?"500ms":"10s")+"'");
+        connections.getHikariPoolMXBean().softEvictConnections();
+        // An advisory-lock gate pauses the actual KDS transaction after its order
+        // lock and before its user lock. No timing sleeps or mocked DB locks.
+        jdbc.execute("CREATE FUNCTION gate_no_show_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                +"IF NEW.id = '"+id+"' AND NEW.status = 'NO_SHOW' THEN "
+                +"PERFORM set_config('deadlock_timeout','"+(deletionVictim?"10s":"50ms")+"',true); PERFORM pg_advisory_xact_lock("+gateKey+"); "
+                +"END IF; RETURN NEW; END $$");
+        jdbc.execute("CREATE TRIGGER gate_no_show_delete BEFORE UPDATE ON customer_orders FOR EACH ROW EXECUTE FUNCTION gate_no_show_delete()");
+        try(var gate=java.sql.DriverManager.getConnection(database.jdbcUrl(),"postgres","postgres");var statement=gate.createStatement()) {
+            statement.execute("select pg_advisory_lock("+gateKey+")");
+            try {
+                var noShow=pool.submit(()->context.getBean(com.lordgainsborough.restaurant.controller.KdsController.class)
+                        .updateStatus(id,Map.of("status","NO_SHOW")).getStatusCode().value());
+                await(()->Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from pg_locks where locktype='advisory' "
+                        +"and objid="+gateKey+"::oid and not granted and database=(select oid from pg_database where datname=current_database()))",Boolean.class)),5000);
+                assertThat(jdbc.queryForObject("select count(*) from pg_locks where locktype='advisory' and objid="+gateKey+"::oid and not granted "
+                        +"and database=(select oid from pg_database where datname=current_database())",Integer.class)).isEqualTo(1);
+                var deletion=pool.submit(()->mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andReturn().getResponse().getStatus());
+                // Deletion now owns the user and waits for the kitchen's order lock.
+                await(()->Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from pg_stat_activity where datname=current_database() "
+                        +"and wait_event_type='Lock' and query like 'select id from customer_orders%for update%')",Boolean.class)),5000);
+                assertThat(jdbc.queryForObject("select count(*) from pg_stat_activity where datname=current_database() "
+                        +"and wait_event_type='Lock' and query like 'select id from customer_orders%for update%'",Integer.class)).isEqualTo(1);
+                // The kitchen now waits for that user, completing a real deadlock.
+                // The fixture timeouts exercise both possible PostgreSQL victims.
+                statement.execute("select pg_advisory_unlock("+gateKey+")");
+                assertThat(noShow.get(15,TimeUnit.SECONDS)).isEqualTo(200);
+                assertThat(deletion.get(15,TimeUnit.SECONDS)).isEqualTo(409);
+                String operation=deletionVictim?"account deletion":"kitchen status update";
+                assertThat(retries.list.stream().filter(event->event.getFormattedMessage().startsWith(
+                        "Retrying "+operation+" after PostgreSQL deadlock")).count()).isEqualTo(1);
+                assertThat(users.findById(owner.getId()).orElseThrow().getNoShowCount()).isEqualTo(1);
+                assertThat(jdbc.queryForObject("select status from customer_orders where id=?",String.class,id)).isEqualTo("NO_SHOW");
+                assertThat(jdbc.queryForObject("select status from customer_orders where id=?",String.class,remaining)).isEqualTo("NEW");
+                for(String table:List.of("carts","cart_items","order_messages","order_reviews","order_review_items","reservations"))
+                    assertThat(jdbc.queryForObject("select count(*) from "+table,Integer.class)).as(table).isEqualTo(1);
+                assertThat(identities.authenticate(token(owner),jwt)).isPresent();
+                assertThat(updates.poll(5,TimeUnit.SECONDS)).contains(id);
+                assertThat(updates.poll(300,TimeUnit.MILLISECONDS)).isNull();
+                assertThat(deletions.poll(300,TimeUnit.MILLISECONDS)).isNull();
+            } finally {
+                statement.execute("select pg_advisory_unlock("+gateKey+")");
+                pool.shutdown();if(!pool.awaitTermination(15,TimeUnit.SECONDS))pool.shutdownNow();
+            }
+        } finally {
+            pool.shutdownNow();logger.detachAppender(retries);retries.stop();
+            jdbc.execute("DROP TRIGGER gate_no_show_delete ON customer_orders");
+            jdbc.execute("DROP FUNCTION gate_no_show_delete()");
+            jdbc.execute("ALTER DATABASE "+dbName+" RESET deadlock_timeout");
+            connections.getHikariPoolMXBean().softEvictConnections();
+        }
+    }
     @Test void anonymousOrderSubmissionIsRejectedWithHttp401() throws Exception {
         var o = new CustomerOrder();
         o.setCustomerName("Anonymous");

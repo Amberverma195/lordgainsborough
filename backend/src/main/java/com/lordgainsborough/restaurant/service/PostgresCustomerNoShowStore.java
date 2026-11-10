@@ -42,7 +42,8 @@ public class PostgresCustomerNoShowStore implements CustomerNoShowStore {
     }
     @Override public void recordNoShow(CustomerOrder order) {
         transactions.executeWithoutResult(status -> {
-            // Global KDS order: lock order parent first, then the selected user. Never lock another order here.
+            // KDS holds the order before selecting its user. Its outer status transaction
+            // retries deadlocks after rollback; never retry inside this REQUIRED scope.
             Optional<JpaUser> found = hasEmail(order.getCustomerEmail())
                     ? users.findForNoShowByEmailIgnoreCase(order.getCustomerEmail().trim()) : Optional.empty();
             String phone = normalizePhone(order.getCustomerPhone());

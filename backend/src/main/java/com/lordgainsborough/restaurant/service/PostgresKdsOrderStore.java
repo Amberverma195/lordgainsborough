@@ -50,7 +50,10 @@ public class PostgresKdsOrderStore implements KdsOrderStore {
     public List<CustomerOrder> all() { return transactions.execute(status -> materialize(orders.findAllKdsWithItems())); }
 
     public Optional<CustomerOrder> status(String id, String next, IntUnaryOperator minutes, Consumer<CustomerOrder> afterCommit) {
-        return transactions.execute(status -> orders.findForMessageAppend(id).map(entity -> {
+        // Either side of the deletion/no-show lock inversion can be PostgreSQL's
+        // deadlock victim. Retry this entire write only after rollback completes.
+        return PostgresDeadlockRetry.execute("kitchen status update",
+                () -> transactions.execute(status -> orders.findForMessageAppend(id).map(entity -> {
             String previous = entity.getStatus();
             CustomerOrder domain = mapper.fromJpa(entity);
             KdsOrderTransitions.status(domain,next,LocalDateTime.now(clock));
@@ -61,7 +64,7 @@ public class PostgresKdsOrderStore implements KdsOrderStore {
             orders.flush();
             if ("NO_SHOW".equals(next) || "NO_SHOW".equalsIgnoreCase(previous)) noShows.recordNoShow(domain);
             return committedSnapshot(entity,afterCommit);
-        }));
+        })));
     }
     public Optional<CustomerOrder> readyTime(String id, int minutes, Consumer<CustomerOrder> afterCommit) {
         return transactions.execute(status -> orders.findForMessageAppend(id).map(entity -> {

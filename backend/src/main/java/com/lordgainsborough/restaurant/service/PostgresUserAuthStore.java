@@ -218,6 +218,12 @@ public class PostgresUserAuthStore implements UserAuthStore {
     }
     @Override
     public Optional<List<String>> deleteAccount(User checked, String token, JwtUtil jwt) {
+        // execute() finishes rollback before the retry helper sees a deadlock. Each
+        // invocation below gets a new REQUIRES_NEW transaction/persistence context.
+        return PostgresDeadlockRetry.execute("account deletion", () -> deleteAccountOnce(checked, token, jwt));
+    }
+
+    private Optional<List<String>> deleteAccountOnce(User checked, String token, JwtUtil jwt) {
         return writes.execute(tx -> users.findForAuthById(checked.getId())
                 .filter(u -> jwt.validateTokenForIdentity(token, u.getId(), u.getTokenVersion())
                         && Objects.equals(u.getEmail(), jwt.getEmailFromToken(token))
