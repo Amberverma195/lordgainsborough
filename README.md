@@ -35,6 +35,9 @@ This project consists of a Next.js frontend and a Java Spring Boot backend.
    `DB_NAME`, `DB_USER`, and `DB_PASSWORD`, plus the mail and security secrets.
    Flyway applies the versioned schema; Hibernate validates it. No migration profile
    or persistence feature switches are required.
+   Remote databases require `DB_SSL_MODE=verify-full` (the default), a certificate-matching
+   `DB_HOST`, and `DB_SSL_ROOT_CERT` pointing to the provider CA file. Only loopback
+   development/test databases may explicitly use `DB_SSL_MODE=disable`.
 3. Run with the Maven wrapper (Java 21 or newer):
    ```powershell
    .\mvnw.cmd spring-boot:run

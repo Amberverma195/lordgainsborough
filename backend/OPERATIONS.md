@@ -1,5 +1,32 @@
 # Backend operations
 
+## PostgreSQL verified TLS
+
+Remote PostgreSQL connections default to `DB_SSL_MODE=verify-full`. Set `DB_HOST`
+to the provider's certificate-matching DNS hostname and mount the provider's CA
+certificate bundle into the backend runtime. Set `DB_SSL_ROOT_CERT` to that readable
+file's absolute path, for example `/run/certificates/postgresql-provider-ca.pem`.
+Obtain the CA from the database provider over its authenticated HTTPS dashboard or
+documentation; do not trust a certificate captured from an unverified connection.
+Certificate contents are not committed to this repository.
+
+Startup validates the effective Hikari/pgJDBC settings before Flyway or Hibernate
+connects. Remote hosts reject `disable`, `allow`, `prefer`, `require`, `verify-ca`,
+non-validating SSL factories, custom hostname verifiers, and missing/unreadable CA
+files. This also applies to `SPRING_DATASOURCE_URL` overrides and multi-host URLs;
+every host must be loopback to use the local exception. URL SSL parameters take
+precedence over Hikari driver properties, matching pgJDBC's interpretation.
+
+For an explicitly local development/test database, use `DB_HOST=127.0.0.1` and
+`DB_SSL_MODE=disable`. This exception is limited to literal `127.0.0.1`, `::1`, and
+`localhost`; private-network and remote database hosts still require verified TLS.
+The legacy `postgres-migration` profile inherits the same secure defaults.
+
+If verification fails, fix the CA mount or use the correct database hostname.
+Do not work around a certificate error by weakening `sslmode` or adding a
+non-validating SSL factory. Existing deployments with `DB_SSL_MODE=prefer` must
+update their mode and install the provider CA before restarting with this change.
+
 ## Signup OTP observability
 
 Prometheus metrics are served from the separate management listener at
