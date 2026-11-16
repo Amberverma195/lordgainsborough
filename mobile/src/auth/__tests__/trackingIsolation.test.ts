@@ -2,6 +2,7 @@ import {
   clearAccountTrackingTokens,
   deleteTrackingToken,
   getLegacyTrackingStorageKey,
+  getLegacyV1TrackingStorageKey,
   getTrackingIndexStorageKey,
   getTrackingStorageKey,
   purgeLegacyTrackingToken,
@@ -10,6 +11,7 @@ import {
   writeSessionToken,
   writeTrackingToken,
 } from '../secureSession';
+import { toAccountNamespace } from '../accountNamespace';
 
 const mockStore = new Map<string, string>();
 
@@ -29,23 +31,37 @@ describe('Order tracking credential isolation in SecureStore', () => {
     jest.clearAllMocks();
   });
 
-  describe('Storage key derivation', () => {
-    it('scopes keys to the normalized account email and sanitized order id', () => {
+  describe('Storage key derivation and collision resistance', () => {
+    it('scopes keys to the unambiguous account namespace and sanitized order id (v2)', () => {
+      const nsA = toAccountNamespace('Customer.A@Example.COM');
       const key = getTrackingStorageKey('ord-100', 'Customer.A@Example.COM');
-      expect(key).toBe('lgb.track.u.customer.a_example.com.ord-100.v1');
+      expect(key).toBe(`lgb.track.u.${nsA}.ord-100.v2`);
 
+      const nsUser = toAccountNamespace('User@domain.com');
       const specialKey = getTrackingStorageKey('ord/100 #1', 'User@domain.com');
-      expect(specialKey).toBe('lgb.track.u.user_domain.com.ord_100__1.v1');
+      expect(specialKey).toBe(`lgb.track.u.${nsUser}.ord_100__1.v2`);
     });
 
-    it('scopes unauthenticated/guest tokens to the guest namespace', () => {
-      expect(getTrackingStorageKey('ord-100', null)).toBe('lgb.track.guest.ord-100.v1');
-      expect(getTrackingStorageKey('ord-100', '')).toBe('lgb.track.guest.ord-100.v1');
-      expect(getTrackingStorageKey('ord-100', undefined)).toBe('lgb.track.guest.ord-100.v1');
+    it('guarantees collision resistance between alice+promo@example.com and alice_promo@example.com', () => {
+      const keyPlus = getTrackingStorageKey('order-1', 'alice+promo@example.com');
+      const keyUnder = getTrackingStorageKey('order-1', 'alice_promo@example.com');
+      expect(keyPlus).not.toBe(keyUnder);
+
+      const idxPlus = getTrackingIndexStorageKey('alice+promo@example.com');
+      const idxUnder = getTrackingIndexStorageKey('alice_promo@example.com');
+      expect(idxPlus).not.toBe(idxUnder);
     });
 
-    it('generates legacy un-scoped key format for backward compatibility cleanup', () => {
+    it('scopes unauthenticated/guest tokens to the guest namespace (v2)', () => {
+      expect(getTrackingStorageKey('ord-100', null)).toBe('lgb.track.guest.ord-100.v2');
+      expect(getTrackingStorageKey('ord-100', '')).toBe('lgb.track.guest.ord-100.v2');
+      expect(getTrackingStorageKey('ord-100', undefined)).toBe('lgb.track.guest.ord-100.v2');
+      expect(getTrackingIndexStorageKey(null)).toBe('lgb.track.idx.guest.v2');
+    });
+
+    it('generates legacy key formats for backward compatibility cleanup', () => {
       expect(getLegacyTrackingStorageKey('ord-100')).toBe('lgb.track.ord-100');
+      expect(getLegacyV1TrackingStorageKey('ord-100', 'user@domain.com')).toBe('lgb.track.u.user_domain.com.ord-100.v1');
     });
   });
 
@@ -69,6 +85,14 @@ describe('Order tracking credential isolation in SecureStore', () => {
       expect(await readTrackingToken('order-bbb-1', 'usera@example.com')).toBeNull();
       // User B can access their own token
       expect(await readTrackingToken('order-bbb-1', 'userb@example.com')).toBe('secret-token-user-b');
+    });
+
+    it('isolates credentials between alice+promo@example.com and alice_promo@example.com', async () => {
+      await writeTrackingToken('ord-collide', 'token-plus', 'alice+promo@example.com');
+      await writeTrackingToken('ord-collide', 'token-under', 'alice_promo@example.com');
+
+      expect(await readTrackingToken('ord-collide', 'alice+promo@example.com')).toBe('token-plus');
+      expect(await readTrackingToken('ord-collide', 'alice_promo@example.com')).toBe('token-under');
     });
 
     it('handles email case-insensitivity and whitespace during account lookup', async () => {
@@ -131,33 +155,47 @@ describe('Order tracking credential isolation in SecureStore', () => {
     });
   });
 
-  describe('Legacy un-scoped key isolation and purge', () => {
-    it('never returns un-scoped legacy tokens to newly signed-in accounts', async () => {
+  describe('Legacy un-scoped and v1 key isolation and safe non-migration', () => {
+    it('never returns un-scoped legacy tokens or v1 collision-prone tokens to signed-in accounts', async () => {
       // Legacy device had global un-scoped key from prior mobile version
       const legacyKey = getLegacyTrackingStorageKey('order-legacy-1');
       mockStore.set(legacyKey, 'old-unscoped-token');
 
-      // User B signs in and views order-legacy-1
-      const token = await readTrackingToken('order-legacy-1', 'userb@example.com');
-      expect(token).toBeNull();
+      // Legacy device also had v1 collision-prone key
+      const legacyV1Key = getLegacyV1TrackingStorageKey('order-legacy-1', 'alice_promo@example.com');
+      mockStore.set(legacyV1Key, 'old-v1-colliding-token');
+
+      // User B signs in and views order-legacy-1: must NOT return legacy or v1 token
+      const tokenB = await readTrackingToken('order-legacy-1', 'userb@example.com');
+      expect(tokenB).toBeNull();
+
+      // Alice+promo views order-legacy-1: must NOT adopt or migrate v1 token
+      const tokenAlicePlus = await readTrackingToken('order-legacy-1', 'alice+promo@example.com');
+      expect(tokenAlicePlus).toBeNull();
     });
 
-    it('purges un-scoped legacy key when writing a new scoped token for the order', async () => {
+    it('purges un-scoped legacy key and v1 key when writing a new scoped token for the order', async () => {
       const legacyKey = getLegacyTrackingStorageKey('order-migrated');
+      const legacyV1Key = getLegacyV1TrackingStorageKey('order-migrated', 'userb@example.com');
       mockStore.set(legacyKey, 'old-leaked-token');
+      mockStore.set(legacyV1Key, 'old-v1-token');
 
       await writeTrackingToken('order-migrated', 'new-scoped-token', 'userb@example.com');
 
       expect(mockStore.get(legacyKey)).toBeUndefined();
+      expect(mockStore.get(legacyV1Key)).toBeUndefined();
       expect(await readTrackingToken('order-migrated', 'userb@example.com')).toBe('new-scoped-token');
     });
 
-    it('purgeLegacyTrackingToken deletes the legacy key directly', async () => {
+    it('purgeLegacyTrackingToken deletes the legacy keys directly', async () => {
       const legacyKey = getLegacyTrackingStorageKey('order-purge');
+      const legacyV1Key = getLegacyV1TrackingStorageKey('order-purge', 'user@domain.com');
       mockStore.set(legacyKey, 'legacy-val');
+      mockStore.set(legacyV1Key, 'v1-val');
 
-      await purgeLegacyTrackingToken('order-purge');
+      await purgeLegacyTrackingToken('order-purge', 'user@domain.com');
       expect(mockStore.has(legacyKey)).toBe(false);
+      expect(mockStore.has(legacyV1Key)).toBe(false);
     });
   });
 

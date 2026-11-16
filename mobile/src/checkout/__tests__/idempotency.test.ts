@@ -71,6 +71,32 @@ describe('order idempotency', () => {
     expect(snap[getCheckoutIdempotencyStorageKey('bob@example.com')]).toBe('key-bob');
   });
 
+  it('guarantees collision resistance between distinct emails such as alice+promo@example.com and alice_promo@example.com', async () => {
+    const store = memoryStore();
+    const keys = ['key-promo-plus', 'key-promo-under'];
+    const random = () => keys.shift() ?? 'key-extra';
+
+    const fp = checkoutFingerprint(draft);
+    const plusKey = await getOrCreateCheckoutIdempotencyKey(store, fp, random, 'alice+promo@example.com');
+    const underKey = await getOrCreateCheckoutIdempotencyKey(store, fp, random, 'alice_promo@example.com');
+
+    expect(plusKey).toBe('key-promo-plus');
+    expect(underKey).toBe('key-promo-under');
+    expect(plusKey).not.toBe(underKey);
+
+    const plusStorageKey = getCheckoutIdempotencyStorageKey('alice+promo@example.com');
+    const underStorageKey = getCheckoutIdempotencyStorageKey('alice_promo@example.com');
+    expect(plusStorageKey).not.toBe(underStorageKey);
+
+    const plusFpKey = getCheckoutFingerprintStorageKey('alice+promo@example.com');
+    const underFpKey = getCheckoutFingerprintStorageKey('alice_promo@example.com');
+    expect(plusFpKey).not.toBe(underFpKey);
+
+    const snap = store.snapshot();
+    expect(snap[plusStorageKey]).toBe('key-promo-plus');
+    expect(snap[underStorageKey]).toBe('key-promo-under');
+  });
+
   it('clears all account idempotency keys when clearAllCheckoutIdempotencyKeys is called', async () => {
     const store = memoryStore();
     const keys = ['key-1', 'key-2'];

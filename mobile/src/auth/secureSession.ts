@@ -1,5 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
+import { toAccountNamespace } from './accountNamespace';
+
 export const SESSION_TOKEN_KEY = 'lgb.session.token';
 export const LEGACY_TRACKING_PREFIX = 'lgb.track.';
 export const GUEST_TRACKING_PREFIX = 'lgb.track.guest.';
@@ -15,6 +17,28 @@ export function sanitizeEmail(email: string): string {
 
 export function getTrackingStorageKey(orderId: string, accountEmail?: string | null): string {
   const safeOrder = sanitizeIdentifier(orderId);
+  const namespace = toAccountNamespace(accountEmail);
+  if (namespace === 'guest') {
+    return `lgb.track.guest.${safeOrder}.v2`;
+  }
+  return `lgb.track.u.${namespace}.${safeOrder}.v2`;
+}
+
+export function getTrackingIndexStorageKey(accountEmail?: string | null): string {
+  const namespace = toAccountNamespace(accountEmail);
+  if (namespace === 'guest') {
+    return 'lgb.track.idx.guest.v2';
+  }
+  return `lgb.track.idx.u.${namespace}.v2`;
+}
+
+export function getLegacyTrackingStorageKey(orderId: string): string {
+  const safeOrder = sanitizeIdentifier(orderId);
+  return `lgb.track.${safeOrder}`;
+}
+
+export function getLegacyV1TrackingStorageKey(orderId: string, accountEmail?: string | null): string {
+  const safeOrder = sanitizeIdentifier(orderId);
   if (!accountEmail || !accountEmail.trim()) {
     return `lgb.track.guest.${safeOrder}.v1`;
   }
@@ -22,17 +46,12 @@ export function getTrackingStorageKey(orderId: string, accountEmail?: string | n
   return `lgb.track.u.${safeEmail}.${safeOrder}.v1`;
 }
 
-export function getTrackingIndexStorageKey(accountEmail?: string | null): string {
+export function getLegacyV1TrackingIndexStorageKey(accountEmail?: string | null): string {
   if (!accountEmail || !accountEmail.trim()) {
     return 'lgb.track.idx.guest.v1';
   }
   const safeEmail = sanitizeEmail(accountEmail);
   return `lgb.track.idx.u.${safeEmail}.v1`;
-}
-
-export function getLegacyTrackingStorageKey(orderId: string): string {
-  const safeOrder = sanitizeIdentifier(orderId);
-  return `lgb.track.${safeOrder}`;
 }
 
 export async function readSessionToken(): Promise<string | null> {
@@ -56,12 +75,18 @@ export async function clearSessionToken(): Promise<void> {
   }
 }
 
-export async function purgeLegacyTrackingToken(orderId: string): Promise<void> {
+export async function purgeLegacyTrackingToken(
+  orderId: string,
+  accountEmail?: string | null,
+): Promise<void> {
   if (!orderId || !orderId.trim()) {
     return;
   }
   try {
-    await SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId));
+    await Promise.all([
+      SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
+      SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
+    ]);
   } catch {
     // Missing key or deletion failure is ignored
   }
@@ -124,8 +149,8 @@ export async function writeTrackingToken(
   await SecureStore.setItemAsync(key, token.trim());
   await addToTrackingIndex(orderId.trim(), accountEmail);
 
-  // Purge legacy unisolated key for this order if present to eliminate un-scoped token leakage
-  await purgeLegacyTrackingToken(orderId);
+  // Purge legacy unisolated and v1 keys for this order if present to eliminate token leakage
+  await purgeLegacyTrackingToken(orderId, accountEmail);
 }
 
 export async function readTrackingToken(
@@ -135,7 +160,7 @@ export async function readTrackingToken(
   if (!orderId || !orderId.trim()) {
     return null;
   }
-  // When an account is provided, only read credentials explicitly scoped to that account.
+  // When an account is provided, only read credentials explicitly scoped to that unambiguous account.
   // Never fall back to un-scoped legacy keys or keys from another account.
   const key = getTrackingStorageKey(orderId, accountEmail);
   try {
@@ -157,6 +182,7 @@ export async function deleteTrackingToken(
     await Promise.all([
       SecureStore.deleteItemAsync(getTrackingStorageKey(orderId, accountEmail)),
       SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
+      SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
     ]);
   } catch {
     // Ignore cleanup failures
@@ -170,14 +196,20 @@ export async function clearAccountTrackingTokens(accountEmail?: string | null): 
     await Promise.all(
       orderIds.map(async (orderId) => {
         try {
-          await SecureStore.deleteItemAsync(getTrackingStorageKey(orderId, accountEmail));
-          await SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId));
+          await Promise.all([
+            SecureStore.deleteItemAsync(getTrackingStorageKey(orderId, accountEmail)),
+            SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
+            SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
+          ]);
         } catch {
           // Ignore individual delete failures
         }
       }),
     );
-    await SecureStore.deleteItemAsync(getTrackingIndexStorageKey(accountEmail));
+    await Promise.all([
+      SecureStore.deleteItemAsync(getTrackingIndexStorageKey(accountEmail)),
+      SecureStore.deleteItemAsync(getLegacyV1TrackingIndexStorageKey(accountEmail)),
+    ]);
   } catch {
     // Ignore cleanup failures
   }

@@ -37,15 +37,16 @@ export function usePickupSchedule({
   enabled = true,
 }: UsePickupScheduleOptions = {}): UsePickupScheduleResult {
   const getNowRef = useRef(getNow);
-  getNowRef.current = getNow;
-
   const onInvalidateTimeRef = useRef(onInvalidateTime);
-  onInvalidateTimeRef.current = onInvalidateTime;
-
   const onInvalidateDateRef = useRef(onInvalidateDate);
-  onInvalidateDateRef.current = onInvalidateDate;
 
-  const [referenceTime, setReferenceTime] = useState<Date>(() => getNowRef.current());
+  useEffect(() => {
+    getNowRef.current = getNow;
+    onInvalidateTimeRef.current = onInvalidateTime;
+    onInvalidateDateRef.current = onInvalidateDate;
+  });
+
+  const [referenceTime, setReferenceTime] = useState<Date>(getNow);
 
   const refresh = useCallback(() => {
     setReferenceTime(getNowRef.current());

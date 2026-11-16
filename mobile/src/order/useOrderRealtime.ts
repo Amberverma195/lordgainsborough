@@ -33,6 +33,11 @@ export function useOrderRealtime({
     onOrderUpdatedRef.current = onOrderUpdated;
   }, [onOrderUpdated]);
 
+  // Prefer JWT-only authorization for authenticated requests.
+  // When an authenticated JWT is available, tracking tokens are never passed
+  // to the ticket endpoint or socket authentication callback.
+  const effectiveTracking = token ? null : trackingToken;
+
   useEffect(() => {
     if (!enabled || !orderId) {
       return;
@@ -47,14 +52,14 @@ export function useOrderRealtime({
         query: { orderId },
         auth: async (cb: (data: Record<string, unknown>) => void) => {
           try {
-            const ticket = await fetchOrderSocketTicket(orderId, token, trackingToken);
+            const ticket = await fetchOrderSocketTicket(orderId, token, effectiveTracking);
             if (cancelled) {
               return;
             }
             if (ticket) {
               cb({ token: ticket });
-            } else if (trackingToken) {
-              cb({ trackingToken });
+            } else if (effectiveTracking) {
+              cb({ trackingToken: effectiveTracking });
             } else {
               cb({});
             }
@@ -95,5 +100,5 @@ export function useOrderRealtime({
         socket.disconnect();
       }
     };
-  }, [enabled, orderId, token, trackingToken]);
+  }, [effectiveTracking, enabled, orderId, token]);
 }

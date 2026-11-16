@@ -110,7 +110,7 @@ function HostScreen({ initialAuth, client }: { initialAuth: AuthState; client: Q
   );
 }
 
-describe('OrderDetailScreen tracking credential isolation and stale-request protection', () => {
+describe('OrderDetailScreen tracking credential isolation and intermediate render protection', () => {
   let queryClient: QueryClient;
 
   beforeEach(async () => {
@@ -135,10 +135,13 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
     queryClient.clear();
   });
 
-  it('prevents newly signed-in account from accessing prior account tracking credentials on screen switch', async () => {
+  it('prevents previous-account credentials from ever being passed to fetchOrder or Socket.IO on intermediate and final renders', async () => {
     mockReadTrackingToken.mockImplementation(async (orderId: string, email?: string) => {
       if (email === 'usera@example.com' && orderId === 'ord-iso-100') {
         return 'token-usera';
+      }
+      if (email === 'userb@example.com' && orderId === 'ord-iso-100') {
+        return 'token-userb';
       }
       return null;
     });
@@ -150,20 +153,24 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
 
     render(<HostScreen initialAuth={initialAuth} client={queryClient} />);
 
-    // Initial load for Customer A
+    // Initial load for Customer A prefers JWT-only authorization
     await waitFor(() => {
       expect(mockReadTrackingToken).toHaveBeenCalledWith('ord-iso-100', 'usera@example.com');
+      expect(mockFetchOrder).toHaveBeenCalledWith('ord-iso-100', 'jwt-usera', null);
       expect(mockUseOrderRealtime).toHaveBeenCalledWith(
         expect.objectContaining({
           orderId: 'ord-iso-100',
           token: 'jwt-usera',
-          trackingToken: 'token-usera',
+          trackingToken: null,
           enabled: true,
         }),
       );
     });
 
-    // Account switch: Customer B signs in on the same screen
+    const fetchOrderCallsBeforeSwitch = mockFetchOrder.mock.calls.length;
+    const socketCallsBeforeSwitch = mockUseOrderRealtime.mock.calls.length;
+
+    // Account switch: Customer B signs in on the same mounted screen
     await act(async () => {
       setAuthDispatch?.({
         status: 'signedIn',
@@ -173,14 +180,28 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
 
     await waitFor(() => {
       expect(mockReadTrackingToken).toHaveBeenCalledWith('ord-iso-100', 'userb@example.com');
-      // Realtime must be called with trackingToken null for User B, never User A's token!
-      const lastCall = mockUseOrderRealtime.mock.calls[mockUseOrderRealtime.mock.calls.length - 1][0];
-      expect(lastCall.token).toBe('jwt-userb');
-      expect(lastCall.trackingToken).toBeNull();
     });
+
+    // Verify EVERY intermediate call to fetchOrder after the account switch
+    const postSwitchFetchCalls = mockFetchOrder.mock.calls.slice(fetchOrderCallsBeforeSwitch);
+    for (const call of postSwitchFetchCalls) {
+      // Argument 0 is orderId, 1 is token, 2 is trackingToken
+      expect(call[1]).toBe('jwt-userb');
+      expect(call[2]).toBeNull();
+      expect(call[2]).not.toBe('token-usera');
+    }
+
+    // Verify EVERY intermediate call to useOrderRealtime after the account switch
+    const postSwitchSocketCalls = mockUseOrderRealtime.mock.calls.slice(socketCallsBeforeSwitch);
+    expect(postSwitchSocketCalls.length).toBeGreaterThan(0);
+    for (const call of postSwitchSocketCalls) {
+      expect(call[0].token).toBe('jwt-userb');
+      expect(call[0].trackingToken).toBeNull();
+      expect(call[0].trackingToken).not.toBe('token-usera');
+    }
   });
 
-  it('resets trackingToken state to null and disables realtime on logout', async () => {
+  it('resets trackingToken state to null and disables realtime synchronously on logout', async () => {
     mockReadTrackingToken.mockResolvedValue('token-usera');
 
     const initialAuth: AuthState = {
@@ -193,11 +214,15 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
     await waitFor(() => {
       expect(mockUseOrderRealtime).toHaveBeenCalledWith(
         expect.objectContaining({
-          trackingToken: 'token-usera',
+          orderId: 'ord-iso-100',
+          token: 'jwt-usera',
+          trackingToken: null,
           enabled: true,
         }),
       );
     });
+
+    const socketCallsCount = mockUseOrderRealtime.mock.calls.length;
 
     // User logs out
     await act(async () => {
@@ -211,12 +236,16 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
       expect(screen.getByText('Sign in with the account that placed this order to view it.')).toBeTruthy();
     });
 
-    const lastCall = mockUseOrderRealtime.mock.calls[mockUseOrderRealtime.mock.calls.length - 1][0];
-    expect(lastCall.enabled).toBe(false);
-    expect(lastCall.trackingToken).toBeNull();
+    // Verify all calls after logout have enabled: false and trackingToken: null
+    const postLogoutCalls = mockUseOrderRealtime.mock.calls.slice(socketCallsCount);
+    for (const call of postLogoutCalls) {
+      expect(call[0].enabled).toBe(false);
+      expect(call[0].trackingToken).toBeNull();
+      expect(call[0].trackingToken).not.toBe('token-usera');
+    }
   });
 
-  it('stale-request protection: discards delayed token resolution across account switch', async () => {
+  it('stale-request protection: discards delayed token resolution across account switch without intermediate leak', async () => {
     let resolveUserA!: (val: string | null) => void;
     const pendingPromiseA = new Promise<string | null>((res) => {
       resolveUserA = res;
@@ -258,16 +287,20 @@ describe('OrderDetailScreen tracking credential isolation and stale-request prot
       resolveUserA('delayed-stale-token-usera');
     });
 
-    // Check that stale User A token was NOT adopted by User B
+    // Check that stale User A token was NEVER passed to any call for User B
     const calls = mockUseOrderRealtime.mock.calls;
-    const finalCall = calls[calls.length - 1][0];
-    expect(finalCall.token).toBe('jwt-userb');
-    expect(finalCall.trackingToken).toBeNull();
-
-    // Verify none of User B's calls received User A's token
     for (const call of calls) {
       if (call[0].token === 'jwt-userb') {
+        expect(call[0].trackingToken).toBeNull();
         expect(call[0].trackingToken).not.toBe('delayed-stale-token-usera');
+      }
+    }
+
+    const fetchCalls = mockFetchOrder.mock.calls;
+    for (const call of fetchCalls) {
+      if (call[1] === 'jwt-userb') {
+        expect(call[2]).toBeNull();
+        expect(call[2]).not.toBe('delayed-stale-token-usera');
       }
     }
   });

@@ -29,33 +29,64 @@ export default function OrderDetailScreen() {
   const confirmed = params.confirmed === '1';
   const { user, status } = useAuth();
   const queryClient = useQueryClient();
-  const [trackingToken, setTrackingToken] = useState<string | null>(null);
+
+  const currentAccount = status === 'signedIn' && user?.email ? user.email.trim().toLowerCase() : null;
+  const authToken = status === 'signedIn' && user?.token ? user.token : null;
+
+  // Stored tracking credential bound explicitly to the account identity and order ID
+  const [boundTracking, setBoundTracking] = useState<{
+    accountEmail: string;
+    orderId: string;
+    token: string | null;
+  } | null>(null);
+
+  // Synchronously evaluated on every render:
+  // If the bound credential's account or order ID does not match the currently active
+  // account, it evaluates to null synchronously on that exact render. This prevents
+  // previous-account credentials from ever being used during intermediate renders
+  // before effect cleanups or state transitions settle.
+  const isCredentialMatch =
+    boundTracking !== null &&
+    boundTracking.orderId === orderId &&
+    boundTracking.accountEmail === currentAccount;
+
+  const effectiveTrackingToken = isCredentialMatch ? boundTracking.token : null;
+
+  // Prefer JWT-only authorization for authenticated account-owned order requests:
+  // When an authenticated JWT is available, do not pass tracking credentials to endpoints
+  // or Socket.IO; the backend validates account ownership directly via the JWT.
+  const requestTrackingToken = authToken ? null : effectiveTrackingToken;
+
   const cached = orderId ? readConfirmedOrder(orderId, user?.email) : null;
 
   useEffect(() => {
     let cancelled = false;
 
-    if (!orderId || status !== 'signedIn' || !user?.email) {
+    if (!orderId || !currentAccount) {
       return () => {
         cancelled = true;
       };
     }
 
-    void readTrackingToken(orderId, user.email).then((token) => {
+    void readTrackingToken(orderId, currentAccount).then((token) => {
       if (!cancelled) {
-        setTrackingToken(token);
+        setBoundTracking({
+          accountEmail: currentAccount,
+          orderId,
+          token,
+        });
       }
     });
 
     return () => {
       cancelled = true;
-      setTrackingToken(null);
+      setBoundTracking(null);
     };
-  }, [orderId, status, user?.email]);
+  }, [orderId, currentAccount]);
 
   const order = useQuery({
-    queryKey: ['order', orderId, user?.email],
-    queryFn: () => fetchOrder(orderId, user!.token, trackingToken),
+    queryKey: ['order', orderId, currentAccount],
+    queryFn: () => fetchOrder(orderId, authToken!, requestTrackingToken),
     enabled: status === 'signedIn' && !!user && !!orderId,
     refetchInterval: (query) => {
       const orderStatus = query.state.data?.status ?? cached?.status;
@@ -92,8 +123,8 @@ export default function OrderDetailScreen() {
 
   useOrderRealtime({
     orderId,
-    token: user?.token,
-    trackingToken,
+    token: authToken,
+    trackingToken: requestTrackingToken,
     enabled: status === 'signedIn' && !!orderId,
     onConnect: handleConnect,
     onOrderUpdated: handleOrderUpdated,

@@ -15,7 +15,14 @@ import {
   setQuantity,
 } from './operations';
 import { estimateTotals } from './money';
-import { getCartStorageKey, getPickupStorageKey, LEGACY_CART_KEY, LEGACY_PICKUP_KEY } from './storage';
+import {
+  getCartStorageKey,
+  getPickupStorageKey,
+  LEGACY_CART_KEY,
+  LEGACY_GUEST_CART_KEY,
+  LEGACY_GUEST_PICKUP_KEY,
+  LEGACY_PICKUP_KEY,
+} from './storage';
 import { CartLine } from './types';
 
 interface CartContextValue {
@@ -86,7 +93,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   // Purge unisolated legacy device keys
   useEffect(() => {
-    void AsyncStorage.multiRemove([LEGACY_CART_KEY, LEGACY_PICKUP_KEY]).catch(() => undefined);
+    void AsyncStorage.multiRemove([
+      LEGACY_CART_KEY,
+      LEGACY_PICKUP_KEY,
+      LEGACY_GUEST_CART_KEY,
+      LEGACY_GUEST_PICKUP_KEY,
+    ]).catch(() => undefined);
   }, []);
 
   // Account switch & initialization effect
@@ -99,9 +111,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       debounceTimerRef.current = null;
     }
 
-    setReady(false);
-
     void (async () => {
+      setReady(false);
       try {
         const cartKey = getCartStorageKey(accountKey);
         const pickupKey = getPickupStorageKey(accountKey);

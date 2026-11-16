@@ -3,14 +3,15 @@ import { render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 import { Text, View } from 'react-native';
 
-jest.mock('@react-native-async-storage/async-storage', () =>
-  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
-);
-
 import * as ordersApi from '../../api/orders';
 import * as authContext from '../../auth/AuthContext';
 import { CartProvider, useCart } from '../CartContext';
-import { getCartStorageKey, getPickupStorageKey, LEGACY_CART_KEY, LEGACY_PICKUP_KEY } from '../storage';
+import { getCartStorageKey, LEGACY_CART_KEY, LEGACY_PICKUP_KEY } from '../storage';
+
+jest.mock('@react-native-async-storage/async-storage', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
 
 jest.mock('../../api/orders', () => ({
   fetchServerCart: jest.fn(),
@@ -208,5 +209,57 @@ describe('Cart account isolation', () => {
     expect(screen.getByTestId('line-count').props.children).toBe('1');
     expect(screen.getByTestId('line-d2')).toBeTruthy();
     expect(screen.queryByTestId('line-d1')).toBeNull();
+  });
+
+  it('isolates carts between alice+promo@example.com and alice_promo@example.com without collision', async () => {
+    const keyPlus = getCartStorageKey('alice+promo@example.com');
+    const keyUnder = getCartStorageKey('alice_promo@example.com');
+
+    expect(keyPlus).not.toBe(keyUnder);
+
+    await AsyncStorage.setItem(
+      keyPlus,
+      JSON.stringify([
+        {
+          menuItemId: 'pie-promo',
+          name: 'Promo Pie',
+          unitPrice: 12.0,
+          quantity: 1,
+          available: true,
+        },
+      ]),
+    );
+
+    jest.spyOn(authContext, 'useAuth').mockReturnValue({
+      status: 'signedIn',
+      user: {
+        token: 'tok-under',
+        name: 'Alice Under',
+        email: 'alice_promo@example.com',
+        phone: '',
+        memberSince: '',
+        role: 'CUSTOMER',
+        canUpdateProfile: true,
+        nextProfileUpdateAt: null,
+        noShowCount: 0,
+        pickupDisabled: false,
+      },
+      signIn: jest.fn(),
+      signOut: jest.fn(),
+      refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
+    });
+    mockFetchServerCart.mockResolvedValueOnce([]);
+
+    render(
+      <CartProvider>
+        <CartProbe />
+      </CartProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('ready').props.children).toBe('true'));
+    expect(screen.getByTestId('line-count').props.children).toBe('0');
+    expect(screen.queryByTestId('line-pie-promo')).toBeNull();
   });
 });

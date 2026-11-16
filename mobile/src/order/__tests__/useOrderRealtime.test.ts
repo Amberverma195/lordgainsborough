@@ -1,4 +1,9 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
+import { io } from 'socket.io-client';
+
+import * as ordersApi from '../../api/orders';
+import { CustomerOrderView } from '../../api/parse';
+import { useOrderRealtime } from '../useOrderRealtime';
 
 jest.mock('socket.io-client', () => {
   const m = jest.fn();
@@ -8,11 +13,6 @@ jest.mock('socket.io-client', () => {
     default: m,
   };
 });
-
-import { io } from 'socket.io-client';
-import * as ordersApi from '../../api/orders';
-import { CustomerOrderView } from '../../api/parse';
-import { useOrderRealtime } from '../useOrderRealtime';
 
 const mockIo = io as unknown as jest.Mock;
 
@@ -70,7 +70,7 @@ describe('useOrderRealtime hook', () => {
     jest.restoreAllMocks();
   });
 
-  it('connects to socket with orderId query and auth handler', async () => {
+  it('connects to socket preferring JWT-only authorization when auth token is present', async () => {
     const onConnect = jest.fn();
     const onOrderUpdated = jest.fn();
 
@@ -94,11 +94,11 @@ describe('useOrderRealtime hook', () => {
       );
     });
 
-    // Verify auth callback fetches ticket
+    // Verify auth callback prefers JWT-only authorization without passing trackingToken
     const ioOptions = mockIo.mock.calls[0][1];
     const authCb = jest.fn();
     await ioOptions.auth(authCb);
-    expect(ordersApi.fetchOrderSocketTicket).toHaveBeenCalledWith('ord-123', 'user-jwt', 'track-456');
+    expect(ordersApi.fetchOrderSocketTicket).toHaveBeenCalledWith('ord-123', 'user-jwt', null);
     expect(authCb).toHaveBeenCalledWith({ token: 'valid-ticket-xyz' });
 
     // Verify connect handler
@@ -114,6 +114,30 @@ describe('useOrderRealtime hook', () => {
     // Cleanup on unmount
     await unmount();
     expect(mockSocket.disconnect).toHaveBeenCalled();
+  });
+
+  it('passes trackingToken to ticket fetcher and socket fallback when no auth token is provided (guest)', async () => {
+    const { unmount } = await renderHook(() =>
+      useOrderRealtime({
+        orderId: 'ord-guest-1',
+        token: null,
+        trackingToken: 'guest-track-456',
+      }),
+    );
+
+    const ioOptions = mockIo.mock.calls[0][1];
+    const authCb = jest.fn();
+    await ioOptions.auth(authCb);
+    expect(ordersApi.fetchOrderSocketTicket).toHaveBeenCalledWith('ord-guest-1', null, 'guest-track-456');
+    expect(authCb).toHaveBeenCalledWith({ token: 'valid-ticket-xyz' });
+
+    // Test ticket null fallback to trackingToken
+    (ordersApi.fetchOrderSocketTicket as jest.Mock).mockResolvedValueOnce(null);
+    const authFallbackCb = jest.fn();
+    await ioOptions.auth(authFallbackCb);
+    expect(authFallbackCb).toHaveBeenCalledWith({ trackingToken: 'guest-track-456' });
+
+    await unmount();
   });
 
   it('ignores updates for a different order id', async () => {

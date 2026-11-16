@@ -1,3 +1,5 @@
+import { toAccountNamespace } from '../auth/accountNamespace';
+
 export interface KeyValueStore {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
@@ -9,20 +11,38 @@ export const CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.idempotencyKey';
 export const CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.fingerprint';
 export const LEGACY_CHECKOUT_IDEMPOTENCY_KEY = CHECKOUT_IDEMPOTENCY_KEY;
 export const LEGACY_CHECKOUT_FINGERPRINT_KEY = CHECKOUT_FINGERPRINT_KEY;
-export const GUEST_CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.guest.idempotencyKey.v1';
-export const GUEST_CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.guest.fingerprint.v1';
+export const LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.guest.idempotencyKey.v1';
+export const LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.guest.fingerprint.v1';
+export const GUEST_CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.guest.idempotencyKey.v2';
+export const GUEST_CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.guest.fingerprint.v2';
 
 export function getCheckoutIdempotencyStorageKey(accountEmail?: string | null): string {
-  if (!accountEmail || !accountEmail.trim()) {
+  const namespace = toAccountNamespace(accountEmail);
+  if (namespace === 'guest') {
     return GUEST_CHECKOUT_IDEMPOTENCY_KEY;
+  }
+  return `lgb.checkout.u.${namespace}.idempotencyKey.v2`;
+}
+
+export function getCheckoutFingerprintStorageKey(accountEmail?: string | null): string {
+  const namespace = toAccountNamespace(accountEmail);
+  if (namespace === 'guest') {
+    return GUEST_CHECKOUT_FINGERPRINT_KEY;
+  }
+  return `lgb.checkout.u.${namespace}.fingerprint.v2`;
+}
+
+export function getLegacyV1CheckoutIdempotencyStorageKey(accountEmail?: string | null): string {
+  if (!accountEmail || !accountEmail.trim()) {
+    return LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY;
   }
   const normalized = accountEmail.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
   return `lgb.checkout.u.${normalized}.idempotencyKey.v1`;
 }
 
-export function getCheckoutFingerprintStorageKey(accountEmail?: string | null): string {
+export function getLegacyV1CheckoutFingerprintStorageKey(accountEmail?: string | null): string {
   if (!accountEmail || !accountEmail.trim()) {
-    return GUEST_CHECKOUT_FINGERPRINT_KEY;
+    return LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY;
   }
   const normalized = accountEmail.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
   return `lgb.checkout.u.${normalized}.fingerprint.v1`;
@@ -57,12 +77,16 @@ export async function getOrCreateCheckoutIdempotencyKey(
 ): Promise<string> {
   const idempotencyKeyName = getCheckoutIdempotencyStorageKey(accountEmail);
   const fingerprintKeyName = getCheckoutFingerprintStorageKey(accountEmail);
+  const legacyV1IdempotencyKey = getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
+  const legacyV1FingerprintKey = getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
 
-  // Clean up legacy global keys if present to prevent cross-account leakage
+  // Clean up legacy global and v1 keys if present to prevent cross-account leakage
   try {
     await Promise.all([
       store.removeItem(LEGACY_CHECKOUT_IDEMPOTENCY_KEY),
       store.removeItem(LEGACY_CHECKOUT_FINGERPRINT_KEY),
+      store.removeItem(legacyV1IdempotencyKey),
+      store.removeItem(legacyV1FingerprintKey),
     ]);
   } catch {
     // Ignore cleanup errors
@@ -87,9 +111,13 @@ export async function clearCheckoutIdempotencyKey(
 ): Promise<void> {
   const idempotencyKeyName = getCheckoutIdempotencyStorageKey(accountEmail);
   const fingerprintKeyName = getCheckoutFingerprintStorageKey(accountEmail);
+  const legacyV1IdempotencyKey = getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
+  const legacyV1FingerprintKey = getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
   await Promise.all([
     store.removeItem(idempotencyKeyName),
     store.removeItem(fingerprintKeyName),
+    store.removeItem(legacyV1IdempotencyKey),
+    store.removeItem(legacyV1FingerprintKey),
     store.removeItem(LEGACY_CHECKOUT_IDEMPOTENCY_KEY),
     store.removeItem(LEGACY_CHECKOUT_FINGERPRINT_KEY),
   ]);
@@ -109,6 +137,8 @@ export async function clearAllCheckoutIdempotencyKeys(store: KeyValueStore): Pro
   await Promise.all([
     store.removeItem(LEGACY_CHECKOUT_IDEMPOTENCY_KEY),
     store.removeItem(LEGACY_CHECKOUT_FINGERPRINT_KEY),
+    store.removeItem(LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY),
+    store.removeItem(LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY),
     store.removeItem(GUEST_CHECKOUT_IDEMPOTENCY_KEY),
     store.removeItem(GUEST_CHECKOUT_FINGERPRINT_KEY),
   ]);
