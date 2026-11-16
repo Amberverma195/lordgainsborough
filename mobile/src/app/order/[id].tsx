@@ -26,7 +26,7 @@ export default function OrderDetailScreen() {
   const confirmed = params.confirmed === '1';
   const { user, status } = useAuth();
   const [trackingToken, setTrackingToken] = useState<string | null>(null);
-  const cached = orderId ? readConfirmedOrder(orderId) : null;
+  const cached = orderId ? readConfirmedOrder(orderId, user?.email) : null;
 
   useEffect(() => {
     if (!orderId) {

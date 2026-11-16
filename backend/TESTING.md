@@ -54,3 +54,18 @@ Focused repository, entity, controller and security suites retain PostgreSQL
 locking, rollback, concurrency and independent-connection assertions. Historical
 tests specific to the retired database implementation were removed; current
 results are recorded in `docs/POSTGRESQL_MIGRATION.md` at the repository root.
+
+## Endpoint smoke tests
+Run endpoint smoke tests against local or deployed environments:
+```powershell
+# Local environment
+.\scripts\smoke-test.ps1 -BaseUrl "http://localhost:8080"
+
+# Railway deployment
+.\scripts\smoke-test.ps1 -BaseUrl "https://your-railway-app.up.railway.app"
+```
+Or with bash:
+```bash
+sh scripts/smoke-test.sh https://your-railway-app.up.railway.app
+```
+

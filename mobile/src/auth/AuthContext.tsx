@@ -1,9 +1,13 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { fetchCurrentUser, login } from '../api/auth';
 import { onUnauthorized } from '../api/client';
 import { ApiError } from '../api/errors';
 import { SessionUser } from '../api/parse';
+import { clearAllConfirmedOrders } from '../checkout/confirmationCache';
+import { CHECKOUT_FINGERPRINT_KEY, CHECKOUT_IDEMPOTENCY_KEY } from '../checkout/idempotency';
+import { queryClient } from '../query/client';
 import { clearSessionToken, readSessionToken, writeSessionToken } from './secureSession';
 import { shouldClearStoredSession } from './session';
 
@@ -25,6 +29,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearLocalSession = useCallback(async () => {
     await clearSessionToken();
+    clearAllConfirmedOrders();
+    queryClient.clear();
+    try {
+      await AsyncStorage.multiRemove([CHECKOUT_IDEMPOTENCY_KEY, CHECKOUT_FINGERPRINT_KEY]);
+    } catch {
+      // Ignore storage cleanup failures
+    }
     setUser(null);
     setStatus('signedOut');
   }, []);
@@ -93,6 +104,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = useCallback(async (emailOrPhone: string, password: string) => {
     try {
       const session = await login({ emailOrPhone, password });
+      clearAllConfirmedOrders();
+      queryClient.clear();
       await writeSessionToken(session.token);
       setUser(session);
       setStatus('signedIn');

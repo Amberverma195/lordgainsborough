@@ -39,6 +39,36 @@ class CorrelationIdFilterTest {
     }
 
     @Test
+    void logsServerErrorStatusAndClearsMdc() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        when(request.getMethod()).thenReturn("GET");
+        when(request.getRequestURI()).thenReturn("/api/orders");
+        when(response.getStatus()).thenReturn(500);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(response).getStatus();
+        assertNull(MDC.get(SignupOtpObservability.CORRELATION_MDC_KEY));
+    }
+
+    @Test
+    void handlesExceptionAndClearsMdc() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getRequestURI()).thenReturn("/api/orders");
+        org.mockito.Mockito.doThrow(new IllegalStateException("Boom")).when(chain).doFilter(request, response);
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> filter.doFilterInternal(request, response, chain));
+
+        assertNull(MDC.get(SignupOtpObservability.CORRELATION_MDC_KEY));
+    }
+
+    @Test
     void rejectsValuesThatCouldBeRawIpOtpOrLogInjection() {
         String rawIp = CorrelationIdFilter.validOrGenerated("203.0.113.7");
         String rawOtp = CorrelationIdFilter.validOrGenerated("123456");

@@ -159,3 +159,28 @@ evaluated from the trusted edge toward the first untrusted client address.
 The password-reset global send default is 100 operations per minute. Alert on sustained
 `flow="password_reset", outcome="denied"` increases and tune the threshold only after
 reviewing normal traffic and Brevo account capacity.
+
+## Production monitoring and endpoint smoke tests
+
+### HTTP request error observability
+`CorrelationIdFilter` captures `method`, `uri`, `status`, and `duration_ms` with the request
+correlation ID. Any unhandled exception or HTTP response with status >= 500 is logged at `ERROR`
+level so 5xx responses in production can be immediately attributed to specific paths and root causes:
+```text
+HTTP server error response: method=GET uri=/api/orders status=500 duration_ms=42
+```
+To maintain data privacy, request bodies, query parameters, and authorization headers are never logged.
+
+### Endpoint smoke tests
+Before and after releases, run the endpoint smoke test against the live deployment or staging URL:
+```bash
+sh scripts/smoke-test.sh https://your-railway-app.up.railway.app
+```
+Or on Windows PowerShell:
+```powershell
+.\scripts\smoke-test.ps1 -BaseUrl "https://your-railway-app.up.railway.app"
+```
+The suite verifies that:
+- Public endpoints (`/api/welcome`, `/api/menu`, `/api/categories`, `/api/settings`, `/api/reviews`) return HTTP 200.
+- Protected endpoints (`/api/cart`, `/api/auth/profile`, `/api/orders`, `/api/kds/orders`) require authorization and return HTTP 401 without throwing 5xx errors.
+- Non-existent endpoints return HTTP 404 without internal server errors.

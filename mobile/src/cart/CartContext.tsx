@@ -14,10 +14,8 @@ import {
   setQuantity,
 } from './operations';
 import { estimateTotals } from './money';
+import { getCartStorageKey, getPickupStorageKey, LEGACY_CART_KEY, LEGACY_PICKUP_KEY } from './storage';
 import { CartLine } from './types';
-
-const CART_KEY = 'lgb.cart.v1';
-const PICKUP_KEY = 'lgb.pickup.v1';
 
 interface CartContextValue {
   ready: boolean;
@@ -67,46 +65,118 @@ function toServer(lines: CartLine[]): ServerCartItem[] {
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const { user, status } = useAuth();
+  const accountKey = status === 'signedIn' && user?.email ? user.email.trim().toLowerCase() : null;
+  const authToken = status === 'signedIn' && user?.token ? user.token : null;
+
   const [lines, setLines] = useState<CartLine[]>([]);
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [pickupDate, setPickupDate] = useState('');
   const [pickupTime, setPickupTime] = useState('');
   const [serverSync, setServerSync] = useState(0);
+
   const syncedTokenRef = useRef<string | null>(null);
+  const currentAccountRef = useRef<string | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const linesRef = useRef(lines);
   useLayoutEffect(() => {
     linesRef.current = lines;
   }, [lines]);
 
+  // Purge unisolated legacy device keys
+  useEffect(() => {
+    void AsyncStorage.multiRemove([LEGACY_CART_KEY, LEGACY_PICKUP_KEY]).catch(() => undefined);
+  }, []);
+
+  // Account switch & initialization effect
   useEffect(() => {
     let cancelled = false;
+    currentAccountRef.current = accountKey;
+    syncedTokenRef.current = null;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
+    setReady(false);
+
     void (async () => {
       try {
+        const cartKey = getCartStorageKey(accountKey);
+        const pickupKey = getPickupStorageKey(accountKey);
         const [cartRaw, pickupRaw] = await Promise.all([
-          AsyncStorage.getItem(CART_KEY),
-          AsyncStorage.getItem(PICKUP_KEY),
+          AsyncStorage.getItem(cartKey),
+          AsyncStorage.getItem(pickupKey),
         ]);
+
         if (cancelled) {
           return;
         }
+
+        let localLines: CartLine[] = [];
         if (cartRaw) {
-          setLines(parseStoredCart(JSON.parse(cartRaw) as unknown));
-        }
-        if (pickupRaw) {
-          const saved = JSON.parse(pickupRaw) as { date?: string; time?: string };
-          const date = typeof saved.date === 'string' ? saved.date : '';
-          const time = typeof saved.time === 'string' ? saved.time : '';
-          if (date && !describePickupIssue(date, time || 'asap')) {
-            setPickupDate(date);
-            setPickupTime(time);
-          } else if (date && !describePickupIssue(date, '11:00 AM')) {
-            setPickupDate(date);
+          try {
+            localLines = parseStoredCart(JSON.parse(cartRaw) as unknown);
+          } catch {
+            localLines = [];
           }
+        }
+
+        let initialPickupDate = '';
+        let initialPickupTime = '';
+        if (pickupRaw) {
+          try {
+            const saved = JSON.parse(pickupRaw) as { date?: string; time?: string };
+            const date = typeof saved.date === 'string' ? saved.date : '';
+            const time = typeof saved.time === 'string' ? saved.time : '';
+            if (date && !describePickupIssue(date, time || 'asap')) {
+              initialPickupDate = date;
+              initialPickupTime = time;
+            } else if (date && !describePickupIssue(date, '11:00 AM')) {
+              initialPickupDate = date;
+            }
+          } catch {
+            // Keep empty
+          }
+        }
+
+        if (authToken) {
+          try {
+            const remote = await fetchServerCart(authToken);
+            if (cancelled) {
+              return;
+            }
+            const remoteLines = fromServer(remote);
+            // Reconcile server cart with local lines saved specifically for this account
+            const resolved = localLines.length > 0 ? mergeCarts(localLines, remoteLines) : remoteLines;
+            linesRef.current = resolved;
+            setLines(resolved);
+            setPickupDate(initialPickupDate);
+            setPickupTime(initialPickupTime);
+            syncedTokenRef.current = authToken;
+            setServerSync((val) => val + 1);
+          } catch {
+            if (cancelled) {
+              return;
+            }
+            linesRef.current = localLines;
+            setLines(localLines);
+            setPickupDate(initialPickupDate);
+            setPickupTime(initialPickupTime);
+            syncedTokenRef.current = authToken;
+          }
+        } else {
+          linesRef.current = localLines;
+          setLines(localLines);
+          setPickupDate(initialPickupDate);
+          setPickupTime(initialPickupTime);
         }
       } catch {
         if (!cancelled) {
+          linesRef.current = [];
           setLines([]);
+          setPickupDate('');
+          setPickupTime('');
         }
       } finally {
         if (!cancelled) {
@@ -114,68 +184,53 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       }
     })();
+
     return () => {
       cancelled = true;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
     };
-  }, []);
+  }, [accountKey, authToken]);
 
+  // Persist to account-scoped AsyncStorage whenever lines or pickup change
   useEffect(() => {
     if (!ready) {
       return;
     }
-    void AsyncStorage.setItem(CART_KEY, JSON.stringify(lines));
+    const cartKey = getCartStorageKey(currentAccountRef.current);
+    void AsyncStorage.setItem(cartKey, JSON.stringify(lines));
   }, [lines, ready]);
 
   useEffect(() => {
     if (!ready) {
       return;
     }
-    void AsyncStorage.setItem(PICKUP_KEY, JSON.stringify({ date: pickupDate, time: pickupTime }));
+    const pickupKey = getPickupStorageKey(currentAccountRef.current);
+    void AsyncStorage.setItem(pickupKey, JSON.stringify({ date: pickupDate, time: pickupTime }));
   }, [pickupDate, pickupTime, ready]);
 
+  // Debounced server save
   useEffect(() => {
-    if (!ready || status !== 'signedIn' || !user) {
-      syncedTokenRef.current = null;
+    if (!ready || !authToken || syncedTokenRef.current !== authToken) {
       return;
     }
-    const token = user.token;
-    syncedTokenRef.current = null;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const remote = await fetchServerCart(token);
-        if (cancelled) {
-          return;
-        }
-        setLines((current) => {
-          const merged = mergeCarts(current, fromServer(remote));
-          linesRef.current = merged;
-          return merged;
-        });
-      } catch {
-        // The device cart remains usable when the account cart cannot be read.
-      } finally {
-        if (!cancelled) {
-          syncedTokenRef.current = token;
-          setServerSync((value) => value + 1);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [ready, status, user]);
-
-  useEffect(() => {
-    if (!ready || !user || syncedTokenRef.current !== user.token) {
-      return;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-    const token = user.token;
-    const timer = setTimeout(() => {
-      void saveServerCart(token, toServer(linesRef.current)).catch(() => undefined);
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null;
+      void saveServerCart(authToken, toServer(linesRef.current)).catch(() => undefined);
     }, 800);
-    return () => clearTimeout(timer);
-  }, [lines, ready, serverSync, user]);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, [lines, ready, serverSync, authToken]);
 
   const addItem = useCallback((item: MenuItem, quantity = 1) => {
     const result = addToCart(linesRef.current, item, quantity);
@@ -200,11 +255,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clear = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     linesRef.current = [];
     setLines([]);
     setPickupDate('');
     setPickupTime('');
-  }, []);
+    const cartKey = getCartStorageKey(currentAccountRef.current);
+    const pickupKey = getPickupStorageKey(currentAccountRef.current);
+    void AsyncStorage.multiRemove([cartKey, pickupKey]).catch(() => undefined);
+    if (authToken) {
+      void saveServerCart(authToken, []).catch(() => undefined);
+    }
+  }, [authToken]);
 
   const reconcile = useCallback((catalog: MenuItem[]) => {
     setLines((current) => {
