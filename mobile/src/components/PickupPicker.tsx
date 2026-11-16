@@ -1,45 +1,93 @@
-import { useMemo, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useState } from 'react';
 import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, space, type } from '../theme/tokens';
 import {
   formatPickupDateLabel,
   formatPickupTimeLabel,
-  pickupChoices,
-  pickupDateChoices,
 } from '../checkout/pickup';
+import { usePickupSchedule } from '../checkout/usePickupSchedule';
+
+export interface PickupPickerProps {
+  date: string;
+  time: string;
+  onChange: (date: string, time: string) => void;
+  refreshIntervalMs?: number;
+  getNow?: () => Date;
+}
 
 export function PickupPicker({
   date,
   time,
   onChange,
-}: {
-  date: string;
-  time: string;
-  onChange: (date: string, time: string) => void;
-}) {
+  refreshIntervalMs = 30_000,
+  getNow,
+}: PickupPickerProps) {
   const [open, setOpen] = useState<'date' | 'time' | null>(null);
-  const dates = useMemo(() => pickupDateChoices(), []);
-  const times = useMemo(() => (date ? pickupChoices(date) : []), [date]);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const { dates, times, refresh } = usePickupSchedule({
+    selectedDate: date,
+    selectedTime: time,
+    refreshIntervalMs,
+    getNow,
+    onInvalidateTime: (expiredTime) => {
+      onChange(date, '');
+      const formatted = formatPickupTimeLabel(expiredTime);
+      setNotice(`Selected pickup time (${formatted}) has passed. Please choose an upcoming time.`);
+    },
+    onInvalidateDate: () => {
+      onChange('', '');
+      setNotice('The selected pickup date has passed. Please choose an upcoming date.');
+    },
+  });
+
+  const handleOpenDate = () => {
+    refresh();
+    setNotice(null);
+    setOpen('date');
+  };
+
+  const handleOpenTime = () => {
+    refresh();
+    setNotice(null);
+    setOpen('time');
+  };
 
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>Pickup</Text>
       <Text style={styles.help}>Times follow restaurant operating hours in Toronto (from 11:00 AM).</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Choose pickup date" onPress={() => setOpen('date')} style={styles.field}>
+
+      {notice ? (
+        <View style={styles.noticeBox} accessibilityRole="alert">
+          <Ionicons name="alert-circle-outline" size={18} color={colors.gold} />
+          <Text style={styles.noticeText}>{notice}</Text>
+        </View>
+      ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Choose pickup date"
+        onPress={handleOpenDate}
+        style={styles.field}
+      >
         <Text style={styles.fieldLabel}>Date</Text>
         <Text style={styles.fieldValue}>{date ? formatPickupDateLabel(date) : 'Select a date'}</Text>
       </Pressable>
+
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Choose pickup time"
         disabled={!date}
-        onPress={() => setOpen('time')}
+        onPress={handleOpenTime}
         style={[styles.field, !date && styles.disabled]}
       >
         <Text style={styles.fieldLabel}>Time</Text>
         <Text style={styles.fieldValue}>{time ? formatPickupTimeLabel(time) : 'Select a time'}</Text>
       </Pressable>
+
       <Modal visible={open !== null} animationType="slide" transparent onRequestClose={() => setOpen(null)}>
         <View style={styles.backdrop}>
           <View style={styles.sheet}>
@@ -47,10 +95,18 @@ export function PickupPicker({
             <FlatList
               data={open === 'date' ? dates : times}
               keyExtractor={(item) => item}
+              ListEmptyComponent={
+                <Text style={styles.emptyText}>
+                  {open === 'date'
+                    ? 'No pickup dates are currently available.'
+                    : 'No pickup times are available for this date.'}
+                </Text>
+              }
               renderItem={({ item }) => (
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => {
+                    setNotice(null);
                     if (open === 'date') {
                       onChange(item, '');
                     } else {
@@ -90,6 +146,22 @@ const styles = StyleSheet.create({
     fontFamily: type.body,
     fontSize: 14,
     lineHeight: 20,
+  },
+  noticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    padding: space.sm,
+    backgroundColor: colors.backgroundRaised,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.goldBorder,
+  },
+  noticeText: {
+    color: colors.gold,
+    fontFamily: type.bodyMedium,
+    fontSize: 13,
+    flex: 1,
   },
   field: {
     borderWidth: 1,
@@ -133,6 +205,13 @@ const styles = StyleSheet.create({
     fontFamily: type.heading,
     fontSize: 22,
     marginBottom: space.md,
+  },
+  emptyText: {
+    color: colors.textMuted,
+    fontFamily: type.body,
+    fontSize: 14,
+    paddingVertical: space.md,
+    textAlign: 'center',
   },
   option: {
     minHeight: 48,

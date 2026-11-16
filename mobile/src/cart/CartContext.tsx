@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import { fetchServerCart, saveServerCart, ServerCartItem } from '../api/orders';
 import { MenuItem } from '../api/parse';
@@ -211,6 +212,28 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     void AsyncStorage.setItem(pickupKey, JSON.stringify({ date: pickupDate, time: pickupTime }));
   }, [pickupDate, pickupTime, ready]);
 
+  // Re-verify saved pickup date and time when the app resumes
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (status === 'active') {
+        const now = new Date();
+        if (pickupDate && !isPickupDateValid(pickupDate, now)) {
+          setPickupDate('');
+          setPickupTime('');
+          setNotice('Your saved pickup date has passed. Please choose a new date.');
+        } else if (pickupDate && pickupTime && !isPickupTimeValid(pickupDate, pickupTime, now)) {
+          setPickupTime('');
+          setNotice('Your saved pickup time is no longer available. Please choose a new time.');
+        }
+      }
+    });
+
+    return () => subscription.remove();
+  }, [pickupDate, pickupTime, ready]);
+
   // Debounced server save
   useEffect(() => {
     if (!ready || !authToken || syncedTokenRef.current !== authToken) {
@@ -280,11 +303,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setPickup = useCallback((date: string, time: string) => {
-    if (!isPickupDateValid(date)) {
+    const now = new Date();
+    if (!isPickupDateValid(date, now)) {
       setNotice('Choose a pickup date within the next 90 days.');
       return;
     }
-    if (time && !isPickupTimeValid(date, time)) {
+    if (time && !isPickupTimeValid(date, time, now)) {
       setPickupDate(date);
       setPickupTime('');
       setNotice('That pickup time is no longer available.');
