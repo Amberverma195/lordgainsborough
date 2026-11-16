@@ -6,6 +6,7 @@ This project consists of a Next.js frontend and a Java Spring Boot backend.
 
 - `frontend/`: Next.js 15+ application with TypeScript.
 - `backend/`: Java 21 / Spring Boot 4 API backed exclusively by PostgreSQL 17.
+- `mobile/`: Expo customer app for menu browsing, sign-in, and pickup orders. See [mobile/README.md](mobile/README.md).
 
 ## Getting Started
 
