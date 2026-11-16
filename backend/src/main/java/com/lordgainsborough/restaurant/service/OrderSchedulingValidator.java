@@ -18,7 +18,10 @@ public class OrderSchedulingValidator {
 
     public static final ZoneId RESTAURANT_ZONE = ZoneId.of("America/Toronto");
     public static final LocalTime OPENING_TIME = LocalTime.of(11, 0);
-    public static final LocalTime CLOSING_TIME = LocalTime.of(21, 0);
+    public static final LocalTime CLOSING_TIME_SUN = LocalTime.of(18, 0);
+    public static final LocalTime CLOSING_TIME_FRI_SAT = LocalTime.of(20, 30);
+    public static final LocalTime CLOSING_TIME_WEEKDAY = LocalTime.of(20, 0);
+    public static final LocalTime CLOSING_TIME = CLOSING_TIME_WEEKDAY;
     public static final int MAX_DAYS_IN_ADVANCE = 90;
 
     private static final Pattern DATE_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
@@ -101,14 +104,16 @@ public class OrderSchedulingValidator {
             order.setPickupTime(timeStr);
         }
 
+        LocalTime dayClosingTime = getClosingTime(pickupDate);
+
         boolean isAsap = timeStr.equalsIgnoreCase("asap");
         if (isAsap) {
             order.setPickupTime("asap");
             if (pickupDate.equals(today)) {
-                if (nowTime.isAfter(CLOSING_TIME)) {
+                if (nowTime.isAfter(dayClosingTime)) {
                     return Map.of(
                             "code", "PICKUP_TIME_CLOSED",
-                            "message", "Pickup orders are closed for today. Operating hours are 11:00 AM to 9:00 PM.");
+                            "message", "Pickup orders are closed for today. Operating hours are 11:00 AM to " + formatTime12H(dayClosingTime) + ".");
                 }
             }
             return null;
@@ -119,7 +124,7 @@ public class OrderSchedulingValidator {
         if (requestedTime == null) {
             return Map.of(
                     "code", "INVALID_PICKUP_TIME",
-                    "message", "Pickup time must be between 11:00 AM and 9:00 PM in 30-minute intervals, or 'asap'.");
+                    "message", "Pickup time must be between 11:00 AM and " + formatTime12H(dayClosingTime) + " in 30-minute intervals, or 'asap'.");
         }
 
         // Check 30-minute interval (:00 or :30)
@@ -129,11 +134,11 @@ public class OrderSchedulingValidator {
                     "message", "Pickup time must be in 30-minute intervals (e.g. 11:00, 11:30).");
         }
 
-        // Check operating hours: 11:00 AM to 9:00 PM
-        if (requestedTime.isBefore(OPENING_TIME) || requestedTime.isAfter(CLOSING_TIME)) {
+        // Check operating hours: 11:00 AM to day-specific closing time
+        if (requestedTime.isBefore(OPENING_TIME) || requestedTime.isAfter(dayClosingTime)) {
             return Map.of(
                     "code", "INVALID_PICKUP_TIME",
-                    "message", "Pickup time must be between 11:00 AM and 9:00 PM.");
+                    "message", "Pickup time must be between 11:00 AM and " + formatTime12H(dayClosingTime) + ".");
         }
 
         // If scheduled for today, requested time cannot be in the past
@@ -146,6 +151,32 @@ public class OrderSchedulingValidator {
         }
 
         return null;
+    }
+
+    public static LocalTime getClosingTime(DayOfWeek dayOfWeek) {
+        if (dayOfWeek == DayOfWeek.SUNDAY) {
+            return CLOSING_TIME_SUN;
+        } else if (dayOfWeek == DayOfWeek.FRIDAY || dayOfWeek == DayOfWeek.SATURDAY) {
+            return CLOSING_TIME_FRI_SAT;
+        } else {
+            return CLOSING_TIME_WEEKDAY;
+        }
+    }
+
+    public static LocalTime getClosingTime(LocalDate date) {
+        if (date == null) {
+            return CLOSING_TIME_WEEKDAY;
+        }
+        return getClosingTime(date.getDayOfWeek());
+    }
+
+    public static String formatTime12H(LocalTime time) {
+        if (time == null) return "";
+        int hour = time.getHour();
+        int minute = time.getMinute();
+        String ampm = hour >= 12 ? "PM" : "AM";
+        int displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+        return String.format("%d:%02d %s", displayHour, minute, ampm);
     }
 
     public static LocalTime parseTime(String input) {

@@ -59,7 +59,7 @@ async function signup(page: Page, user = account, wrongCode = false) {
 }
 async function menuItem(page: Page, name = 'Cheesy Garlic Bread') {
   await page.goto('/menu');await page.getByRole('heading',{name:'Culinary Selection'}).waitFor();
-  await page.locator('input[type=date]').fill(today());await page.getByRole('combobox').selectOption({label:'9:00 PM'});
+  await page.locator('input[type=date]').fill(today());await page.getByRole('combobox').selectOption({label:'5:00 PM'});
   const card=page.getByRole('heading',{name,exact:true}).locator('../..');
   await card.getByRole('button',{name:'Add to Cart',exact:true}).click();
 }
@@ -279,7 +279,7 @@ for(const [label,width,height] of [['desktop',1440,900],['tablet',768,1024],['mo
     await expect(page.getByRole('link',{name:'Login',exact:true})).toBeVisible();
     if(width<=768){await page.getByRole('button',{name:'Open navigation',exact:true}).click();await expect(page.locator('#mobile-navigation').getByRole('link',{name:'Menu',exact:true})).toBeVisible();await page.getByRole('button',{name:'Close navigation',exact:true}).click();await expect(page.locator('#mobile-navigation')).toHaveCount(0);}
     await page.getByRole('link',{name:'Explore Menu',exact:true}).click();await page.waitForURL('**/menu');
-    await page.locator('input[type=date]').fill(today());await page.getByRole('combobox').selectOption({label:'9:00 PM'});
+    await page.locator('input[type=date]').fill(today());await page.getByRole('combobox').selectOption({label:'5:00 PM'});
     await page.getByRole('button',{name:'Sides',exact:true}).click();
     await page.getByRole('heading',{name:'Side Mayo',exact:true}).locator('../..').getByRole('button',{name:'Add to Cart',exact:true}).click();
     await expect(page.getByRole('heading',{name:'Your Order',exact:true})).toBeVisible();

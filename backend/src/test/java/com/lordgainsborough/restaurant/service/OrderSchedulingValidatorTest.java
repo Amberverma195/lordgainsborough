@@ -66,9 +66,9 @@ class OrderSchedulingValidatorTest {
     }
 
     @Test
-    @DisplayName("ASAP order placed after closing time (9:00 PM) for today is rejected")
+    @DisplayName("ASAP order placed after closing time (8:00 PM on Wednesday) for today is rejected")
     void testAsapAfterClosingTimeRejected() {
-        ZonedDateTime lateNow = ZonedDateTime.of(2026, 11, 4, 21, 15, 0, 0, TORONTO_ZONE);
+        ZonedDateTime lateNow = ZonedDateTime.of(2026, 11, 4, 20, 15, 0, 0, TORONTO_ZONE);
         OrderSchedulingValidator lateValidator = new OrderSchedulingValidator(Clock.fixed(lateNow.toInstant(), TORONTO_ZONE));
 
         CustomerOrder o = order("2026-11-04", "asap");
@@ -76,19 +76,20 @@ class OrderSchedulingValidatorTest {
 
         assertThat(error).isNotNull();
         assertThat(error.get("code")).isEqualTo("PICKUP_TIME_CLOSED");
+        assertThat(error.get("message")).contains("11:00 AM to 8:00 PM");
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "5:30 PM", "8:30 PM", "9:00 PM"})
-    @DisplayName("Valid 12-hour AM/PM formats are accepted on a future date")
+    @ValueSource(strings = {"11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "5:30 PM", "7:30 PM", "8:00 PM"})
+    @DisplayName("Valid 12-hour AM/PM formats are accepted on a Thursday up to 8:00 PM")
     void testValid12HourFormatsFutureDate(String time) {
         CustomerOrder o = order("2026-11-05", time);
         assertThat(validator.validate(o)).isNull();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"11:00", "11:30", "12:00", "12:30", "13:00", "13:30", "17:30", "20:30", "21:00"})
-    @DisplayName("Valid 24-hour formats are accepted on a future date")
+    @ValueSource(strings = {"11:00", "11:30", "12:00", "12:30", "13:00", "13:30", "17:30", "19:30", "20:00"})
+    @DisplayName("Valid 24-hour formats are accepted on a Thursday up to 20:00")
     void testValid24HourFormatsFutureDate(String time) {
         CustomerOrder o = order("2026-11-05", time);
         assertThat(validator.validate(o)).isNull();
@@ -107,10 +108,10 @@ class OrderSchedulingValidatorTest {
     }
 
     @Test
-    @DisplayName("Future times for today (after 14:00) are accepted")
+    @DisplayName("Future times for today (after 14:00) are accepted up to closing")
     void testFutureTimesTodayAccepted() {
-        // 2:30 PM, 3:00 PM, 6:00 PM, 9:00 PM are future times
-        for (String futureTime : new String[]{"2:30 PM", "3:00 PM", "6:00 PM", "9:00 PM", "14:30", "18:00", "21:00"}) {
+        // Wednesday closing is 8:00 PM (20:00)
+        for (String futureTime : new String[]{"2:30 PM", "3:00 PM", "6:00 PM", "8:00 PM", "14:30", "18:00", "20:00"}) {
             CustomerOrder o = order("2026-11-04", futureTime);
             Map<String, String> error = validator.validate(o);
             assertThat(error).as("Time %s should be accepted", futureTime).isNull();
@@ -157,18 +158,75 @@ class OrderSchedulingValidatorTest {
         Map<String, String> error = validator.validate(o);
         assertThat(error).isNotNull();
         assertThat(error.get("code")).isEqualTo("INVALID_PICKUP_TIME");
-        assertThat(error.get("message")).contains("between 11:00 AM and 9:00 PM");
+        assertThat(error.get("message")).contains("between 11:00 AM and 8:00 PM");
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"9:30 PM", "10:00 PM", "11:00 PM", "21:30", "22:00", "23:00"})
-    @DisplayName("Times after closing hour (9:00 PM) are rejected with INVALID_PICKUP_TIME")
+    @ValueSource(strings = {"8:30 PM", "9:00 PM", "9:30 PM", "10:00 PM", "11:00 PM", "20:30", "21:00", "21:30", "22:00", "23:00"})
+    @DisplayName("Times after Thursday closing hour (8:00 PM) are rejected with INVALID_PICKUP_TIME")
     void testTimesAfterClosingRejected(String time) {
         CustomerOrder o = order("2026-11-05", time);
         Map<String, String> error = validator.validate(o);
         assertThat(error).isNotNull();
         assertThat(error.get("code")).isEqualTo("INVALID_PICKUP_TIME");
-        assertThat(error.get("message")).contains("between 11:00 AM and 9:00 PM");
+        assertThat(error.get("message")).contains("between 11:00 AM and 8:00 PM");
+    }
+
+    @Test
+    @DisplayName("Sunday pickup hours: 11:00 AM to 6:00 PM")
+    void testSundayOperatingHours() {
+        CustomerOrder validSunday = order("2026-11-08", "6:00 PM");
+        assertThat(validator.validate(validSunday)).isNull();
+
+        CustomerOrder validSunday24 = order("2026-11-08", "18:00");
+        assertThat(validator.validate(validSunday24)).isNull();
+
+        CustomerOrder afterClose12 = order("2026-11-08", "6:30 PM");
+        Map<String, String> err1 = validator.validate(afterClose12);
+        assertThat(err1).isNotNull();
+        assertThat(err1.get("code")).isEqualTo("INVALID_PICKUP_TIME");
+        assertThat(err1.get("message")).contains("between 11:00 AM and 6:00 PM");
+
+        CustomerOrder afterClose24 = order("2026-11-08", "19:00");
+        Map<String, String> err2 = validator.validate(afterClose24);
+        assertThat(err2).isNotNull();
+        assertThat(err2.get("code")).isEqualTo("INVALID_PICKUP_TIME");
+        assertThat(err2.get("message")).contains("between 11:00 AM and 6:00 PM");
+    }
+
+    @Test
+    @DisplayName("Friday and Saturday pickup hours: 11:00 AM to 8:30 PM")
+    void testFridayAndSaturdayOperatingHours() {
+        CustomerOrder validFri = order("2026-11-06", "8:30 PM");
+        assertThat(validator.validate(validFri)).isNull();
+
+        CustomerOrder validSat = order("2026-11-07", "8:30 PM");
+        assertThat(validator.validate(validSat)).isNull();
+
+        CustomerOrder afterCloseFri = order("2026-11-06", "9:00 PM");
+        Map<String, String> errFri = validator.validate(afterCloseFri);
+        assertThat(errFri).isNotNull();
+        assertThat(errFri.get("code")).isEqualTo("INVALID_PICKUP_TIME");
+        assertThat(errFri.get("message")).contains("between 11:00 AM and 8:30 PM");
+
+        CustomerOrder afterCloseSat = order("2026-11-07", "9:00 PM");
+        Map<String, String> errSat = validator.validate(afterCloseSat);
+        assertThat(errSat).isNotNull();
+        assertThat(errSat.get("code")).isEqualTo("INVALID_PICKUP_TIME");
+        assertThat(errSat.get("message")).contains("between 11:00 AM and 8:30 PM");
+    }
+
+    @Test
+    @DisplayName("Monday through Thursday pickup hours: 11:00 AM to 8:00 PM")
+    void testWeekdayOperatingHours() {
+        CustomerOrder validMon = order("2026-11-09", "8:00 PM");
+        assertThat(validator.validate(validMon)).isNull();
+
+        CustomerOrder afterCloseMon = order("2026-11-09", "8:30 PM");
+        Map<String, String> errMon = validator.validate(afterCloseMon);
+        assertThat(errMon).isNotNull();
+        assertThat(errMon.get("code")).isEqualTo("INVALID_PICKUP_TIME");
+        assertThat(errMon.get("message")).contains("between 11:00 AM and 8:00 PM");
     }
 
     @ParameterizedTest

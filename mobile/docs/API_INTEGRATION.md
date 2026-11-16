@@ -79,11 +79,11 @@ The device cart is the working copy and is stored in AsyncStorage. Prices are re
 
 `POST /api/orders` requires a bearer token. Send `Idempotency-Key` (maximum 128 characters) and the same key in the body, matching the website. The server ignores client prices and recomputes each line from the menu. It also replaces the customer name, email, and phone from the authenticated account and returns 403 `CUSTOMER_IDENTITY_MISMATCH` if a supplied email or phone belongs to someone else.
 
-Scheduling uses `America/Toronto`, 11:00 AM to 9:00 PM, 30-minute slots, or `asap`. Dates are `YYYY-MM-DD`, cannot be in the past, and cannot be more than 90 days ahead. `asap` is rejected after 9:00 PM local time. These pickup hours are separate from the dining hours published on the website homepage:
+Scheduling uses `America/Toronto`, 11:00 AM until dining closing time, 30-minute slots, or `asap`. Dates are `YYYY-MM-DD`, cannot be in the past, and cannot be more than 90 days ahead. `asap` is rejected after the daily closing time local time:
 
-- Monday–Thursday 9:00 AM–8:00 PM
-- Friday–Saturday 9:00 AM–8:30 PM
-- Sunday 10:00 AM–6:00 PM
+- Monday–Thursday: 11:00 AM–8:00 PM (Dining: 9:00 AM–8:00 PM)
+- Friday–Saturday: 11:00 AM–8:30 PM (Dining: 9:00 AM–8:30 PM)
+- Sunday: 11:00 AM–6:00 PM (Dining: 10:00 AM–6:00 PM)
 
 Verified restaurant details used by the app: Lord Gainsborough, established 1985, 1800 Hyde Park Rd, London, ON N6H 0K1, 519-472-4168.
 

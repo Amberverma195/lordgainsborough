@@ -16,13 +16,28 @@ describe('pickup scheduling', () => {
     expect(restaurantNow(afterCloseToronto).minutes).toBeGreaterThan(21 * 60);
   });
 
-  it('offers 11:00 AM through 9:00 PM on 30-minute marks', () => {
-    const slots = generatePickupTimeSlots();
-    expect(slots[0]).toBe('11:00 AM');
-    expect(slots).toContain('12:00 PM');
-    expect(slots.at(-1)).toBe('9:00 PM');
-    expect(slots).not.toContain('9:30 PM');
-    expect(slots).not.toContain('10:30 AM');
+  it('offers 11:00 AM through schedule closing on 30-minute marks', () => {
+    const defaultSlots = generatePickupTimeSlots();
+    expect(defaultSlots[0]).toBe('11:00 AM');
+    expect(defaultSlots).toContain('12:00 PM');
+    expect(defaultSlots.at(-1)).toBe('8:30 PM');
+    expect(defaultSlots).not.toContain('9:00 PM');
+    expect(defaultSlots).not.toContain('10:30 AM');
+
+    // Sunday closes at 6:00 PM
+    const sundaySlots = generatePickupTimeSlots('2026-11-15');
+    expect(sundaySlots.at(-1)).toBe('6:00 PM');
+    expect(sundaySlots).not.toContain('6:30 PM');
+
+    // Friday closes at 8:30 PM
+    const fridaySlots = generatePickupTimeSlots('2026-11-20');
+    expect(fridaySlots.at(-1)).toBe('8:30 PM');
+    expect(fridaySlots).not.toContain('9:00 PM');
+
+    // Monday closes at 8:00 PM
+    const mondaySlots = generatePickupTimeSlots('2026-11-16');
+    expect(mondaySlots.at(-1)).toBe('8:00 PM');
+    expect(mondaySlots).not.toContain('8:30 PM');
   });
 
   it('rejects past dates, impossible dates, and dates beyond 90 days', () => {
@@ -33,11 +48,22 @@ describe('pickup scheduling', () => {
     expect(isPickupDateValid('2027-02-14', noonToronto)).toBe(false);
   });
 
-  it('allows as soon as possible until 9:00 PM and rejects earlier slots today', () => {
+  it('allows as soon as possible until daily closing and validates day-specific slots', () => {
+    // Sunday 2026-11-15 at noon
     expect(isAsapAllowed('2026-11-15', noonToronto)).toBe(true);
     expect(isAsapAllowed('2026-11-15', afterCloseToronto)).toBe(false);
     expect(isPickupTimeValid('2026-11-15', '11:30 AM', noonToronto)).toBe(false);
     expect(isPickupTimeValid('2026-11-15', '12:30 PM', noonToronto)).toBe(true);
+    expect(isPickupTimeValid('2026-11-15', '6:00 PM', noonToronto)).toBe(true);
+    expect(isPickupTimeValid('2026-11-15', '6:30 PM', noonToronto)).toBe(false);
+
+    // Monday 2026-11-16 (closes at 8:00 PM)
     expect(isPickupTimeValid('2026-11-16', '11:00 AM', noonToronto)).toBe(true);
+    expect(isPickupTimeValid('2026-11-16', '8:00 PM', noonToronto)).toBe(true);
+    expect(isPickupTimeValid('2026-11-16', '8:30 PM', noonToronto)).toBe(false);
+
+    // Friday 2026-11-20 (closes at 8:30 PM)
+    expect(isPickupTimeValid('2026-11-20', '8:30 PM', noonToronto)).toBe(true);
+    expect(isPickupTimeValid('2026-11-20', '9:00 PM', noonToronto)).toBe(false);
   });
 });

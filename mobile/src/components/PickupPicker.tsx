@@ -25,7 +25,7 @@ export function PickupPicker({
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>Pickup</Text>
-      <Text style={styles.help}>Times follow the restaurant clock in Toronto, from 11:00 AM to 9:00 PM.</Text>
+      <Text style={styles.help}>Times follow restaurant operating hours in Toronto (from 11:00 AM).</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Choose pickup date" onPress={() => setOpen('date')} style={styles.field}>
         <Text style={styles.fieldLabel}>Date</Text>
         <Text style={styles.fieldValue}>{date ? formatPickupDateLabel(date) : 'Select a date'}</Text>

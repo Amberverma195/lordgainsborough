@@ -197,17 +197,17 @@ class OrderControllerSchedulingTest {
                         .content(json.writeValueAsString(order)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_PICKUP_TIME"))
-                .andExpect(jsonPath("$.message").value("Pickup time must be between 11:00 AM and 9:00 PM."));
+                .andExpect(jsonPath("$.message").value("Pickup time must be between 11:00 AM and 8:00 PM."));
 
         verify(orderStore, never()).create(any(), any());
     }
 
     @Test
-    @DisplayName("Pickup time outside closing hours (after 9 PM) is rejected with HTTP 400 INVALID_PICKUP_TIME")
+    @DisplayName("Pickup time outside closing hours (after 8 PM on Thursday) is rejected with HTTP 400 INVALID_PICKUP_TIME")
     void testPickupTimeAfterClosingRejected() throws Exception {
         CustomerOrder order = sampleOrder();
         order.setPickupDate("2026-11-05");
-        order.setPickupTime("9:30 PM");
+        order.setPickupTime("8:30 PM");
 
         mvc.perform(post("/api/orders")
                         .header("Authorization", "Bearer owner-jwt")
@@ -215,7 +215,7 @@ class OrderControllerSchedulingTest {
                         .content(json.writeValueAsString(order)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_PICKUP_TIME"))
-                .andExpect(jsonPath("$.message").value("Pickup time must be between 11:00 AM and 9:00 PM."));
+                .andExpect(jsonPath("$.message").value("Pickup time must be between 11:00 AM and 8:00 PM."));
 
         verify(orderStore, never()).create(any(), any());
     }

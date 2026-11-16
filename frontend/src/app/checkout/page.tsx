@@ -25,6 +25,8 @@ import {
   savePickupDate,
   savePickupTime,
   clearPickupSelections,
+  generatePickupTimeSlots,
+  isPickupTimeValid,
 } from '@/lib/pickupSelection';
 import {
   getAuthHeaders,
@@ -35,19 +37,7 @@ import {
 } from '@/lib/auth';
 import LoginModal from '@/components/LoginModal';
 
-function generateTimeSlots(): string[] {
-  const slots: string[] = [];
-  for (let hour = 11; hour <= 21; hour++) {
-    for (const minute of [0, 30]) {
-      if (hour === 21 && minute === 30) break;
-      const displayHour = hour > 12 ? hour - 12 : hour;
-      const ampm = hour >= 12 ? 'PM' : 'AM';
-      const minStr = String(minute).padStart(2, '0');
-      slots.push(`${displayHour}:${minStr} ${ampm}`);
-    }
-  }
-  return slots;
-}
+
 
 function profileFromAuth(data: AuthData) {
   const nameParts = (data.name || '').trim().split(/\s+/);
@@ -284,7 +274,7 @@ export default function CheckoutPage() {
   const taxRate = storeSettings?.taxRate ?? 0.13;
   const tax = cartTotal * taxRate;
   const finalTotal = cartTotal + tax;
-  const timeSlots = generateTimeSlots();
+  const timeSlots = generatePickupTimeSlots(form.pickupDate);
   const pickupPaused = storeSettings?.pickupOrdersEnabled === false;
   const pickupBlocked = pickupPaused || pickupDisabledForUser;
 
@@ -410,7 +400,13 @@ export default function CheckoutPage() {
                         value={form.pickupDate}
                         onChange={e => {
                           const val = e.target.value;
-                          setForm(prev => ({ ...prev, pickupDate: val }));
+                          setForm(prev => {
+                            const nextTime = (prev.pickupTime && prev.pickupTime !== 'asap' && !isPickupTimeValid(val, prev.pickupTime))
+                              ? 'asap'
+                              : prev.pickupTime;
+                            savePickupTime(nextTime);
+                            return { ...prev, pickupDate: val, pickupTime: nextTime };
+                          });
                           savePickupDate(val);
                         }}
                       />

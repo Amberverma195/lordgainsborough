@@ -48,14 +48,28 @@ describe('pickupSelection', () => {
   const refDateLate = new Date('2026-11-03T02:30:00Z');
 
   describe('generatePickupTimeSlots', () => {
-    it('generates 30-min intervals starting at 11:00 AM and ending at 9:00 PM', () => {
-      const slots = generatePickupTimeSlots();
-      expect(slots[0]).toBe('11:00 AM');
-      expect(slots[1]).toBe('11:30 AM');
-      expect(slots[slots.length - 1]).toBe('9:00 PM');
-      expect(slots).toContain('12:00 PM');
-      expect(slots).toContain('1:30 PM');
-      expect(slots.length).toBe(21);
+    it('generates 30-min intervals based on day-of-week schedule', () => {
+      // Default (no date) up to latest weekly closing (8:30 PM)
+      const defaultSlots = generatePickupTimeSlots();
+      expect(defaultSlots[0]).toBe('11:00 AM');
+      expect(defaultSlots[1]).toBe('11:30 AM');
+      expect(defaultSlots[defaultSlots.length - 1]).toBe('8:30 PM');
+
+      // Sunday closes at 6:00 PM
+      const sundaySlots = generatePickupTimeSlots('2026-11-08');
+      expect(sundaySlots[0]).toBe('11:00 AM');
+      expect(sundaySlots[sundaySlots.length - 1]).toBe('6:00 PM');
+      expect(sundaySlots).not.toContain('6:30 PM');
+
+      // Friday closes at 8:30 PM
+      const fridaySlots = generatePickupTimeSlots('2026-11-06');
+      expect(fridaySlots[fridaySlots.length - 1]).toBe('8:30 PM');
+      expect(fridaySlots).not.toContain('9:00 PM');
+
+      // Monday closes at 8:00 PM
+      const mondaySlots = generatePickupTimeSlots('2026-11-02');
+      expect(mondaySlots[mondaySlots.length - 1]).toBe('8:00 PM');
+      expect(mondaySlots).not.toContain('8:30 PM');
     });
   });
 
@@ -106,14 +120,15 @@ describe('pickupSelection', () => {
       expect(isPickupTimeValid('2026-11-02', 'asap', refDateNoon)).toBe(true);
     });
 
-    it('rejects asap today after closing time (9:00 PM)', () => {
+    it('rejects asap today after closing time (8:00 PM on Monday)', () => {
       expect(isPickupTimeValid('2026-11-02', 'asap', refDateLate)).toBe(false);
     });
 
     it('accepts future time slots today', () => {
-      // At 12:30 PM, 1:00 PM and later are valid
+      // At 12:30 PM on Monday, 1:00 PM and 5:30 PM are valid
       expect(isPickupTimeValid('2026-11-02', '1:00 PM', refDateNoon)).toBe(true);
       expect(isPickupTimeValid('2026-11-02', '5:30 PM', refDateNoon)).toBe(true);
+      expect(isPickupTimeValid('2026-11-02', '8:00 PM', refDateNoon)).toBe(true);
     });
 
     it('rejects past time slots today', () => {
@@ -122,10 +137,19 @@ describe('pickupSelection', () => {
       expect(isPickupTimeValid('2026-11-02', '12:00 PM', refDateNoon)).toBe(false);
     });
 
-    it('accepts any valid time slot for tomorrow', () => {
+    it('accepts valid time slots within daily closing limits', () => {
+      // Tuesday 2026-11-03 closes at 8:00 PM
       expect(isPickupTimeValid('2026-11-03', '11:00 AM', refDateNoon)).toBe(true);
-      expect(isPickupTimeValid('2026-11-03', '11:30 AM', refDateNoon)).toBe(true);
-      expect(isPickupTimeValid('2026-11-03', '8:30 PM', refDateNoon)).toBe(true);
+      expect(isPickupTimeValid('2026-11-03', '8:00 PM', refDateNoon)).toBe(true);
+      expect(isPickupTimeValid('2026-11-03', '8:30 PM', refDateNoon)).toBe(false);
+
+      // Friday 2026-11-06 closes at 8:30 PM
+      expect(isPickupTimeValid('2026-11-06', '8:30 PM', refDateNoon)).toBe(true);
+      expect(isPickupTimeValid('2026-11-06', '9:00 PM', refDateNoon)).toBe(false);
+
+      // Sunday 2026-11-08 closes at 6:00 PM
+      expect(isPickupTimeValid('2026-11-08', '6:00 PM', refDateNoon)).toBe(true);
+      expect(isPickupTimeValid('2026-11-08', '6:30 PM', refDateNoon)).toBe(false);
     });
 
     it('rejects out of bounds or non-30-minute intervals', () => {

@@ -1,28 +1,45 @@
 import {
   getRestaurantTodayDateString,
   getRestaurantNowParts,
+  getCalendarDayOfWeek,
 } from './reservationDates';
 
 export const PICKUP_DATE_STORAGE_KEY = 'pickupDate';
 export const PICKUP_TIME_STORAGE_KEY = 'pickupTime';
 
 export const OPENING_HOUR = 11;
-export const CLOSING_HOUR = 21; // 9:00 PM
 export const MAX_PICKUP_ADVANCE_DAYS = 90;
 
+export function getPickupClosingTime(dayOfWeek: number): { hour: number; minute: number } {
+  if (dayOfWeek === 0) {
+    // Sunday: 6:00 PM
+    return { hour: 18, minute: 0 };
+  }
+  if (dayOfWeek === 5 || dayOfWeek === 6) {
+    // Friday & Saturday: 8:30 PM
+    return { hour: 20, minute: 30 };
+  }
+  // Monday - Thursday: 8:00 PM
+  return { hour: 20, minute: 0 };
+}
+
 /**
- * Generates available 30-minute pickup time slots from 11:00 AM to 9:00 PM.
+ * Generates available 30-minute pickup time slots for a given date string (YYYY-MM-DD).
+ * If dateStr is omitted, defaults to the restaurant's latest weekly closing (8:30 PM).
  */
-export function generatePickupTimeSlots(): string[] {
+export function generatePickupTimeSlots(dateStr?: string | null): string[] {
+  const dayOfWeek = dateStr ? getCalendarDayOfWeek(dateStr) : -1;
+  const closing = dayOfWeek !== -1 ? getPickupClosingTime(dayOfWeek) : { hour: 20, minute: 30 };
+  const closingMinutes = closing.hour * 60 + closing.minute;
+
   const slots: string[] = [];
-  for (let hour = OPENING_HOUR; hour <= CLOSING_HOUR; hour++) {
-    for (const minute of [0, 30]) {
-      if (hour === CLOSING_HOUR && minute === 30) break;
-      const displayHour = hour > 12 ? hour - 12 : hour;
-      const ampm = hour >= 12 ? 'PM' : 'AM';
-      const minStr = String(minute).padStart(2, '0');
-      slots.push(`${displayHour}:${minStr} ${ampm}`);
-    }
+  for (let minutes = OPENING_HOUR * 60; minutes <= closingMinutes; minutes += 30) {
+    const hour = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+    const displayHour = hour > 12 ? hour - 12 : hour;
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const minStr = String(minute).padStart(2, '0');
+    slots.push(`${displayHour}:${minStr} ${ampm}`);
   }
   return slots;
 }
@@ -97,8 +114,12 @@ export function isTimeSlotInPast(
   const nowParts = getRestaurantNowParts(referenceDate);
   const nowMinutes = nowParts.hour * 60 + nowParts.minute;
 
+  const dayOfWeek = getCalendarDayOfWeek(dateStr);
+  const closing = dayOfWeek !== -1 ? getPickupClosingTime(dayOfWeek) : { hour: 20, minute: 0 };
+  const closingMinutes = closing.hour * 60 + closing.minute;
+
   if (slot.trim().toLowerCase() === 'asap') {
-    return nowMinutes > CLOSING_HOUR * 60;
+    return nowMinutes > closingMinutes;
   }
 
   const slotMinutes = parseTimeSlotToMinutes(slot);
@@ -108,7 +129,7 @@ export function isTimeSlotInPast(
 
 /**
  * Validates whether a pickup time selection is valid for the given pickup date.
- * Rejects unrecognized slots, times outside 11:00 AM - 9:00 PM, and slots in the past for today.
+ * Rejects unrecognized slots, times outside operating hours, and slots in the past for today.
  */
 export function isPickupTimeValid(
   dateStr?: string | null,
@@ -126,7 +147,11 @@ export function isPickupTimeValid(
   const todayStr = getRestaurantTodayDateString(referenceDate);
   const nowParts = getRestaurantNowParts(referenceDate);
   const nowMinutes = nowParts.hour * 60 + nowParts.minute;
-  const closingMinutes = CLOSING_HOUR * 60; // 21:00
+
+  const dayOfWeek = getCalendarDayOfWeek(dateStr!);
+  const closing = dayOfWeek !== -1 ? getPickupClosingTime(dayOfWeek) : { hour: 20, minute: 0 };
+  const closingMinutes = closing.hour * 60 + closing.minute;
+  const openingMinutes = OPENING_HOUR * 60;
 
   const isToday = dateStr === todayStr;
 
@@ -140,7 +165,6 @@ export function isPickupTimeValid(
   const slotMinutes = parseTimeSlotToMinutes(trimmedTime);
   if (slotMinutes === null) return false;
 
-  const openingMinutes = OPENING_HOUR * 60; // 11:00
   if (slotMinutes < openingMinutes || slotMinutes > closingMinutes) {
     return false;
   }

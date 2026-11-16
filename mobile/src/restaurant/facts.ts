@@ -21,7 +21,8 @@ export const restaurantFacts = {
     'Friday – Saturday: 9:00 AM – 8:30 PM',
     'Sunday: 10:00 AM – 6:00 PM',
   ],
-  pickupHours: 'Pickup ordering: 11:00 AM – 9:00 PM',
+  pickupHours:
+    'Pickup ordering: Mon–Thu 11:00 AM – 8:00 PM, Fri–Sat 11:00 AM – 8:30 PM, Sun 11:00 AM – 6:00 PM',
   paymentNote:
     'You will pay for your order at the restaurant when you arrive for pick-up. Cash, credit, and debit cards are accepted on-site.',
 } as const;

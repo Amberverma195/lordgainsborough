@@ -35,7 +35,7 @@ export default function MenuPage() {
   const [pickupCollapsed, setPickupCollapsed] = useState(false);
   const { addToCart } = useCart();
 
-  const timeSlots = useMemo(() => generatePickupTimeSlots(), []);
+  const timeSlots = useMemo(() => generatePickupTimeSlots(pickupDate), [pickupDate]);
   const todayString = useMemo(() => getRestaurantTodayDateString(), []);
   const pickupAvailable = pickupOrdersEnabled && !pickupDisabledForUser;
   const pickupReady = pickupAvailable && pickupDate !== '' && pickupTime !== '';

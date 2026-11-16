@@ -1,7 +1,35 @@
 export const RESTAURANT_TIMEZONE = 'America/Toronto';
 export const OPENING_MINUTES = 11 * 60;
-export const CLOSING_MINUTES = 21 * 60;
 export const MAX_PICKUP_ADVANCE_DAYS = 90;
+
+export function getCalendarDayOfWeek(dateStr: string): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return -1;
+  }
+  const [year, month, day] = dateStr.split('-').map((part) => Number.parseInt(part, 10));
+  const utc = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return utc.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+}
+
+export function getPickupClosingMinutes(dayOfWeek: number): number {
+  if (dayOfWeek === 0) {
+    // Sunday: 6:00 PM
+    return 18 * 60;
+  }
+  if (dayOfWeek === 5 || dayOfWeek === 6) {
+    // Friday & Saturday: 8:30 PM
+    return 20 * 60 + 30;
+  }
+  // Monday - Thursday: 8:00 PM
+  return 20 * 60;
+}
+
+export function getPickupClosingLabel(dayOfWeek: number): string {
+  const minutes = getPickupClosingMinutes(dayOfWeek);
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return formatPickupSlot(hour, minute);
+}
 
 export interface RestaurantNow {
   date: string;
@@ -60,15 +88,14 @@ export function formatPickupSlot(hour: number, minute: number): string {
   return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
 }
 
-export function generatePickupTimeSlots(): string[] {
+export function generatePickupTimeSlots(dateStr?: string): string[] {
+  const dayOfWeek = dateStr ? getCalendarDayOfWeek(dateStr) : -1;
+  const closingMinutes = dayOfWeek !== -1 ? getPickupClosingMinutes(dayOfWeek) : 20 * 60 + 30;
   const slots: string[] = [];
-  for (let hour = 11; hour <= 21; hour += 1) {
-    for (const minute of [0, 30]) {
-      if (hour === 21 && minute === 30) {
-        continue;
-      }
-      slots.push(formatPickupSlot(hour, minute));
-    }
+  for (let minutes = OPENING_MINUTES; minutes <= closingMinutes; minutes += 30) {
+    const hour = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+    slots.push(formatPickupSlot(hour, minute));
   }
   return slots;
 }
@@ -101,7 +128,8 @@ export function isAsapAllowed(dateStr: string, reference: Date = new Date()): bo
   if (dateStr !== now.date) {
     return true;
   }
-  return now.minutes <= CLOSING_MINUTES;
+  const dayOfWeek = getCalendarDayOfWeek(dateStr);
+  return now.minutes <= getPickupClosingMinutes(dayOfWeek);
 }
 
 export function isPickupTimeValid(
@@ -115,14 +143,17 @@ export function isPickupTimeValid(
   const trimmed = timeStr.trim();
   const now = restaurantNow(reference);
   const isToday = dateStr === now.date;
+  const dayOfWeek = getCalendarDayOfWeek(dateStr);
+  const closingMinutes = getPickupClosingMinutes(dayOfWeek);
+
   if (trimmed.toLowerCase() === 'asap') {
-    return !isToday || now.minutes <= CLOSING_MINUTES;
+    return !isToday || now.minutes <= closingMinutes;
   }
   const slotMinutes = parseTimeSlotToMinutes(trimmed);
   if (slotMinutes === null || slotMinutes % 30 !== 0) {
     return false;
   }
-  if (slotMinutes < OPENING_MINUTES || slotMinutes > CLOSING_MINUTES) {
+  if (slotMinutes < OPENING_MINUTES || slotMinutes > closingMinutes) {
     return false;
   }
   if (isToday) {
@@ -132,7 +163,7 @@ export function isPickupTimeValid(
 }
 
 export function pickupChoices(dateStr: string, reference: Date = new Date()): string[] {
-  const slots = generatePickupTimeSlots().filter((slot) => isPickupTimeValid(dateStr, slot, reference));
+  const slots = generatePickupTimeSlots(dateStr).filter((slot) => isPickupTimeValid(dateStr, slot, reference));
   return isAsapAllowed(dateStr, reference) ? ['asap', ...slots] : slots;
 }
 
@@ -189,11 +220,14 @@ export function describePickupIssue(
   if (!timeStr.trim()) {
     return { code: 'INVALID_PICKUP_TIME', message: 'Choose a pickup time.' };
   }
+  const dayOfWeek = getCalendarDayOfWeek(dateStr);
+  const closingLabel = getPickupClosingLabel(dayOfWeek);
+
   if (timeStr.trim().toLowerCase() === 'asap') {
     if (!isAsapAllowed(dateStr, reference)) {
       return {
         code: 'PICKUP_TIME_CLOSED',
-        message: 'Pickup orders are closed for today. Operating hours are 11:00 AM to 9:00 PM.',
+        message: `Pickup orders are closed for today. Operating hours are 11:00 AM to ${closingLabel}.`,
       };
     }
     return null;
@@ -206,7 +240,7 @@ export function describePickupIssue(
     }
     return {
       code: 'INVALID_PICKUP_TIME',
-      message: 'Pickup time must be between 11:00 AM and 9:00 PM in 30-minute intervals, or as soon as possible.',
+      message: `Pickup time must be between 11:00 AM and ${closingLabel} in 30-minute intervals, or as soon as possible.`,
     };
   }
   return null;
