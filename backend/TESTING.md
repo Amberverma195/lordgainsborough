@@ -12,6 +12,13 @@ shared database. The harness verifies the PostgreSQL major version and requires
 either the previously owned disposable cluster directory or an explicit isolation
 attestation before allowing database creation.
 
+The Railway startup wrapper is covered by `RailwayPostgresCaStartScriptTest`. It does
+not connect to PostgreSQL:
+
+```powershell
+.\mvnw.cmd -Dtest=RailwayPostgresCaStartScriptTest test
+```
+
 From `backend`, run:
 
 ```powershell

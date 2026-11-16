@@ -3,12 +3,20 @@
 ## PostgreSQL verified TLS
 
 Remote PostgreSQL connections default to `DB_SSL_MODE=verify-full`. Set `DB_HOST`
-to the provider's certificate-matching DNS hostname and mount the provider's CA
-certificate bundle into the backend runtime. Set `DB_SSL_ROOT_CERT` to that readable
-file's absolute path, for example `/run/certificates/postgresql-provider-ca.pem`.
-Obtain the CA from the database provider over its authenticated HTTPS dashboard or
-documentation; do not trust a certificate captured from an unverified connection.
-Certificate contents are not committed to this repository.
+to the provider's certificate-matching DNS hostname. On Railway, the service start
+command is `sh scripts/railway-start.sh` followed by the existing Java command
+(`java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar`). The wrapper
+reads the Base64-encoded PEM certificate from `DB_SSL_ROOT_CERT_BASE64`, decodes it
+to `/tmp/postgres-ca.pem` with mode `0600`, exports `DB_SSL_ROOT_CERT` to that
+path and `DB_SSL_MODE=verify-full`, then executes those Java arguments unchanged.
+
+Missing, blank, non-Base64, non-PEM, private-key, oversized, or cryptographically
+invalid certificate data exits before Java starts. An explicit `DB_SSL_MODE` other
+than `verify-full`, or a `SPRING_DATASOURCE_URL` whose `sslmode` is not
+`verify-full`, also exits before Java starts. Obtain the CA from the Supabase
+dashboard under Database settings, SSL configuration. Do not trust a certificate
+captured from an unverified connection. Do not commit the certificate or its
+Base64 value.
 
 Startup validates the effective Hikari/pgJDBC settings before Flyway or Hibernate
 connects. Remote hosts reject `disable`, `allow`, `prefer`, `require`, `verify-ca`,
@@ -22,10 +30,10 @@ For an explicitly local development/test database, use `DB_HOST=127.0.0.1` and
 `localhost`; private-network and remote database hosts still require verified TLS.
 The legacy `postgres-migration` profile inherits the same secure defaults.
 
-If verification fails, fix the CA mount or use the correct database hostname.
-Do not work around a certificate error by weakening `sslmode` or adding a
+If verification fails, replace the CA data or use the certificate-matching database
+hostname. Do not work around a certificate error by weakening `sslmode` or adding a
 non-validating SSL factory. Existing deployments with `DB_SSL_MODE=prefer` must
-update their mode and install the provider CA before restarting with this change.
+set `verify-full` and `DB_SSL_ROOT_CERT_BASE64` before restarting with this change.
 
 ## Signup OTP observability
 

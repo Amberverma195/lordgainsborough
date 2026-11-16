@@ -35,10 +35,12 @@ ABUSE_IP_HASH_SECRET=
 # SOCKETIO_ORIGIN=http://localhost:3000
 # DB_PORT=5432
 # DB_SSL_MODE=verify-full
-# DB_SSL_ROOT_CERT=/run/certificates/postgresql-provider-ca.pem
-# Remote DB_HOST must match the server certificate's DNS name. Mount the provider's
-# CA file in the backend container; DB_SSL_ROOT_CERT is a path, not certificate text.
-# Weaker SSL modes are rejected at startup for every non-loopback host.
+# DB_SSL_ROOT_CERT_BASE64=
+# Railway startup decodes DB_SSL_ROOT_CERT_BASE64 to /tmp/postgres-ca.pem (mode 0600)
+# and exports DB_SSL_ROOT_CERT to that path before the existing Java command runs.
+# The value is Base64 of the PEM CA from the Supabase dashboard, not a file path.
+# Remote DB_HOST must match the server certificate's DNS name.
+# Weaker SSL modes are rejected before Java starts and again by PostgresTlsPolicy.
 # JWT_EXPIRATION=86400000
 # ORDER_TRACKING_TOKEN_SECRET=a-separate-order-secret-optional
 # MANAGEMENT_SERVER_PORT=8083

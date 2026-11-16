@@ -37,8 +37,9 @@ This project consists of a Next.js frontend and a Java Spring Boot backend.
    Flyway applies the versioned schema; Hibernate validates it. No migration profile
    or persistence feature switches are required.
    Remote databases require `DB_SSL_MODE=verify-full` (the default), a certificate-matching
-   `DB_HOST`, and `DB_SSL_ROOT_CERT` pointing to the provider CA file. Only loopback
-   development/test databases may explicitly use `DB_SSL_MODE=disable`.
+   `DB_HOST`, and `DB_SSL_ROOT_CERT` pointing to the provider CA file. Railway startup
+   decodes `DB_SSL_ROOT_CERT_BASE64` to `/tmp/postgres-ca.pem` and sets that path before
+   launching Java. Only loopback development/test databases may explicitly use `DB_SSL_MODE=disable`.
 3. Run with the Maven wrapper (Java 21 or newer):
    ```powershell
    .\mvnw.cmd spring-boot:run
