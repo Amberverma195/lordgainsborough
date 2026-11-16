@@ -4,8 +4,9 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { AppState, type AppStateStatus, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { focusManager, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { fetchMenu } from '../api/catalog';
@@ -34,6 +35,14 @@ export default function RootLayout() {
     Inter_600SemiBold,
   });
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (Platform.OS !== 'web') {
+        focusManager.setFocused(status === 'active');
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   if (!loaded && !error) {
     return null;

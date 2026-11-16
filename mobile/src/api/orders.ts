@@ -88,6 +88,32 @@ export async function fetchOrder(
   return parsed.value;
 }
 
+export async function fetchOrderSocketTicket(
+  id: string,
+  token?: string | null,
+  trackingToken?: string | null,
+): Promise<string | null> {
+  const headers: Record<string, string> = {};
+  if (trackingToken) {
+    headers[TRACKING_TOKEN_HEADER] = trackingToken;
+  }
+  try {
+    const response = await apiRequest(`/api/orders/${encodeURIComponent(id)}/socket-ticket`, {
+      token: token || undefined,
+      headers,
+    });
+    if (response.body && typeof response.body === 'object' && 'ticket' in response.body) {
+      const ticket = (response.body as { ticket?: unknown }).ticket;
+      if (typeof ticket === 'string' && ticket.trim().length > 0) {
+        return ticket.trim();
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ServerCartItem {
   menuItemId: string;
   name: string;

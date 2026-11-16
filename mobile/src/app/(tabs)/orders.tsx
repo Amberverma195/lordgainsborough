@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef } from 'react';
+import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { fetchOrderHistory } from '../../api/orders';
 import { ApiError } from '../../api/errors';
@@ -14,6 +15,7 @@ import { ErrorState, LoadingState } from '../../components/States';
 import { StatusBadge } from '../../components/StatusBadge';
 import { formatPickupDateLabel, formatPickupTimeLabel } from '../../checkout/pickup';
 import { formatOrderReference } from '../../format/display';
+import { isActiveOrderStatus } from '../../order/status';
 import { colors, space, type } from '../../theme/tokens';
 
 export default function OrdersScreen() {
@@ -22,10 +24,37 @@ export default function OrdersScreen() {
     queryKey: ['orders', user?.email],
     queryFn: () => fetchOrderHistory(user!.token),
     enabled: status === 'signedIn' && !!user,
+    refetchInterval: (query) => {
+      const list = query.state.data;
+      const hasActive = list?.some((o) => isActiveOrderStatus(o.status)) ?? false;
+      return hasActive ? 10_000 : 30_000;
+    },
+    refetchIntervalInBackground: false,
   });
 
+  const refetchRef = useRef(orders.refetch);
+  refetchRef.current = orders.refetch;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (status === 'signedIn' && user) {
+        void refetchRef.current();
+      }
+    }, [status, user]),
+  );
+
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={orders.isRefetching}
+          onRefresh={() => void orders.refetch()}
+          tintColor={colors.gold}
+          colors={[colors.gold]}
+        />
+      }
+    >
       <AppHeader title="Orders" eyebrow="Pickup" />
       {status === 'loading' ? <LoadingState label="Restoring your session" /> : null}
       {status === 'unreachable' ? (

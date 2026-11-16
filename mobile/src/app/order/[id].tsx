@@ -1,10 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { fetchOrder } from '../../api/orders';
 import { ApiError } from '../../api/errors';
+import { CustomerOrderView } from '../../api/parse';
 import { useAuth } from '../../auth/AuthContext';
 import { readTrackingToken } from '../../auth/secureSession';
 import { readConfirmedOrder } from '../../checkout/confirmationCache';
@@ -18,6 +19,8 @@ import { ErrorState, LoadingState } from '../../components/States';
 import { StatusBadge } from '../../components/StatusBadge';
 import { formatMoney } from '../../cart/money';
 import { formatOrderReference } from '../../format/display';
+import { isActiveOrderStatus } from '../../order/status';
+import { useOrderRealtime } from '../../order/useOrderRealtime';
 import { colors, space, type } from '../../theme/tokens';
 
 export default function OrderDetailScreen() {
@@ -25,6 +28,7 @@ export default function OrderDetailScreen() {
   const orderId = Array.isArray(params.id) ? params.id[0] : params.id;
   const confirmed = params.confirmed === '1';
   const { user, status } = useAuth();
+  const queryClient = useQueryClient();
   const [trackingToken, setTrackingToken] = useState<string | null>(null);
   const cached = orderId ? readConfirmedOrder(orderId, user?.email) : null;
 
@@ -39,12 +43,58 @@ export default function OrderDetailScreen() {
     queryKey: ['order', orderId, user?.email],
     queryFn: () => fetchOrder(orderId, user!.token, trackingToken),
     enabled: status === 'signedIn' && !!user && !!orderId,
+    refetchInterval: (query) => {
+      const orderStatus = query.state.data?.status ?? cached?.status;
+      return isActiveOrderStatus(orderStatus) ? 5_000 : false;
+    },
+    refetchIntervalInBackground: false,
   });
-  const display = order.data ?? cached;
 
+  const display = order.data ?? cached;
+  const refetchRef = useRef(order.refetch);
+  refetchRef.current = order.refetch;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (status === 'signedIn' && user && orderId) {
+        void refetchRef.current();
+      }
+    }, [orderId, status, user]),
+  );
+
+  const handleConnect = useCallback(() => {
+    void refetchRef.current();
+  }, []);
+
+  const handleOrderUpdated = useCallback(
+    (updatedOrder: CustomerOrderView) => {
+      queryClient.setQueryData(['order', orderId, user?.email], updatedOrder);
+      void queryClient.invalidateQueries({ queryKey: ['orders', user?.email] });
+    },
+    [orderId, queryClient, user?.email],
+  );
+
+  useOrderRealtime({
+    orderId,
+    token: user?.token,
+    trackingToken,
+    enabled: status === 'signedIn' && !!orderId,
+    onConnect: handleConnect,
+    onOrderUpdated: handleOrderUpdated,
+  });
 
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={order.isRefetching}
+          onRefresh={() => void order.refetch()}
+          tintColor={colors.gold}
+          colors={[colors.gold]}
+        />
+      }
+    >
       <AppHeader title={confirmed ? 'Confirmed' : 'Order'} showBack />
       {order.isLoading && !display ? <LoadingState label="Loading your order" /> : null}
       {!display && !order.isLoading && !order.isError ? (

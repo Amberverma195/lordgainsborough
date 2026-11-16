@@ -1,3 +1,5 @@
+export { isActiveOrderStatus } from '../order/status';
+
 export function formatOrderReference(id: string): string {
   return `ORD-${id.slice(-6).toUpperCase()}`;
 }

@@ -1,4 +1,5 @@
 export const DEFAULT_API_ORIGIN = 'http://localhost:8082';
+export const DEFAULT_SOCKET_ORIGIN = 'http://localhost:9092';
 
 export interface RuntimeHost {
   platform: string;

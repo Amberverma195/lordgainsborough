@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactElement, ReactNode } from 'react';
 import { ScrollView, StyleSheet, View, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,10 +8,12 @@ export function Screen({
   children,
   scroll = false,
   padded = true,
+  refreshControl,
 }: {
   children: ReactNode;
   scroll?: boolean;
   padded?: boolean;
+  refreshControl?: ReactElement;
 }) {
   const insets = useSafeAreaInsets();
   const contentStyle: ViewStyle[] = [
@@ -21,7 +23,12 @@ export function Screen({
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       {scroll ? (
-        <ScrollView contentContainerStyle={contentStyle} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={contentStyle}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          refreshControl={refreshControl}
+        >
           {children}
         </ScrollView>
       ) : (
