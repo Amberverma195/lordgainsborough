@@ -29,6 +29,7 @@ const storage = {
   getItem: (key: string) => AsyncStorage.getItem(key),
   setItem: (key: string, value: string) => AsyncStorage.setItem(key, value),
   removeItem: (key: string) => AsyncStorage.removeItem(key),
+  getAllKeys: () => AsyncStorage.getAllKeys(),
 };
 
 export default function CheckoutScreen() {
@@ -80,6 +81,7 @@ export default function CheckoutScreen() {
           specialInstructions: instructions,
         }),
         () => Crypto.randomUUID(),
+        user.email,
       );
       const created = await createOrder(user.token, {
         customerName: user.name,
@@ -103,13 +105,13 @@ export default function CheckoutScreen() {
           // The order is already confirmed. A missing local recovery token can be replaced by the account session.
         }
       }
-      await clearCheckoutIdempotencyKey(storage);
+      await clearCheckoutIdempotencyKey(storage, user.email);
       clear();
       confirmed = true;
       router.replace(`/order/${created.order.id}?confirmed=1`);
     } catch (requestError) {
       if (requestError instanceof ApiError && shouldClearIdempotencyKey(requestError.code)) {
-        await clearCheckoutIdempotencyKey(storage);
+        await clearCheckoutIdempotencyKey(storage, user?.email);
       }
       setError(requestError instanceof ApiError
         ? requestError.message

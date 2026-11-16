@@ -91,4 +91,21 @@ describe('Order Idempotency Helpers', () => {
     expect(sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE)).toBeNull();
     expect(sessionStorage.getItem(CHECKOUT_CART_FINGERPRINT_STORAGE)).toBeNull();
   });
+
+  it('scopes idempotency keys per user account so users switching accounts do not conflict', () => {
+    const cart = [{ id: 'dish-1', quantity: 1 }];
+    const aliceKey = getOrCreateCheckoutIdempotencyKey(cart, 'alice@example.com');
+    const bobKey = getOrCreateCheckoutIdempotencyKey(cart, 'bob@example.com');
+
+    expect(aliceKey).toBeTruthy();
+    expect(bobKey).toBeTruthy();
+    expect(bobKey).not.toBe(aliceKey);
+
+    // Alice still gets her own key on retry
+    expect(getOrCreateCheckoutIdempotencyKey(cart, 'alice@example.com')).toBe(aliceKey);
+
+    // Clearing Alice's key does not remove Bob's key
+    clearCheckoutIdempotencyKey('alice@example.com');
+    expect(getOrCreateCheckoutIdempotencyKey(cart, 'bob@example.com')).toBe(bobKey);
+  });
 });

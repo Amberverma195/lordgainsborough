@@ -132,7 +132,7 @@ export default function CheckoutPage() {
         return;
       }
 
-      const idempotencyKey = getOrCreateCheckoutIdempotencyKey(cart);
+      const idempotencyKey = getOrCreateCheckoutIdempotencyKey(cart, profile.email);
       const tax = cartTotal * settings.taxRate;
       const payload = {
         customerName: `${profile.firstName.trim()} ${profile.lastName.trim()}`.trim(),
@@ -192,7 +192,7 @@ export default function CheckoutPage() {
       }
 
       if (res.status === 409) {
-        clearCheckoutIdempotencyKey();
+        clearCheckoutIdempotencyKey(profile.email);
         setError(typeof data?.message === 'string'
           ? data.message
           : 'An order conflict occurred. Please review your cart and try again.');
@@ -215,7 +215,7 @@ export default function CheckoutPage() {
         storeTrackingToken(order.id, data.trackingToken);
       }
 
-      clearCheckoutIdempotencyKey();
+      clearCheckoutIdempotencyKey(profile.email);
       clearCart();
       clearPickupSelections();
       completed = true;

@@ -209,14 +209,36 @@ export function getCartFingerprint(items: { id?: string; menuItemId?: string; qu
     .join('|');
 }
 
-export function getOrCreateCheckoutIdempotencyKey(cart: { id?: string; menuItemId?: string; quantity: number }[]): string {
+export function getCheckoutIdempotencyStorageKey(email?: string | null): string {
+  if (!email || !email.trim()) {
+    return CHECKOUT_IDEMPOTENCY_KEY_STORAGE;
+  }
+  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  return `${CHECKOUT_IDEMPOTENCY_KEY_STORAGE}_${normalized}`;
+}
+
+export function getCheckoutFingerprintStorageKey(email?: string | null): string {
+  if (!email || !email.trim()) {
+    return CHECKOUT_CART_FINGERPRINT_STORAGE;
+  }
+  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  return `${CHECKOUT_CART_FINGERPRINT_STORAGE}_${normalized}`;
+}
+
+export function getOrCreateCheckoutIdempotencyKey(
+  cart: { id?: string; menuItemId?: string; quantity: number }[],
+  accountEmail?: string | null
+): string {
   if (typeof sessionStorage === 'undefined') {
     return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `lgb-${Date.now()}`;
   }
   try {
+    const keyStorageName = getCheckoutIdempotencyStorageKey(accountEmail);
+    const fingerprintStorageName = getCheckoutFingerprintStorageKey(accountEmail);
+
     const currentFingerprint = getCartFingerprint(cart);
-    const savedFingerprint = sessionStorage.getItem(CHECKOUT_CART_FINGERPRINT_STORAGE);
-    const savedKey = sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE);
+    const savedFingerprint = sessionStorage.getItem(fingerprintStorageName);
+    const savedKey = sessionStorage.getItem(keyStorageName);
 
     if (savedKey && savedFingerprint === currentFingerprint) {
       return savedKey;
@@ -225,17 +247,21 @@ export function getOrCreateCheckoutIdempotencyKey(cart: { id?: string; menuItemI
     const newKey = typeof crypto !== 'undefined' && crypto.randomUUID
       ? crypto.randomUUID()
       : `lgb-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    sessionStorage.setItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE, newKey);
-    sessionStorage.setItem(CHECKOUT_CART_FINGERPRINT_STORAGE, currentFingerprint);
+    sessionStorage.setItem(keyStorageName, newKey);
+    sessionStorage.setItem(fingerprintStorageName, currentFingerprint);
     return newKey;
   } catch {
     return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `lgb-${Date.now()}`;
   }
 }
 
-export function clearCheckoutIdempotencyKey(): void {
+export function clearCheckoutIdempotencyKey(accountEmail?: string | null): void {
   if (typeof sessionStorage === 'undefined') return;
   try {
+    const keyStorageName = getCheckoutIdempotencyStorageKey(accountEmail);
+    const fingerprintStorageName = getCheckoutFingerprintStorageKey(accountEmail);
+    sessionStorage.removeItem(keyStorageName);
+    sessionStorage.removeItem(fingerprintStorageName);
     sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_KEY_STORAGE);
     sessionStorage.removeItem(CHECKOUT_CART_FINGERPRINT_STORAGE);
   } catch {

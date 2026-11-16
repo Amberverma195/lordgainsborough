@@ -6,7 +6,12 @@ import { onUnauthorized } from '../api/client';
 import { ApiError } from '../api/errors';
 import { SessionUser } from '../api/parse';
 import { clearAllConfirmedOrders } from '../checkout/confirmationCache';
-import { CHECKOUT_FINGERPRINT_KEY, CHECKOUT_IDEMPOTENCY_KEY } from '../checkout/idempotency';
+import {
+  CHECKOUT_FINGERPRINT_KEY,
+  CHECKOUT_IDEMPOTENCY_KEY,
+  clearAllCheckoutIdempotencyKeys,
+  clearCheckoutIdempotencyKey,
+} from '../checkout/idempotency';
 import { queryClient } from '../query/client';
 import { clearSessionToken, readSessionToken, writeSessionToken } from './secureSession';
 import { shouldClearStoredSession } from './session';
@@ -28,17 +33,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
 
   const clearLocalSession = useCallback(async () => {
+    const priorEmail = user?.email;
     await clearSessionToken();
     clearAllConfirmedOrders();
     queryClient.clear();
     try {
-      await AsyncStorage.multiRemove([CHECKOUT_IDEMPOTENCY_KEY, CHECKOUT_FINGERPRINT_KEY]);
+      if (priorEmail) {
+        await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
+      }
+      await clearAllCheckoutIdempotencyKeys(AsyncStorage);
     } catch {
       // Ignore storage cleanup failures
     }
     setUser(null);
     setStatus('signedOut');
-  }, []);
+  }, [user?.email]);
 
   const refresh = useCallback(async () => {
     const token = await readSessionToken();
@@ -106,6 +115,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const session = await login({ emailOrPhone, password });
       clearAllConfirmedOrders();
       queryClient.clear();
+      try {
+        await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+      } catch {
+        // Ignore storage cleanup failures
+      }
       await writeSessionToken(session.token);
       setUser(session);
       setStatus('signedIn');
