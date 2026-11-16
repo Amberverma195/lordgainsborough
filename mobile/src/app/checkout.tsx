@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { router } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { fetchStoreSettings } from '../api/catalog';
@@ -14,7 +14,7 @@ import { useCart } from '../cart/CartContext';
 import { formatMoney } from '../cart/money';
 import { rememberConfirmedOrder } from '../checkout/confirmationCache';
 import { checkoutFingerprint, clearCheckoutIdempotencyKey, createSubmitGuard, getOrCreateCheckoutIdempotencyKey } from '../checkout/idempotency';
-import { shouldClearIdempotencyKey, validateCheckout } from '../checkout/validate';
+import { isUncertainSubmission, shouldClearIdempotencyKey, UNCERTAIN_ORDER_MESSAGE, validateCheckout } from '../checkout/validate';
 import { AppHeader } from '../components/AppHeader';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -38,10 +38,38 @@ export default function CheckoutScreen() {
   const settings = useQuery({ queryKey: ['settings'], queryFn: ({ signal }) => fetchStoreSettings(signal) });
   const [instructions, setInstructions] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [uncertainSubmission, setUncertainSubmission] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const guard = useRef(createSubmitGuard()).current;
   const taxRate = settings.data?.taxRate;
   const totals = estimate(taxRate ?? 0);
+
+  const prevLinesRef = useRef(lines);
+  useEffect(() => {
+    if (prevLinesRef.current !== lines) {
+      prevLinesRef.current = lines;
+      if (uncertainSubmission) {
+        setUncertainSubmission(false);
+        setError(null);
+      }
+    }
+  }, [lines, uncertainSubmission]);
+
+  const handleInstructionsChange = (text: string) => {
+    setInstructions(text);
+    if (uncertainSubmission) {
+      setUncertainSubmission(false);
+      setError(null);
+    }
+  };
+
+  const handlePickupChange = (date: string, time: string) => {
+    setPickup(date, time);
+    if (uncertainSubmission) {
+      setUncertainSubmission(false);
+      setError(null);
+    }
+  };
 
   const placeOrder = async () => {
     if (!guard.begin()) {
@@ -113,9 +141,15 @@ export default function CheckoutScreen() {
       if (requestError instanceof ApiError && shouldClearIdempotencyKey(requestError.code)) {
         await clearCheckoutIdempotencyKey(storage, user?.email);
       }
-      setError(requestError instanceof ApiError
-        ? requestError.message
-        : 'We could not confirm the order. Please try again.');
+      if (isUncertainSubmission(requestError)) {
+        setUncertainSubmission(true);
+        setError(UNCERTAIN_ORDER_MESSAGE);
+      } else {
+        setUncertainSubmission(false);
+        setError(requestError instanceof ApiError
+          ? requestError.message
+          : 'We could not confirm the order. Please try again.');
+      }
     } finally {
       if (!confirmed) {
         guard.end();
@@ -160,11 +194,11 @@ export default function CheckoutScreen() {
           </View>
           <Text style={styles.note}>The restaurant recalculates prices, tax, and the total when the order is accepted.</Text>
         </Card>
-        <PickupPicker date={pickupDate} time={pickupTime} onChange={setPickup} />
+        <PickupPicker date={pickupDate} time={pickupTime} onChange={handlePickupChange} />
         <Text style={styles.label}>Special instructions</Text>
         <TextInput
           value={instructions}
-          onChangeText={setInstructions}
+          onChangeText={handleInstructionsChange}
           maxLength={500}
           multiline
           placeholder="Allergies, preferences, or notes for the kitchen"
@@ -179,16 +213,40 @@ export default function CheckoutScreen() {
           <Text style={styles.error}>Pickup orders are currently paused. Please check back later.</Text>
         ) : null}
         {user?.pickupDisabled ? <Text style={styles.error}>Pickup disabled due to recent no-show history</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {status !== 'signedIn' ? (
-          <Button label="Sign in to order" onPress={() => router.push('/auth/login')} />
+        {uncertainSubmission ? (
+          <View style={styles.uncertainCard}>
+            <Text style={styles.uncertainTitle}>Submission Status Uncertain</Text>
+            <Text style={styles.uncertainCopy}>{UNCERTAIN_ORDER_MESSAGE}</Text>
+            <View style={styles.uncertainActions}>
+              <Button
+                label="Check existing orders"
+                variant="primary"
+                onPress={() => router.push('/(tabs)/orders')}
+              />
+              <Button
+                label="I've checked, try again"
+                variant="secondary"
+                onPress={() => {
+                  setUncertainSubmission(false);
+                  setError(null);
+                }}
+              />
+            </View>
+          </View>
         ) : (
-          <Button
-            label="Place pickup order"
-            loading={submitting}
-            disabled={!settings.data || !settings.data.pickupOrdersEnabled || user?.pickupDisabled}
-            onPress={() => void placeOrder()}
-          />
+          <>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {status !== 'signedIn' ? (
+              <Button label="Sign in to order" onPress={() => router.push('/auth/login')} />
+            ) : (
+              <Button
+                label="Place pickup order"
+                loading={submitting}
+                disabled={!settings.data || !settings.data.pickupOrdersEnabled || user?.pickupDisabled}
+                onPress={() => void placeOrder()}
+              />
+            )}
+          </>
         )}
       </Screen>
     </KeyboardAvoidingView>
@@ -252,5 +310,29 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyMedium,
     lineHeight: 22,
     marginVertical: space.sm,
+  },
+  uncertainCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.goldBorder,
+    borderRadius: radius.md,
+    padding: space.lg,
+    marginVertical: space.md,
+    gap: space.sm,
+  },
+  uncertainTitle: {
+    color: colors.gold,
+    fontFamily: type.heading,
+    fontSize: 18,
+  },
+  uncertainCopy: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  uncertainActions: {
+    marginTop: space.sm,
+    gap: space.sm,
   },
 });

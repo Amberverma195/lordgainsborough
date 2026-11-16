@@ -1,5 +1,6 @@
+import { ApiError } from '../../api/errors';
 import { CartLine } from '../../cart/types';
-import { validateCheckout } from '../validate';
+import { isUncertainSubmission, validateCheckout } from '../validate';
 
 const line: CartLine = {
   menuItemId: 'pie',
@@ -51,5 +52,29 @@ describe('checkout validation', () => {
 
   it('blocks an unavailable line before it can be submitted', () => {
     expect(validateCheckout(draft({ lines: [{ ...line, available: false }] }))?.code).toBe('CART_ITEM_UNAVAILABLE');
+  });
+
+  it('correctly classifies uncertain order submission errors vs definitive rejections', () => {
+    // Network failures and connection drops are uncertain
+    expect(isUncertainSubmission(new ApiError({ status: 0, code: 'NETWORK_ERROR', message: 'Offline' }))).toBe(true);
+    expect(isUncertainSubmission(new TypeError('Network request failed'))).toBe(true);
+    expect(isUncertainSubmission(new Error('Connection timed out'))).toBe(true);
+
+    // Unconfirmed order responses and 5xx server errors are uncertain
+    expect(isUncertainSubmission(new ApiError({ status: 200, code: 'UNCONFIRMED_ORDER', message: 'Malformed order response' }))).toBe(true);
+    expect(isUncertainSubmission(new ApiError({ status: 500, code: 'INTERNAL_ERROR', message: 'Server crashed' }))).toBe(true);
+    expect(isUncertainSubmission(new ApiError({ status: 502, code: 'BAD_GATEWAY', message: 'Bad Gateway' }))).toBe(true);
+    expect(isUncertainSubmission(new ApiError({ status: 504, code: 'GATEWAY_TIMEOUT', message: 'Gateway Timeout' }))).toBe(true);
+
+    // Definitive client rejections are NOT uncertain
+    expect(isUncertainSubmission(new ApiError({ status: 400, code: 'EMPTY_CART', message: 'Empty' }))).toBe(false);
+    expect(isUncertainSubmission(new ApiError({ status: 400, code: 'INVALID_PICKUP_TIME', message: 'Invalid' }))).toBe(false);
+    expect(isUncertainSubmission(new ApiError({ status: 401, code: 'AUTHENTICATION_REQUIRED', message: 'Sign in' }))).toBe(false);
+    expect(isUncertainSubmission(new ApiError({ status: 403, code: 'PICKUP_DISABLED_NO_SHOW', message: 'Blocked' }))).toBe(false);
+    expect(isUncertainSubmission(new ApiError({ status: 429, code: 'RATE_LIMITED', message: 'Wait' }))).toBe(false);
+
+    // Null/undefined are not uncertain
+    expect(isUncertainSubmission(null)).toBe(false);
+    expect(isUncertainSubmission(undefined)).toBe(false);
   });
 });

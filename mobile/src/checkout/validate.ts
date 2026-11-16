@@ -1,3 +1,4 @@
+import { ApiError } from '../api/errors';
 import { CartLine, MAX_ITEM_QUANTITY, MAX_ORDER_TOTAL, MAX_TOTAL_QUANTITY } from '../cart/types';
 import { estimateTotals } from '../cart/money';
 import { describePickupIssue } from './pickup';
@@ -102,4 +103,23 @@ export function validateCheckout(draft: CheckoutDraft): CheckoutProblem | null {
 
 export function shouldClearIdempotencyKey(code: string): boolean {
   return code === 'IDEMPOTENT_PAYLOAD_MISMATCH';
+}
+
+export const UNCERTAIN_ORDER_MESSAGE =
+  'We could not confirm whether your order reached the kitchen. To avoid duplicate orders, please check your existing orders before trying again.';
+
+export function isUncertainSubmission(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    if (error.status === 0 || error.code === 'NETWORK_ERROR') {
+      return true;
+    }
+    if (error.code === 'UNCONFIRMED_ORDER') {
+      return true;
+    }
+    if (error.status >= 500) {
+      return true;
+    }
+    return false;
+  }
+  return error !== null && error !== undefined;
 }
