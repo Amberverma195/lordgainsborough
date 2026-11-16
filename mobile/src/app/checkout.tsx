@@ -49,6 +49,7 @@ export default function CheckoutScreen() {
     if (prevLinesRef.current !== lines) {
       prevLinesRef.current = lines;
       if (uncertainSubmission) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setUncertainSubmission(false);
         setError(null);
       }
@@ -128,7 +129,7 @@ export default function CheckoutScreen() {
       rememberConfirmedOrder(created.order);
       if (created.trackingToken) {
         try {
-          await writeTrackingToken(created.order.id, created.trackingToken);
+          await writeTrackingToken(created.order.id, created.trackingToken, user.email);
         } catch {
           // The order is already confirmed. A missing local recovery token can be replaced by the account session.
         }

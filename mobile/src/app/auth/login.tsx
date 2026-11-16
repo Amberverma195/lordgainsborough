@@ -2,7 +2,6 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { ApiError } from '../../api/errors';
 import { useAuth } from '../../auth/AuthContext';
 import { loginFailureMessage } from '../../auth/session';
 import { AppHeader } from '../../components/AppHeader';
@@ -81,7 +80,7 @@ export default function LoginScreen() {
         <Button label="Sign in" loading={submitting} onPress={() => void submit()} />
 
         <View style={styles.signupWrap}>
-          <Text style={styles.copySecondary}>Don't have an account?</Text>
+          <Text style={styles.copySecondary}>Don{"'"}t have an account?</Text>
           <Button label="Create account" variant="secondary" onPress={() => router.push('/auth/signup')} />
         </View>
       </Screen>

@@ -7,13 +7,11 @@ import { ApiError } from '../api/errors';
 import { SessionUser } from '../api/parse';
 import { clearAllConfirmedOrders } from '../checkout/confirmationCache';
 import {
-  CHECKOUT_FINGERPRINT_KEY,
-  CHECKOUT_IDEMPOTENCY_KEY,
   clearAllCheckoutIdempotencyKeys,
   clearCheckoutIdempotencyKey,
 } from '../checkout/idempotency';
 import { queryClient } from '../query/client';
-import { clearSessionToken, readSessionToken, writeSessionToken } from './secureSession';
+import { clearAccountTrackingTokens, clearSessionToken, readSessionToken, writeSessionToken } from './secureSession';
 import { shouldClearStoredSession } from './session';
 
 export type AuthStatus = 'loading' | 'signedIn' | 'signedOut' | 'unreachable';
@@ -42,8 +40,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       if (priorEmail) {
         await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
+        await clearAccountTrackingTokens(priorEmail);
       }
       await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+      await clearAccountTrackingTokens(null);
     } catch {
       // Ignore storage cleanup failures
     }
@@ -114,11 +114,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(async (emailOrPhone: string, password: string) => {
     try {
+      const priorEmail = user?.email;
       const session = await login({ emailOrPhone, password });
       clearAllConfirmedOrders();
       queryClient.clear();
       try {
+        if (priorEmail && priorEmail.trim().toLowerCase() !== session.email.trim().toLowerCase()) {
+          await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
+          await clearAccountTrackingTokens(priorEmail);
+        }
         await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+        await clearAccountTrackingTokens(null);
       } catch {
         // Ignore storage cleanup failures
       }
@@ -136,20 +142,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         message: 'We could not reach the restaurant. Check your connection and try again.',
       });
     }
-  }, []);
+  }, [user]);
 
   const establishSession = useCallback(async (session: SessionUser) => {
+    const priorEmail = user?.email;
     clearAllConfirmedOrders();
     queryClient.clear();
     try {
+      if (priorEmail && priorEmail.trim().toLowerCase() !== session.email.trim().toLowerCase()) {
+        await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
+        await clearAccountTrackingTokens(priorEmail);
+      }
       await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+      await clearAccountTrackingTokens(null);
     } catch {
       // Ignore storage cleanup failures
     }
     await writeSessionToken(session.token);
     setUser(session);
     setStatus('signedIn');
-  }, []);
+  }, [user]);
 
   const updateUser = useCallback(async (updatedUser: SessionUser) => {
     if (updatedUser.token) {

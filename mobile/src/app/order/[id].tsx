@@ -33,11 +33,25 @@ export default function OrderDetailScreen() {
   const cached = orderId ? readConfirmedOrder(orderId, user?.email) : null;
 
   useEffect(() => {
-    if (!orderId) {
-      return;
+    let cancelled = false;
+
+    if (!orderId || status !== 'signedIn' || !user?.email) {
+      return () => {
+        cancelled = true;
+      };
     }
-    void readTrackingToken(orderId).then(setTrackingToken);
-  }, [orderId]);
+
+    void readTrackingToken(orderId, user.email).then((token) => {
+      if (!cancelled) {
+        setTrackingToken(token);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      setTrackingToken(null);
+    };
+  }, [orderId, status, user?.email]);
 
   const order = useQuery({
     queryKey: ['order', orderId, user?.email],
@@ -52,7 +66,9 @@ export default function OrderDetailScreen() {
 
   const display = order.data ?? cached;
   const refetchRef = useRef(order.refetch);
-  refetchRef.current = order.refetch;
+  useEffect(() => {
+    refetchRef.current = order.refetch;
+  });
 
   useFocusEffect(
     useCallback(() => {

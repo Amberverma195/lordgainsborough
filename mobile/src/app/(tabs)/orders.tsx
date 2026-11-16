@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { fetchOrderHistory } from '../../api/orders';
@@ -33,7 +33,9 @@ export default function OrdersScreen() {
   });
 
   const refetchRef = useRef(orders.refetch);
-  refetchRef.current = orders.refetch;
+  useEffect(() => {
+    refetchRef.current = orders.refetch;
+  });
 
   useFocusEffect(
     useCallback(() => {
