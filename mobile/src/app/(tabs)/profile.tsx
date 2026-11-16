@@ -26,12 +26,9 @@ export default function ProfileScreen() {
       ) : null}
       {status === 'signedOut' ? (
         <View style={styles.gap}>
-          <Text style={styles.copy}>Sign in with the email or phone number on your Lord Gainsborough account.</Text>
+          <Text style={styles.copy}>Sign in or create an account with Lord Gainsborough.</Text>
           <Button label="Sign in" onPress={() => router.push('/auth/login')} />
-          <Text style={styles.note}>
-            Creating an account and resetting a password use the restaurant’s email verification.
-            The mobile screens for those flows are prepared for the next release and are not available yet.
-          </Text>
+          <Button label="Create account" variant="secondary" onPress={() => router.push('/auth/signup')} />
         </View>
       ) : null}
       {user ? (
@@ -50,6 +47,7 @@ export default function ProfileScreen() {
               The administrator dashboard and kitchen display stay on the website. This app is the customer pickup experience.
             </Text>
           ) : null}
+          <Button label="Edit profile" variant="secondary" onPress={() => router.push('/profile/edit')} />
           <Button label="View orders" variant="secondary" onPress={() => router.push('/(tabs)/orders')} />
           <Button label="Sign out" variant="ghost" onPress={() => void signOut()} />
         </View>

@@ -10,17 +10,24 @@ export function AppHeader({
   cartCount = 0,
   showBack = false,
   showCart = true,
+  onBack,
 }: {
   title: string;
   eyebrow?: string;
   cartCount?: number;
   showBack?: boolean;
   showCart?: boolean;
+  onBack?: () => void;
 }) {
   return (
     <View style={styles.row}>
       {showBack ? (
-        <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.back()} style={styles.iconButton}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={onBack ?? (() => router.back())}
+          style={styles.iconButton}
+        >
           <Ionicons name="chevron-back" size={22} color={colors.gold} />
         </Pressable>
       ) : (
@@ -53,37 +60,42 @@ export function AppHeader({
 
 const styles = StyleSheet.create({
   row: {
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingBottom: space.md,
-    gap: space.sm,
+    justifyContent: 'space-between',
+    marginBottom: space.lg,
   },
   center: {
     flex: 1,
     alignItems: 'center',
-  },
-  eyebrow: {
-    color: colors.gold,
-    fontFamily: type.label,
-    fontSize: 11,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
+    paddingHorizontal: space.sm,
   },
   title: {
     color: colors.text,
     fontFamily: type.heading,
     fontSize: 20,
+    letterSpacing: 0.5,
+  },
+  eyebrow: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 11,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 2,
   },
   iconButton: {
     width: 44,
     height: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
   badge: {
     position: 'absolute',
     top: 4,
-    right: 2,
+    right: 4,
     minWidth: 18,
     height: 18,
     borderRadius: 9,
@@ -96,5 +108,6 @@ const styles = StyleSheet.create({
     color: colors.background,
     fontFamily: type.label,
     fontSize: 10,
+    fontWeight: '700',
   },
 });

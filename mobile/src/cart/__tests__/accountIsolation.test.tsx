@@ -50,6 +50,8 @@ describe('Cart account isolation', () => {
       signIn: jest.fn(),
       signOut: jest.fn(),
       refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
     });
 
     render(
@@ -95,6 +97,8 @@ describe('Cart account isolation', () => {
       signIn: jest.fn(),
       signOut: jest.fn(),
       refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
     });
     mockFetchServerCart.mockResolvedValueOnce([]);
 
@@ -130,6 +134,8 @@ describe('Cart account isolation', () => {
       signIn: jest.fn(),
       signOut: jest.fn(),
       refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
     });
 
     render(
@@ -177,6 +183,8 @@ describe('Cart account isolation', () => {
       signIn: jest.fn(),
       signOut: jest.fn(),
       refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
     });
     mockFetchServerCart.mockResolvedValueOnce([
       {

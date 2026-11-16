@@ -18,10 +18,12 @@ import { shouldClearStoredSession } from './session';
 
 export type AuthStatus = 'loading' | 'signedIn' | 'signedOut' | 'unreachable';
 
-interface AuthContextValue {
+export interface AuthContextValue {
   status: AuthStatus;
   user: SessionUser | null;
   signIn: (emailOrPhone: string, password: string) => Promise<SessionUser>;
+  establishSession: (session: SessionUser) => Promise<void>;
+  updateUser: (updatedUser: SessionUser) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -136,13 +138,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const establishSession = useCallback(async (session: SessionUser) => {
+    clearAllConfirmedOrders();
+    queryClient.clear();
+    try {
+      await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+    } catch {
+      // Ignore storage cleanup failures
+    }
+    await writeSessionToken(session.token);
+    setUser(session);
+    setStatus('signedIn');
+  }, []);
+
+  const updateUser = useCallback(async (updatedUser: SessionUser) => {
+    if (updatedUser.token) {
+      await writeSessionToken(updatedUser.token);
+    }
+    setUser(updatedUser);
+    setStatus('signedIn');
+  }, []);
+
   const signOut = useCallback(async () => {
     await clearLocalSession();
   }, [clearLocalSession]);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signOut, refresh }),
-    [status, user, signIn, signOut, refresh],
+    () => ({ status, user, signIn, establishSession, updateUser, signOut, refresh }),
+    [status, user, signIn, establishSession, updateUser, signOut, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

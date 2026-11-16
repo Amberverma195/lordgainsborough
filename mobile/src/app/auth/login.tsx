@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ApiError } from '../../api/errors';
 import { useAuth } from '../../auth/AuthContext';
@@ -32,7 +32,7 @@ export default function LoginScreen() {
         router.replace('/(tabs)');
       }
     } catch (requestError) {
-      setError(requestError instanceof ApiError ? loginFailureMessage(requestError) : loginFailureMessage(requestError));
+      setError(loginFailureMessage(requestError));
     } finally {
       setSubmitting(false);
     }
@@ -43,6 +43,7 @@ export default function LoginScreen() {
       <Screen scroll>
         <AppHeader title="Sign in" showBack showCart={false} />
         <Text style={styles.copy}>Use the email address or phone number on your Lord Gainsborough account.</Text>
+
         <Text style={styles.label}>Email or phone</Text>
         <TextInput
           value={identifier}
@@ -56,7 +57,14 @@ export default function LoginScreen() {
           placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
-        <Text style={styles.label}>Password</Text>
+
+        <View style={styles.labelRow}>
+          <Text style={styles.label}>Password</Text>
+          <Pressable accessibilityRole="button" onPress={() => router.push('/auth/forgot-password')}>
+            <Text style={styles.linkText}>Forgot password?</Text>
+          </Pressable>
+        </View>
+
         <TextInput
           value={password}
           onChangeText={setPassword}
@@ -67,13 +75,14 @@ export default function LoginScreen() {
           placeholderTextColor={colors.textMuted}
           style={styles.input}
         />
+
         {error ? <Text style={styles.error}>{error}</Text> : null}
+
         <Button label="Sign in" loading={submitting} onPress={() => void submit()} />
-        <View style={styles.noteWrap}>
-          <Text style={styles.note}>
-            Account creation and password reset stay on the restaurant website for this release.
-            The app already knows the email verification endpoints and will use them in the next milestone.
-          </Text>
+
+        <View style={styles.signupWrap}>
+          <Text style={styles.copySecondary}>Don't have an account?</Text>
+          <Button label="Create account" variant="secondary" onPress={() => router.push('/auth/signup')} />
         </View>
       </Screen>
     </KeyboardAvoidingView>
@@ -92,13 +101,30 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginBottom: space.lg,
   },
+  copySecondary: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: space.sm,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: space.sm,
+  },
   label: {
     color: colors.gold,
     fontFamily: type.label,
     fontSize: 12,
     letterSpacing: 1,
     textTransform: 'uppercase',
-    marginBottom: space.sm,
+  },
+  linkText: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 12,
   },
   input: {
     minHeight: 52,
@@ -116,12 +142,8 @@ const styles = StyleSheet.create({
     fontFamily: type.bodyMedium,
     marginBottom: space.md,
   },
-  noteWrap: {
+  signupWrap: {
     marginTop: space.xl,
-  },
-  note: {
-    color: colors.textSecondary,
-    fontFamily: type.body,
-    lineHeight: 22,
+    gap: space.xs,
   },
 });

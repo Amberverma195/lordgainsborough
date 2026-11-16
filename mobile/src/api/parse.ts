@@ -204,25 +204,26 @@ export function parseSessionUser(body: unknown): ParseResult<SessionUser> {
   if (!isRecord(body)) {
     return { ok: false, message: 'The account response was not in the expected format.' };
   }
-  const token = text(body.token);
-  const name = text(body.name);
-  const email = text(body.email);
+  const userObj = isRecord(body.user) ? body.user : body;
+  const token = text(body.token) ?? text(userObj.token);
+  const name = text(userObj.name);
+  const email = text(userObj.email);
   if (!token || !name || !email) {
     return { ok: false, message: 'The account response was missing a token or contact details.' };
   }
-  const noShowCount = finite(body.noShowCount) ?? 0;
-  const pickupDisabled = booleanValue(body.pickupDisabled) ?? noShowCount >= NO_SHOW_THRESHOLD;
+  const noShowCount = finite(userObj.noShowCount) ?? finite(body.noShowCount) ?? 0;
+  const pickupDisabled = booleanValue(userObj.pickupDisabled) ?? booleanValue(body.pickupDisabled) ?? noShowCount >= NO_SHOW_THRESHOLD;
   return {
     ok: true,
     value: {
       token,
       name,
       email,
-      phone: text(body.phone) ?? '',
-      memberSince: text(body.memberSince) ?? '',
-      role: text(body.role) ?? 'MEMBER',
-      canUpdateProfile: booleanValue(body.canUpdateProfile) ?? false,
-      nextProfileUpdateAt: text(body.nextProfileUpdateAt),
+      phone: text(userObj.phone) ?? text(body.phone) ?? '',
+      memberSince: text(userObj.memberSince) ?? text(body.memberSince) ?? '',
+      role: text(userObj.role) ?? text(body.role) ?? 'MEMBER',
+      canUpdateProfile: booleanValue(userObj.canUpdateProfile) ?? booleanValue(body.canUpdateProfile) ?? false,
+      nextProfileUpdateAt: text(userObj.nextProfileUpdateAt) ?? text(body.nextProfileUpdateAt),
       noShowCount,
       pickupDisabled,
     },
