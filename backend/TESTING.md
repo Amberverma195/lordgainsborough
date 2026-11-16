@@ -13,10 +13,25 @@ either the previously owned disposable cluster directory or an explicit isolatio
 attestation before allowing database creation.
 
 The Railway startup wrapper is covered by `RailwayPostgresCaStartScriptTest`. It does
-not connect to PostgreSQL:
+not connect to PostgreSQL. That test runs the script Maven copies to
+`target/railway-start.sh`, which is the path Railpack ships, and checks that it
+matches `scripts/railway-start.sh` byte for byte.
 
 ```powershell
-.\mvnw.cmd -Dtest=RailwayPostgresCaStartScriptTest test
+.\mvnw.cmd -Dtest=RailwayPostgresCaStartScriptTest,PostgresTlsPolicyTest test
+```
+
+`RailpackRuntimeImageTest` needs Docker. It builds from the published
+`ghcr.io/railwayapp/railpack-runtime:debian-trixie` image, copies the packaged
+wrapper and application jar into `/app/target`, and runs the `railway.toml` start
+command. It checks `sh`, `base64`, and `openssl`, the CA file mode, and that Java
+receives the existing arguments. It uses a certificate generated inside the
+container. It does not use production credentials or connect to a database. Package
+the jar first, then opt in:
+
+```powershell
+.\mvnw.cmd -DskipTests package
+.\mvnw.cmd -Dtest=RailpackRuntimeImageTest -Drailpack.runtime.image=true surefire:test
 ```
 
 From `backend`, run:

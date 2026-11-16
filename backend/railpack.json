@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "deploy": {
+    "aptPackages": ["...", "openssl", "coreutils"],
+    "startCommand": "sh target/railway-start.sh java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar"
+  }
+}

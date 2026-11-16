@@ -21,6 +21,8 @@ backend/.settings/
 !.env.example
 !**/.env.example
 !**/application.properties.example
+*.crt
+*.pem
 
 # Logs & crash dumps
 *.log

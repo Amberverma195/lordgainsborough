@@ -18,14 +18,26 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RailwayPostgresCaStartScriptTest {
-    private static final String SCRIPT = "scripts/railway-start.sh";
+    private static final String SOURCE_SCRIPT = "scripts/railway-start.sh";
+    private static final String SCRIPT = "target/railway-start.sh";
+    private static final String START_COMMAND =
+            "sh target/railway-start.sh java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar";
     private static Path bash;
     private static String certificatePem;
     private static String certificateBase64;
 
     @BeforeAll
     static void createCertificate() throws Exception {
-        assertThat(Files.exists(Path.of(SCRIPT))).isTrue();
+        assertThat(Files.readString(Path.of(SOURCE_SCRIPT))).doesNotContain("\r");
+        assertThat(Files.readAllBytes(Path.of(SCRIPT))).isEqualTo(Files.readAllBytes(Path.of(SOURCE_SCRIPT)));
+        assertThat(Files.readString(Path.of("railway.toml"))).contains("startCommand = \"" + START_COMMAND + "\"")
+                .doesNotContain("scripts/railway-start.sh");
+        assertThat(Files.readString(Path.of("railpack.json"))).contains(START_COMMAND)
+                .contains("openssl")
+                .contains("coreutils")
+                .contains("\"...\"");
+        assertThat(Files.readString(Path.of("pom.xml"))).contains("copy-railway-start-script")
+                .contains("<filtering>false</filtering>");
         bash = bashExecutable();
         Result generated = run(Map.of(), "openssl", "req", "-x509", "-newkey", "rsa:2048",
                 "-keyout", "/tmp/lgb-test-ca.key", "-out", "/tmp/lgb-test-ca.pem",

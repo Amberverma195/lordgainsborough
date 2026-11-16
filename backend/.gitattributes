@@ -1,0 +1,2 @@
+scripts/railway-start.sh text eol=lf
+src/test/railpack/verify-runtime.sh text eol=lf

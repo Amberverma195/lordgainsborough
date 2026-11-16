@@ -3,9 +3,14 @@
 ## PostgreSQL verified TLS
 
 Remote PostgreSQL connections default to `DB_SSL_MODE=verify-full`. Set `DB_HOST`
-to the provider's certificate-matching DNS hostname. On Railway, the service start
-command is `sh scripts/railway-start.sh` followed by the existing Java command
-(`java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar`). The wrapper
+to the provider's certificate-matching DNS hostname. Railpack's Java provider
+copies only `target/` into the runtime image, so Maven copies
+`scripts/railway-start.sh` to `target/railway-start.sh` during `process-resources`
+without filtering. The Railway start command is `sh target/railway-start.sh`
+followed by the existing Java command
+(`java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar`). The runtime
+image must provide `sh`, `base64`, and `openssl`; `railpack.json` installs
+`openssl` and `coreutils` alongside Railpack's own runtime packages. The wrapper
 reads the Base64-encoded PEM certificate from `DB_SSL_ROOT_CERT_BASE64`, decodes it
 to `/tmp/postgres-ca.pem` with mode `0600`, exports `DB_SSL_ROOT_CERT` to that
 path and `DB_SSL_MODE=verify-full`, then executes those Java arguments unchanged.

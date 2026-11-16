@@ -1,6 +1,6 @@
 #!/bin/sh
 # Railway startup wrapper. Materialize the Supabase CA, then exec the existing Java command.
-# Usage: sh scripts/railway-start.sh java [current Java arguments...]
+# Usage: sh target/railway-start.sh java [current Java arguments...]
 set -eu
 
 fail() {
