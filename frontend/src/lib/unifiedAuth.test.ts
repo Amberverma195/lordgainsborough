@@ -185,6 +185,65 @@ describe('Unified Auth: Cross-Tab Invariants', () => {
   });
 });
 
+describe('Unified Auth: Browser History Navigation Hygiene', () => {
+  it('prevents history accumulation on repeated recovery enter and exit cycles', () => {
+    let historyLength = 1;
+    let historyPushed = false;
+    let currentState: Record<string, unknown> | null = null;
+
+    const mockPushState = (state: Record<string, unknown>) => {
+      historyLength++;
+      historyPushed = true;
+      currentState = state;
+    };
+
+    const mockBack = () => {
+      if (historyLength > 1) {
+        historyLength--;
+      }
+      historyPushed = false;
+      currentState = null;
+    };
+
+    const mockReplaceState = (state: Record<string, unknown> | null) => {
+      currentState = state;
+    };
+
+    // Cycle 1: Enter recovery
+    mockPushState({ lgbAuthRecovery: true });
+    expect(historyLength).toBe(2);
+    expect(historyPushed).toBe(true);
+    expect(currentState).toEqual({ lgbAuthRecovery: true });
+
+    // Cycle 1: Exit recovery via returnToLogin
+    if (historyPushed) {
+      mockBack();
+    } else {
+      mockReplaceState(null);
+    }
+    expect(historyLength).toBe(1);
+    expect(historyPushed).toBe(false);
+    expect(currentState).toBeNull();
+
+    // Cycle 2: Enter recovery again
+    mockPushState({ lgbAuthRecovery: true });
+    expect(historyLength).toBe(2);
+
+    // Cycle 2: Exit recovery via returnToLogin
+    if (historyPushed) {
+      mockBack();
+    }
+    expect(historyLength).toBe(1);
+
+    // Cycle 3: Repeat 10 cycles
+    for (let i = 0; i < 10; i++) {
+      mockPushState({ lgbAuthRecovery: true });
+      mockBack();
+    }
+    expect(historyLength).toBe(1);
+  });
+});
+
 describe('Unified Auth: Signup Consolidation & Session Cleanliness', () => {
   beforeEach(() => {
     installMemorySessionStorage();

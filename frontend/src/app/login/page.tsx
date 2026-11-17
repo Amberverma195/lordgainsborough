@@ -175,6 +175,18 @@ export default function LoginPage() {
           }
           return currentStep;
         });
+      } else {
+        // Forward navigation into recovery state
+        historyPushedRef.current = true;
+        clearSensitiveFields();
+        setStep((currentStep) => {
+          if (currentStep === 'login-identifier' || currentStep === 'login-password') {
+            setError('');
+            setSuccess('');
+            return challengeRef.current ? 'reset-verify' : 'reset-request';
+          }
+          return currentStep;
+        });
       }
     };
 
@@ -187,7 +199,7 @@ export default function LoginPage() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('intent') === 'recover') {
-        historyPushedRef.current = true;
+        historyPushedRef.current = false;
         try {
           window.history.replaceState({ lgbAuthRecovery: true }, '', '/login');
         } catch {}
@@ -569,9 +581,23 @@ export default function LoginPage() {
     clearSensitiveFields();
     setError('');
     setSuccess('');
-    historyPushedRef.current = false;
     publishCrossTab(prevChallenge, 'cleared');
     setStep('login-identifier');
+
+    if (historyPushedRef.current) {
+      historyPushedRef.current = false;
+      try {
+        window.history.back();
+      } catch {
+        try {
+          window.history.replaceState(null, '', '/login');
+        } catch {}
+      }
+    } else {
+      try {
+        window.history.replaceState(null, '', '/login');
+      } catch {}
+    }
   };
 
   const setCodedResetError = (code: PasswordResetCode | undefined, retrySeconds: number) => {
