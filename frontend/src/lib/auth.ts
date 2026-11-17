@@ -1,4 +1,5 @@
 import { apiFetch } from './apiFetch';
+import { purgeLegacyGlobalCart } from './cartStorage';
 
 export interface AuthData {
   name?: string;
@@ -49,13 +50,51 @@ export function clearAuth() {
   localStorage.removeItem('userRole');
   localStorage.removeItem('userNoShowCount');
   localStorage.removeItem('userPickupDisabled');
+  purgeLegacyGlobalCart();
+}
+
+export type SessionValidationResult =
+  | { authenticated: true; user: AuthData; reason?: undefined; status?: number }
+  | { authenticated: false; reason: 'unauthorized' | 'network_error'; status?: number; error?: unknown };
+
+export async function validateServerSession(): Promise<SessionValidationResult> {
+  if (typeof window === 'undefined') {
+    return { authenticated: false, reason: 'unauthorized' };
+  }
+
+  try {
+    const res = await apiFetch('/api/auth/me', {
+      cache: 'no-store',
+    });
+
+    if (res.status === 200) {
+      const data = await res.json();
+      persistAuth(data);
+      return { authenticated: true, user: data };
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      clearAuth();
+      return { authenticated: false, reason: 'unauthorized', status: res.status };
+    }
+
+    return { authenticated: false, reason: 'network_error', status: res.status };
+  } catch (error) {
+    return { authenticated: false, reason: 'network_error', error };
+  }
 }
 
 export async function signOut() {
-  const response = await apiFetch('/api/auth/logout', { method: 'POST' });
-  if (!response.ok) throw new Error('Unable to sign out');
-  clearAuth();
-  window.dispatchEvent(new Event('storage'));
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST' });
+  } catch (err) {
+    console.warn('Unable to reach sign out endpoint:', err);
+  } finally {
+    clearAuth();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('storage'));
+    }
+  }
 }
 
 export function isPickupDisabledForUser(): boolean {

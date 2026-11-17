@@ -60,7 +60,7 @@ export default function SignupVerifyPage() {
   const syncSeqRef = useRef(0);
   const challengeRef = useRef<SignupOtpChallengeState | null>(null);
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const hasResentRef = useRef(false);
+  const [hasResent, setHasResent] = useState(false);
 
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) {
@@ -273,7 +273,7 @@ export default function SignupVerifyPage() {
     // Invalidate any in-flight background status sync so it cannot overwrite this resend
     syncSeqRef.current++;
 
-    hasResentRef.current = true;
+    setHasResent(true);
     setResending(true);
     setError('');
     setInfoMessage('');
@@ -421,7 +421,7 @@ export default function SignupVerifyPage() {
     : 0;
 
   const resendConsumed = challenge?.resendsRemaining !== undefined && challenge.resendsRemaining < 5;
-  const activeCooldownSeconds = (hasResentRef.current || resendConsumed) ? cooldownSeconds : 0;
+  const activeCooldownSeconds = (hasResent || resendConsumed) ? cooldownSeconds : 0;
 
   const resendDisabled =
     resending || loading || activeCooldownSeconds > 0 || exhausted || challengeExpired;

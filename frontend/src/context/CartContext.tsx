@@ -1,25 +1,28 @@
 'use client';
 
 import { apiFetch } from '@/lib/apiFetch';
-
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { MenuItem } from '@/lib/mockData';
 import { API_BASE, clearCheckoutIdempotencyKey } from '@/lib/orders';
 import { ACCOUNT_DELETED_KEY, clearDeletedAccountData } from '@/lib/accountDeletion';
+import { clearAuth, validateServerSession } from '@/lib/auth';
+import {
+  CartItem,
+  toServerItems,
+  fromServerItems,
+  mergeCartItems,
+  purgeLegacyGlobalCart,
+  loadGuestCart,
+  saveGuestCart,
+  clearGuestCart,
+  isGenuineGuestCart,
+  loadAccountCart,
+  saveAccountCart,
+  getAccountCartStorageKey,
+  GUEST_CART_STORAGE_KEY,
+} from '@/lib/cartStorage';
 
-export interface CartItem extends MenuItem {
-  quantity: number;
-}
-
-interface ServerCartItem {
-  menuItemId: string;
-  name: string;
-  description: string;
-  price: number;
-  category: string;
-  image: string;
-  quantity: number;
-}
+export type { CartItem };
 
 interface CartContextType {
   cart: CartItem[];
@@ -34,115 +37,51 @@ interface CartContextType {
   clearCart: () => void;
 }
 
-const CART_STORAGE_KEY = 'lord_gainsborough_cart';
 const AUTH_STORAGE_KEYS = new Set(['sessionUser', 'userRole', 'userName', 'userEmail', 'userPhone']);
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
-
-// --- Helpers for converting between frontend and server cart shapes ---
-
-function toServerItems(items: CartItem[]): ServerCartItem[] {
-  return items.map(item => ({
-    menuItemId: item.id,
-    name: item.name,
-    description: item.description,
-    price: item.price,
-    category: item.category,
-    image: item.image,
-    quantity: item.quantity,
-  }));
-}
-
-function fromServerItems(items: ServerCartItem[]): CartItem[] {
-  return items.map(item => ({
-    id: item.menuItemId,
-    name: item.name,
-    description: item.description,
-    price: item.price,
-    category: item.category,
-    image: item.image,
-    quantity: item.quantity,
-  }));
-}
-
-function mergeCartItems(localItems: CartItem[], serverItems: CartItem[]): CartItem[] {
-  const merged = new Map<string, CartItem>();
-
-  // Add server items first
-  for (const item of serverItems) {
-    merged.set(item.id, { ...item });
-  }
-
-  // Merge local items — keep higher quantity for duplicates
-  for (const item of localItems) {
-    const existing = merged.get(item.id);
-    if (existing) {
-      existing.quantity = Math.max(existing.quantity, item.quantity);
-    } else {
-      merged.set(item.id, { ...item });
-    }
-  }
-
-  return Array.from(merged.values());
-}
 
 function getSessionKey(): string | null {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('sessionUser');
 }
 
-function saveLocalCart(items: CartItem[]) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items));
-}
-
-// --- Provider ---
+export type ServerCartFetchResult =
+  | { ok: true; items: CartItem[] }
+  | { ok: false; status: number; reason: 'unauthorized' | 'server_error' | 'network_error'; error?: unknown };
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [initialised, setInitialised] = useState(false);
+
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSyncingRef = useRef(false);
   const pendingServerSavesRef = useRef(0);
   const cartRef = useRef<CartItem[]>([]);
+  const activeAccountRef = useRef<string | null>(null);
   const syncGenerationRef = useRef(0);
+  const isApplyingCrossTabRef = useRef(false);
 
   // --- Server API calls ---
 
-  const fetchServerCart = useCallback(async (sessionKey: string): Promise<CartItem[]> => {
-    if (sessionKey !== getSessionKey()) return [];
+  const fetchServerCart = useCallback(async (accountEmail: string): Promise<ServerCartFetchResult> => {
+    if (!accountEmail || accountEmail !== getSessionKey()) {
+      return { ok: false, status: 0, reason: 'network_error' };
+    }
     try {
       const res = await apiFetch(`${API_BASE}/cart`, {
         cache: 'no-store',
       });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return fromServerItems(data.items || []);
-    } catch {
-      console.error('Failed to fetch server cart');
-      return [];
-    }
-  }, []);
-
-  const saveServerCart = useCallback(async (items: CartItem[], sessionKey: string) => {
-    if (sessionKey !== getSessionKey()) return;
-    pendingServerSavesRef.current += 1;
-    try {
-      const res = await apiFetch(`${API_BASE}/cart`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(toServerItems(items)),
-      });
-      if (!res.ok) {
-        console.error('Failed to save server cart');
+      if (res.status === 200) {
+        const data = await res.json();
+        return { ok: true, items: fromServerItems(data.items || []) };
       }
-    } catch {
-      console.error('Failed to save server cart');
-    } finally {
-      pendingServerSavesRef.current = Math.max(0, pendingServerSavesRef.current - 1);
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, status: res.status, reason: 'unauthorized' };
+      }
+      return { ok: false, status: res.status, reason: 'server_error' };
+    } catch (error) {
+      return { ok: false, status: 0, reason: 'network_error', error };
     }
   }, []);
 
@@ -153,8 +92,37 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  const saveServerCart = useCallback(async (items: CartItem[], accountEmail: string) => {
+    if (!accountEmail || accountEmail !== getSessionKey()) return;
+    pendingServerSavesRef.current += 1;
+    try {
+      const res = await apiFetch(`${API_BASE}/cart`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(toServerItems(items)),
+      });
+      if (res.status === 401 || res.status === 403) {
+        // Session expired on server while attempting to save
+        clearPendingServerSave();
+        clearAuth();
+        activeAccountRef.current = null;
+        cartRef.current = [];
+        setCart([]);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('storage'));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save server cart', err);
+    } finally {
+      pendingServerSavesRef.current = Math.max(0, pendingServerSavesRef.current - 1);
+    }
+  }, [clearPendingServerSave]);
+
   const saveToServerNow = useCallback((items: CartItem[]) => {
-    const sessionKey = getSessionKey();
+    const sessionKey = activeAccountRef.current ?? getSessionKey();
     if (!sessionKey) return;
 
     clearPendingServerSave();
@@ -163,7 +131,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Debounced save — fires 1s after last cart mutation
   const debouncedSaveToServer = useCallback((items: CartItem[]) => {
-    const sessionKey = getSessionKey();
+    const sessionKey = activeAccountRef.current ?? getSessionKey();
     if (!sessionKey) return;
 
     if (debounceTimerRef.current) {
@@ -175,94 +143,242 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, 1000);
   }, [saveServerCart]);
 
-  // --- Initialisation: load from localStorage, then merge with server if logged in ---
+  // Helper for applying UI cart mutation and persisting to the correct namespace
+  const persistCartMutation = useCallback((updated: CartItem[], immediate = false) => {
+    cartRef.current = updated;
+    setCart(updated);
+
+    const currentAccount = activeAccountRef.current ?? getSessionKey();
+    if (currentAccount) {
+      saveAccountCart(currentAccount, updated);
+      if (immediate) {
+        saveToServerNow(updated);
+      } else {
+        debouncedSaveToServer(updated);
+      }
+    } else {
+      saveGuestCart(updated);
+    }
+  }, [debouncedSaveToServer, saveToServerNow]);
+
+  // --- Initialisation: validate server session, load storage, sync cart ---
 
   useEffect(() => {
+    let cancelled = false;
+
     const init = async () => {
-      localStorage.removeItem('authToken');
-      const generation = syncGenerationRef.current;
-      // 1. Load localStorage cart
-      let localCart: CartItem[] = [];
-      const savedCart = localStorage.getItem(CART_STORAGE_KEY);
-      if (savedCart) {
-        try {
-          localCart = JSON.parse(savedCart);
-        } catch {
-          console.error('Failed to parse saved cart');
+      purgeLegacyGlobalCart();
+      const generation = ++syncGenerationRef.current;
+      const localSession = getSessionKey();
+
+      let authenticatedUser: string | null = null;
+      if (localSession) {
+        // Validate actual server session rather than trusting sessionUser blindly
+        const sessionCheck = await validateServerSession();
+        if (cancelled || generation !== syncGenerationRef.current) return;
+
+        if (sessionCheck.authenticated && sessionCheck.user.email) {
+          authenticatedUser = sessionCheck.user.email;
+        } else if (sessionCheck.reason === 'unauthorized') {
+          // Cookie expired on server
+          clearAuth();
+          authenticatedUser = null;
+        } else {
+          // Transient network error or offline: retain local session hint for offline view
+          authenticatedUser = localSession;
         }
       }
 
-      // 2. If logged in, fetch server cart and merge
-      const sessionKey = getSessionKey();
-      if (sessionKey) {
+      activeAccountRef.current = authenticatedUser;
+
+      if (authenticatedUser) {
         isSyncingRef.current = true;
-        const serverCart = await fetchServerCart(sessionKey);
-        if (generation !== syncGenerationRef.current || sessionKey !== getSessionKey()) return;
-        const merged = mergeCartItems(localCart, serverCart);
-        cartRef.current = merged;
-        setCart(merged);
-        saveLocalCart(merged);
+        try {
+          const hasGuest = isGenuineGuestCart();
+          const guestItems = hasGuest ? loadGuestCart() : [];
+          const serverRes = await fetchServerCart(authenticatedUser);
 
-        // Persist the merged result to server if there were local-only items
-        if (localCart.length > 0 && JSON.stringify(merged) !== JSON.stringify(serverCart)) {
-          await saveServerCart(merged, sessionKey);
+          if (cancelled || generation !== syncGenerationRef.current || authenticatedUser !== getSessionKey()) {
+            return;
+          }
+
+          if (serverRes.ok) {
+            let finalCart: CartItem[];
+            if (hasGuest && guestItems.length > 0) {
+              finalCart = mergeCartItems(guestItems, serverRes.items);
+              clearGuestCart();
+              await saveServerCart(finalCart, authenticatedUser);
+            } else {
+              const localAccountCart = loadAccountCart(authenticatedUser);
+              finalCart = mergeCartItems(localAccountCart, serverRes.items);
+              if (localAccountCart.length > 0 && JSON.stringify(finalCart) !== JSON.stringify(serverRes.items)) {
+                await saveServerCart(finalCart, authenticatedUser);
+              }
+            }
+            cartRef.current = finalCart;
+            setCart(finalCart);
+            saveAccountCart(authenticatedUser, finalCart);
+          } else if (serverRes.reason === 'unauthorized') {
+            // Server rejected cart fetch -> session expired
+            clearAuth();
+            activeAccountRef.current = null;
+            cartRef.current = [];
+            setCart([]);
+          } else {
+            // Network error: use account's cached local cart, do NOT treat as empty server cart
+            const localAccountCart = loadAccountCart(authenticatedUser);
+            cartRef.current = localAccountCart;
+            setCart(localAccountCart);
+          }
+        } finally {
+          isSyncingRef.current = false;
         }
-        isSyncingRef.current = false;
       } else {
-        cartRef.current = localCart;
-        setCart(localCart);
+        // Unauthenticated guest mode: load isolated guest cart
+        const guestCart = loadGuestCart();
+        cartRef.current = guestCart;
+        setCart(guestCart);
       }
-
-      setInitialised(true);
     };
 
     init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchServerCart, saveServerCart]);
 
-  // --- Persist to localStorage whenever cart changes (after init) ---
+  // --- Session Validation on Window Focus & Visibility Change ---
 
   useEffect(() => {
-    if (!initialised) return;
-    cartRef.current = cart;
-    saveLocalCart(cart);
-  }, [cart, initialised]);
+    const handleFocus = async () => {
+      const currentSession = getSessionKey();
+      if (currentSession) {
+        const sessionCheck = await validateServerSession();
+        if (sessionCheck.reason === 'unauthorized') {
+          // Session expired while user was inactive or tab was backgrounded
+          syncGenerationRef.current += 1;
+          clearPendingServerSave();
+          clearAuth();
+          activeAccountRef.current = null;
+          cartRef.current = [];
+          setCart([]);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('storage'));
+          }
+        }
+      }
+    };
 
-  // --- Listen for login/logout (storage events) to trigger sync ---
+    window.addEventListener('focus', handleFocus);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void handleFocus();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [clearPendingServerSave]);
+
+  // --- Listen for storage events (login/logout, account switch, cross-tab updates) ---
 
   useEffect(() => {
     const handleStorageChange = async (event: StorageEvent | Event) => {
       const storageKey = 'key' in event ? event.key : null;
+
       if (storageKey === ACCOUNT_DELETED_KEY) {
         syncGenerationRef.current += 1;
         clearPendingServerSave();
         cartRef.current = [];
         setCart([]);
         setIsCartOpen(false);
-        setInitialised(true);
         clearDeletedAccountData(false);
         window.location.replace('/login?accountDeleted=1');
         return;
       }
-      if (storageKey && !AUTH_STORAGE_KEYS.has(storageKey)) return;
-      if (pendingServerSavesRef.current > 0) return;
 
       const sessionKey = getSessionKey();
-      if (sessionKey && !isSyncingRef.current) {
-        // User just logged in — merge local cart with server cart
-        isSyncingRef.current = true;
-        const generation = syncGenerationRef.current;
-        try {
-          const localCart = [...cartRef.current];
-          const serverCart = await fetchServerCart(sessionKey);
-          if (generation !== syncGenerationRef.current || sessionKey !== getSessionKey()) return;
-          const merged = mergeCartItems(localCart, serverCart);
-          cartRef.current = merged;
-          setCart(merged);
-          saveLocalCart(merged);
-          await saveServerCart(merged, sessionKey);
-        } finally {
-          isSyncingRef.current = false;
+      const prevAccount = activeAccountRef.current;
+
+      // Handle login / logout / account transitions
+      if (!storageKey || AUTH_STORAGE_KEYS.has(storageKey)) {
+        if (sessionKey !== prevAccount) {
+          const generation = ++syncGenerationRef.current;
+          clearPendingServerSave();
+          activeAccountRef.current = sessionKey;
+
+          if (!sessionKey) {
+            // User logged out or session expired:
+            // Remove previous account's cart from visible UI without deleting their server-side cart!
+            cartRef.current = [];
+            setCart([]);
+            return;
+          }
+
+          // User logged in as sessionKey
+          if (!isSyncingRef.current) {
+            isSyncingRef.current = true;
+            try {
+              const hasGuest = isGenuineGuestCart();
+              const guestItems = hasGuest ? loadGuestCart() : [];
+              const serverRes = await fetchServerCart(sessionKey);
+
+              if (generation !== syncGenerationRef.current || sessionKey !== getSessionKey()) return;
+
+              if (serverRes.ok) {
+                let finalCart: CartItem[];
+                if (hasGuest && guestItems.length > 0) {
+                  // Merge genuine guest items into this user's server cart
+                  finalCart = mergeCartItems(guestItems, serverRes.items);
+                  clearGuestCart();
+                  await saveServerCart(finalCart, sessionKey);
+                } else {
+                  // No genuine guest cart: ONLY load this account's items (never previous account!)
+                  const localAccountCart = loadAccountCart(sessionKey);
+                  finalCart = mergeCartItems(localAccountCart, serverRes.items);
+                  if (localAccountCart.length > 0 && JSON.stringify(finalCart) !== JSON.stringify(serverRes.items)) {
+                    await saveServerCart(finalCart, sessionKey);
+                  }
+                }
+                cartRef.current = finalCart;
+                setCart(finalCart);
+                saveAccountCart(sessionKey, finalCart);
+              } else if (serverRes.reason === 'unauthorized') {
+                clearAuth();
+                activeAccountRef.current = null;
+                cartRef.current = [];
+                setCart([]);
+              } else {
+                // Network error: keep local account cart
+                const localAccountCart = loadAccountCart(sessionKey);
+                cartRef.current = localAccountCart;
+                setCart(localAccountCart);
+              }
+            } finally {
+              isSyncingRef.current = false;
+            }
+          }
+          return;
+        }
+      }
+
+      // Handle cross-tab cart updates
+      if (storageKey) {
+        if (!prevAccount && storageKey === GUEST_CART_STORAGE_KEY) {
+          isApplyingCrossTabRef.current = true;
+          const updated = loadGuestCart();
+          cartRef.current = updated;
+          setCart(updated);
+          isApplyingCrossTabRef.current = false;
+        } else if (prevAccount && storageKey === getAccountCartStorageKey(prevAccount)) {
+          isApplyingCrossTabRef.current = true;
+          const updated = loadAccountCart(prevAccount);
+          cartRef.current = updated;
+          setCart(updated);
+          isApplyingCrossTabRef.current = false;
         }
       }
     };
@@ -274,58 +390,38 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // --- Cart mutation functions ---
 
   const addToCart = (item: MenuItem) => {
-    setCart(prev => {
-      const existing = prev.find(i => i.id === item.id);
-      let updated: CartItem[];
-      if (existing) {
-        updated = prev.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
-      } else {
-        updated = [...prev, { ...item, quantity: 1 }];
-      }
-      cartRef.current = updated;
-      saveLocalCart(updated);
-      debouncedSaveToServer(updated);
-      return updated;
-    });
+    const existing = cartRef.current.find(i => i.id === item.id);
+    let updated: CartItem[];
+    if (existing) {
+      updated = cartRef.current.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
+    } else {
+      updated = [...cartRef.current, { ...item, quantity: 1 }];
+    }
+    persistCartMutation(updated, false);
     setIsCartOpen(true);
   };
 
   const replaceCart = (items: CartItem[]) => {
-    cartRef.current = items;
-    saveLocalCart(items);
-    setCart(items);
-    debouncedSaveToServer(items);
+    persistCartMutation(items, false);
     setIsCartOpen(true);
   };
 
   const removeFromCart = (itemId: string) => {
-    setCart(prev => {
-      const updated = prev.filter(i => i.id !== itemId);
-      cartRef.current = updated;
-      saveLocalCart(updated);
-      saveToServerNow(updated);
-      return updated;
-    });
+    const updated = cartRef.current.filter(i => i.id !== itemId);
+    persistCartMutation(updated, true);
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
-    setCart(prev => {
-      const updated = prev.flatMap(i => {
-        if (i.id === itemId) {
-          const newQty = i.quantity + delta;
-          return newQty > 0 ? [{ ...i, quantity: newQty }] : [];
-        }
-        return [i];
-      });
-      cartRef.current = updated;
-      saveLocalCart(updated);
-      if (updated.length < prev.length) {
-        saveToServerNow(updated);
-      } else {
-        debouncedSaveToServer(updated);
+    const prev = cartRef.current;
+    const updated = prev.flatMap(i => {
+      if (i.id === itemId) {
+        const newQty = i.quantity + delta;
+        return newQty > 0 ? [{ ...i, quantity: newQty }] : [];
       }
-      return updated;
+      return [i];
     });
+    const immediate = updated.length < prev.length;
+    persistCartMutation(updated, immediate);
   };
 
   const toggleCart = () => setIsCartOpen(!isCartOpen);
@@ -333,11 +429,18 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearCart = () => {
     syncGenerationRef.current += 1;
     clearPendingServerSave();
-    clearCheckoutIdempotencyKey();
+    const currentAccount = activeAccountRef.current ?? getSessionKey();
+    clearCheckoutIdempotencyKey(currentAccount);
+
     cartRef.current = [];
-    saveLocalCart([]);
     setCart([]);
-    saveToServerNow([]);
+
+    if (currentAccount) {
+      saveAccountCart(currentAccount, []);
+      saveToServerNow([]);
+    } else {
+      clearGuestCart();
+    }
   };
 
   const cartCount = cart.reduce((total, item) => total + item.quantity, 0);

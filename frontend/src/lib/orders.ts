@@ -1,4 +1,5 @@
 import { apiFetch } from '@/lib/apiFetch';
+import { toAccountNamespace } from '@/lib/accountNamespace';
 export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? 'http://localhost:8082';
 export const API_BASE = '/api';
 export const KDS_API_BASE = `${BACKEND_ORIGIN}/api`;
@@ -213,16 +214,14 @@ export function getCheckoutIdempotencyStorageKey(email?: string | null): string 
   if (!email || !email.trim()) {
     return CHECKOUT_IDEMPOTENCY_KEY_STORAGE;
   }
-  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
-  return `${CHECKOUT_IDEMPOTENCY_KEY_STORAGE}_${normalized}`;
+  return `${CHECKOUT_IDEMPOTENCY_KEY_STORAGE}_${toAccountNamespace(email)}`;
 }
 
 export function getCheckoutFingerprintStorageKey(email?: string | null): string {
   if (!email || !email.trim()) {
     return CHECKOUT_CART_FINGERPRINT_STORAGE;
   }
-  const normalized = email.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
-  return `${CHECKOUT_CART_FINGERPRINT_STORAGE}_${normalized}`;
+  return `${CHECKOUT_CART_FINGERPRINT_STORAGE}_${toAccountNamespace(email)}`;
 }
 
 export function getOrCreateCheckoutIdempotencyKey(

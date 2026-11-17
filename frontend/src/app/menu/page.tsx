@@ -42,13 +42,16 @@ export default function MenuPage() {
 
   useEffect(() => {
     // Preserve valid selections when navigating back; reset stale or invalid entries
-    const selections = loadPickupSelections();
-    if (selections.pickupDate) {
-      setPickupDate(selections.pickupDate);
-    }
-    if (selections.pickupTime) {
-      setPickupTime(selections.pickupTime);
-    }
+    const timer = window.setTimeout(() => {
+      const selections = loadPickupSelections();
+      if (selections.pickupDate) {
+        setPickupDate(selections.pickupDate);
+      }
+      if (selections.pickupTime) {
+        setPickupTime(selections.pickupTime);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -73,8 +76,8 @@ export default function MenuPage() {
 
     fetchStoreSettings().then(settings => {
       setPickupOrdersEnabled(settings.pickupOrdersEnabled);
+      setPickupDisabledForUser(isPickupDisabledForUser());
     });
-    setPickupDisabledForUser(isPickupDisabledForUser());
   }, []);
 
   const handlePickupDateChange = (value: string) => {
