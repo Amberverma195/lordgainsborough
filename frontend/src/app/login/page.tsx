@@ -455,7 +455,11 @@ export default function LoginPage() {
         setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
       }
 
-      applyPasswordResetResponse(current, current.email, body, retrySeconds);
+      const nextChallenge = applyPasswordResetResponse(current, current.email, body, retrySeconds);
+      if (nextChallenge) {
+        updateChallenge(nextChallenge);
+        publishCrossTab(nextChallenge, 'challenge-updated');
+      }
 
       if (res.ok && body.code === 'RESET_CODE_SENT') {
         setResetOtp('');

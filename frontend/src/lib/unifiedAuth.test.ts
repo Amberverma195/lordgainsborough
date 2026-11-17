@@ -131,6 +131,42 @@ describe('Unified Auth: Password Reset Challenge State Invariants', () => {
     expect(next?.challengeId).toBe('chal-attacker');
     expect(next?.challengeId).not.toBe(oldChallenge.challengeId);
   });
+
+  it('updates challenge cooldown and decrements resends remaining from a resend response', () => {
+    const serverTime1 = new Date('2026-11-16T20:00:00.000Z').toISOString();
+    const initialChallenge: PasswordResetChallengeState = {
+      email: 'user@example.com',
+      challengeId: 'chal-abc',
+      serverTime: serverTime1,
+      nextResendAt: new Date('2026-11-16T20:01:00.000Z').toISOString(),
+      resendsRemaining: 5,
+      observedAt: Date.parse(serverTime1),
+    };
+
+    const serverTime2 = new Date('2026-11-16T20:01:05.000Z').toISOString();
+    const resendResponse = {
+      challengeId: 'chal-abc',
+      code: 'RESET_CODE_SENT' as const,
+      serverTime: serverTime2,
+      nextResendAt: new Date('2026-11-16T20:02:05.000Z').toISOString(),
+      resendsRemaining: 4,
+    };
+
+    const updated = applyPasswordResetResponse(
+      initialChallenge,
+      initialChallenge.email,
+      resendResponse,
+      60,
+      Date.parse(serverTime2)
+    );
+
+    expect(updated).not.toBeNull();
+    expect(updated?.challengeId).toBe('chal-abc');
+    expect(updated?.email).toBe('user@example.com');
+    expect(updated?.resendsRemaining).toBe(4);
+    expect(updated?.serverTime).toBe(serverTime2);
+    expect(updated?.nextResendAt).toBe(resendResponse.nextResendAt);
+  });
 });
 
 describe('Unified Auth: Cross-Tab Invariants', () => {
