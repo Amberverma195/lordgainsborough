@@ -183,6 +183,47 @@ describe('Unified Auth: Cross-Tab Invariants', () => {
     const parsedCleared = parsePasswordResetCrossTabPayload(JSON.stringify(clearedPayload));
     expect(parsedCleared?.type).toBe('cleared');
   });
+
+  it('rejects cross-tab updates when tab is in normal login or identity mismatches', () => {
+    // Helper function reproducing the isolation policy check in LoginPage
+    const shouldAcceptCrossTab = (
+      currentStep: string,
+      activeChallenge: { challengeId?: string; email?: string } | null,
+      activeIdentifier: string,
+      payload: { email?: string; challengeId?: string }
+    ) => {
+      const isInRecovery = currentStep === 'reset-request' || currentStep === 'reset-verify';
+      if (!isInRecovery) return false;
+
+      const payloadEmail = payload.email ? normalizeIdentifier(payload.email) : '';
+      const payloadChallengeId = payload.challengeId;
+
+      const matchesChallengeId = Boolean(
+        payloadChallengeId && activeChallenge?.challengeId && payloadChallengeId === activeChallenge.challengeId
+      );
+      const matchesActiveEmail = Boolean(
+        payloadEmail && (
+          (activeChallenge?.email && normalizeIdentifier(activeChallenge.email) === payloadEmail)
+          || (activeIdentifier && normalizeIdentifier(activeIdentifier) === payloadEmail)
+        )
+      );
+      return matchesChallengeId || matchesActiveEmail;
+    };
+
+    // 1. Ordinary login tab ignores recovery updates from other tabs
+    expect(shouldAcceptCrossTab('login-identifier', null, '', { email: 'alice@example.com', challengeId: 'c1' })).toBe(false);
+    expect(shouldAcceptCrossTab('login-password', null, 'bob@example.com', { email: 'alice@example.com', challengeId: 'c1' })).toBe(false);
+
+    // 2. Recovery tab for Alice rejects incoming challenge for Mallory
+    expect(shouldAcceptCrossTab('reset-verify', { challengeId: 'c-alice', email: 'alice@example.com' }, 'alice@example.com', { email: 'mallory@example.com', challengeId: 'c-mallory' })).toBe(false);
+
+    // 3. Recovery tab accepts update matching its active challenge ID or email
+    expect(shouldAcceptCrossTab('reset-verify', { challengeId: 'c-alice', email: 'alice@example.com' }, 'alice@example.com', { email: 'alice@example.com', challengeId: 'c-alice' })).toBe(true);
+    expect(shouldAcceptCrossTab('reset-request', null, 'alice@example.com', { email: 'alice@example.com', challengeId: 'c-new' })).toBe(true);
+
+    // 4. Abandoned recovery (activeChallenge null, blank identifier) rejects incoming updates
+    expect(shouldAcceptCrossTab('reset-request', null, '', { email: 'alice@example.com', challengeId: 'c-old' })).toBe(false);
+  });
 });
 
 describe('Unified Auth: Browser History Navigation Hygiene', () => {

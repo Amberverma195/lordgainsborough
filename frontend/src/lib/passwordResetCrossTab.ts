@@ -66,7 +66,9 @@ export function parsePasswordResetCrossTabPayload(
       : Date.now();
 
     if (type !== 'challenge-updated') {
-      return { type, originTabId, updatedAt };
+      const email = typeof parsed.email === 'string' ? parsed.email : undefined;
+      const challengeId = typeof parsed.challengeId === 'string' ? parsed.challengeId : undefined;
+      return { type, email, challengeId, originTabId, updatedAt };
     }
 
     const safe = toSafePasswordResetState(parsed);

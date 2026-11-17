@@ -114,6 +114,13 @@ export default function LoginPage() {
   const challengeRef = useRef<PasswordResetChallengeState | null>(null);
   const crossTabRef = useRef<ReturnType<typeof subscribePasswordResetCrossTab> | null>(null);
   const historyPushedRef = useRef(false);
+  const stepRef = useRef<StepName>(step);
+  const identifierRef = useRef(identifier);
+
+  useEffect(() => {
+    stepRef.current = step;
+    identifierRef.current = identifier;
+  }, [step, identifier]);
 
   const accountDeleted = useSyncExternalStore(
     subscribeToLocation,
@@ -210,6 +217,38 @@ export default function LoginPage() {
   // Cross-tab synchronization
   useEffect(() => {
     const handle = subscribePasswordResetCrossTab((payload) => {
+      const currentStep = stepRef.current;
+      const activeChallenge = challengeRef.current;
+      const activeIdentifier = identifierRef.current?.trim()
+        ? normalizeIdentifier(identifierRef.current.trim())
+        : '';
+
+      // Cross-tab events only apply if this tab is actively in the recovery flow
+      const isInRecovery = currentStep === 'reset-request' || currentStep === 'reset-verify';
+      if (!isInRecovery) {
+        return;
+      }
+
+      // Check whether payload matches this tab's active recovery identity
+      const payloadEmail = payload.email ? normalizeIdentifier(payload.email) : '';
+      const payloadChallengeId = payload.challengeId;
+
+      const matchesChallengeId = Boolean(
+        payloadChallengeId && activeChallenge?.challengeId && payloadChallengeId === activeChallenge.challengeId
+      );
+      const matchesActiveEmail = Boolean(
+        payloadEmail && (
+          (activeChallenge?.email && normalizeIdentifier(activeChallenge.email) === payloadEmail)
+          || (activeIdentifier && activeIdentifier === payloadEmail)
+        )
+      );
+      const matchesIdentity = matchesChallengeId || matchesActiveEmail;
+
+      if (!matchesIdentity) {
+        // Discard: belongs to a different recovery session or unrelated account
+        return;
+      }
+
       if (payload.type === 'completed') {
         updateChallenge(null);
         clearSensitiveFields();
