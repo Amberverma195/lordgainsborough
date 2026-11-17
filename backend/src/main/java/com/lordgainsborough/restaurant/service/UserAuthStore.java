@@ -33,7 +33,7 @@ public interface UserAuthStore {
     default Optional<List<String>> deleteAccount(User checked, String token, JwtUtil jwt) {
         throw new UnsupportedOperationException("Account deletion not supported");
     }
-    PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key);
+    PasswordResetService.Result requestPasswordReset(PasswordResetService service, String identifier, String ip, String key);
     default Optional<User> confirmLogin(User checked) { return Optional.of(checked); }
     default Optional<User> authenticate(String token, JwtUtil jwt) {
         if (token == null || token.isBlank() || !jwt.validateToken(token)) return Optional.empty();

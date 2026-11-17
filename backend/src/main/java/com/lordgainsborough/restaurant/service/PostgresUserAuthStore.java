@@ -6,6 +6,7 @@ import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.persistence.jpa.entity.JpaUser;
 import com.lordgainsborough.restaurant.persistence.jpa.repository.*;
 import com.lordgainsborough.restaurant.security.JwtUtil;
+import com.lordgainsborough.restaurant.util.EmailValidator;
 import jakarta.persistence.EntityManagerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.JpaTransactionManager;
@@ -252,15 +253,15 @@ public class PostgresUserAuthStore implements UserAuthStore {
                 }));
     }
 
-    public PasswordResetService.Result requestPasswordReset(PasswordResetService service, String email, String ip, String key) {
+    public PasswordResetService.Result requestPasswordReset(PasswordResetService service, String identifier, String ip, String key) {
         if (!(service.getPersistence().getStore() instanceof PostgresPasswordResetOtpChallengeStore reset)
                 || reset.getTransactionManager() != manager || reset.getDataSource() != manager.getDataSource())
             throw new IllegalStateException("Password reset and authentication must share actual PostgreSQL transaction resources");
         Optional<JpaUser> found;
-        if (usableEmail(email)) {
-            found = reads.execute(tx -> users.findByEmailIgnoreCase(email));
+        if (usableEmail(identifier)) {
+            found = reads.execute(tx -> users.findByEmailIgnoreCase(identifier.trim()));
         } else {
-            String digits = normalizePhone(email);
+            String digits = normalizePhone(identifier);
             if (digits.length() == 10) {
                 found = reads.execute(tx -> {
                     var list = users.findByPhoneNormalized(digits);
@@ -271,7 +272,7 @@ public class PostgresUserAuthStore implements UserAuthStore {
             }
         }
         // Email delivery happens after the identity read transaction has ended.
-        return service.requestInitialForJpaUser(email, found, ip, key);
+        return service.requestInitialForJpaUser(identifier, found, ip, key);
     }
     private User snapshot(JpaUser source) {
         User result = new User();
@@ -283,7 +284,7 @@ public class PostgresUserAuthStore implements UserAuthStore {
         return result;
     }
     private static boolean usableEmail(String email) {
-        if (email == null || email.isBlank()) return false;
+        if (email == null || email.isBlank() || !EmailValidator.isValidEmail(email)) return false;
         try { PostgresInput.text(email, 255, true); return true; }
         catch (org.springframework.web.server.ResponseStatusException invalid) { return false; }
     }
