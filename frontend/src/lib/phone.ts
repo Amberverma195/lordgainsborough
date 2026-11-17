@@ -50,3 +50,47 @@ export function formatLoginIdentifier(raw: string): string {
 export function looksLikeEmail(identifier: string): boolean {
   return identifier != null && identifier.includes('@');
 }
+
+/** True when the input looks like an email or a valid North American phone number. */
+export function isValidIdentifier(value: string): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (looksLikeEmail(trimmed)) {
+    // Defer to isValidEmail for strict checking — here we just ensure basic shape
+    return trimmed.includes('@') && trimmed.indexOf('@') > 0 && trimmed.indexOf('@') < trimmed.length - 1;
+  }
+  return isValidPhoneNumber(trimmed);
+}
+
+/** Returns 'email', 'phone', or 'unknown' based on the input format. */
+export function identifierType(value: string): 'email' | 'phone' | 'unknown' {
+  if (!value) return 'unknown';
+  const trimmed = value.trim();
+  if (looksLikeEmail(trimmed)) return 'email';
+  const digits = extractNationalDigits(trimmed);
+  if (digits.length >= 1) return 'phone';
+  return 'unknown';
+}
+
+/**
+ * Normalize an identifier for backend submission.
+ * - Emails: trimmed, lowercased
+ * - Phones: E.164 format (+1XXXXXXXXXX)
+ */
+export function normalizeIdentifier(value: string): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (looksLikeEmail(trimmed)) return trimmed.toLowerCase();
+  const digits = extractNationalDigits(trimmed);
+  if (digits.length === 10) return `+1${digits}`;
+  return trimmed;
+}
+
+/** Sanitize identifier input: strip control chars, zero-width chars, limit length. */
+export function sanitizeIdentifierInput(value: string): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\u200B-\u200D\uFEFF\u202A-\u202E]/g, '')
+    .trimStart()
+    .slice(0, 254);
+}

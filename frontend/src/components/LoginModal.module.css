@@ -153,6 +153,25 @@
   box-shadow: 0 0 15px rgba(212, 175, 55, 0.1);
 }
 
+.options {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.forgotPass {
+  color: var(--secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: var(--transition-smooth);
+}
+
+.forgotPass:hover {
+  text-decoration: underline;
+}
+
 .loginBtn {
   width: 100%;
   padding: 1rem;

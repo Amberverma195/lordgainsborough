@@ -256,7 +256,20 @@ public class PostgresUserAuthStore implements UserAuthStore {
         if (!(service.getPersistence().getStore() instanceof PostgresPasswordResetOtpChallengeStore reset)
                 || reset.getTransactionManager() != manager || reset.getDataSource() != manager.getDataSource())
             throw new IllegalStateException("Password reset and authentication must share actual PostgreSQL transaction resources");
-        Optional<JpaUser> found = usableEmail(email) ? reads.execute(tx -> users.findByEmailIgnoreCase(email)) : Optional.empty();
+        Optional<JpaUser> found;
+        if (usableEmail(email)) {
+            found = reads.execute(tx -> users.findByEmailIgnoreCase(email));
+        } else {
+            String digits = normalizePhone(email);
+            if (digits.length() == 10) {
+                found = reads.execute(tx -> {
+                    var list = users.findByPhoneNormalized(digits);
+                    return list.size() == 1 ? Optional.of(list.getFirst()) : Optional.empty();
+                });
+            } else {
+                found = Optional.empty();
+            }
+        }
         // Email delivery happens after the identity read transaction has ended.
         return service.requestInitialForJpaUser(email, found, ip, key);
     }

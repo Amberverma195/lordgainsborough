@@ -188,6 +188,16 @@ export default function LoginModal({
                 </div>
               </div>
 
+              <div className={styles.options}>
+                <Link
+                  href="/login?intent=recover"
+                  onClick={onClose}
+                  className={styles.forgotPass}
+                >
+                  Forgot password?
+                </Link>
+              </div>
+
               <button
                 type="submit"
                 className={styles.loginBtn}

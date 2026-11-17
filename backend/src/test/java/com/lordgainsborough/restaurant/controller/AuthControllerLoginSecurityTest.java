@@ -175,6 +175,77 @@ class AuthControllerLoginSecurityTest {
         assertEquals(44L, response.getBody().getRetryAfterSeconds());
     }
 
+    @Test
+    void sendPasswordResetOtp_withValidPhone_normalizesPhoneAndRequestsReset() {
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("+1 (519)-555-1234");
+        PasswordResetResponse body = PasswordResetResponse.of("RESET_CODE_SENT", "Code sent", Instant.now());
+        when(userRepository.requestPasswordReset(passwordResetService, "5195551234", IP, "phone-idemp"))
+                .thenReturn(new PasswordResetService.Result(HttpStatus.ACCEPTED, body, 0L));
+
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp("phone-idemp", request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        verify(userRepository).requestPasswordReset(passwordResetService, "5195551234", IP, "phone-idemp");
+    }
+
+    @Test
+    void sendPasswordResetOtp_withValidEmail_normalizesEmailAndRequestsReset() {
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("User@Example.COM");
+        PasswordResetResponse body = PasswordResetResponse.of("RESET_CODE_SENT", "Code sent", Instant.now());
+        when(userRepository.requestPasswordReset(passwordResetService, "user@example.com", IP, "email-idemp"))
+                .thenReturn(new PasswordResetService.Result(HttpStatus.ACCEPTED, body, 0L));
+
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp("email-idemp", request, httpRequest);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        verify(userRepository).requestPasswordReset(passwordResetService, "user@example.com", IP, "email-idemp");
+    }
+
+    @Test
+    void sendPasswordResetOtp_withMalformedEmail_returnsBadRequest() {
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("user@malformed");
+
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp(null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("RESET_CODE_INVALID", response.getBody().getCode());
+        assertEquals("Please enter a valid email address.", response.getBody().getMessage());
+        verify(userRepository, never()).requestPasswordReset(nullable(PasswordResetService.class), anyString(), anyString(), nullable(String.class));
+    }
+
+    @Test
+    void sendPasswordResetOtp_withMalformedPhone_returnsBadRequest() {
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("12345");
+
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp(null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("RESET_CODE_INVALID", response.getBody().getCode());
+        assertEquals("Please enter a valid email or 10-digit phone number.", response.getBody().getMessage());
+        verify(userRepository, never()).requestPasswordReset(nullable(PasswordResetService.class), anyString(), anyString(), nullable(String.class));
+    }
+
+    @Test
+    void sendPasswordResetOtp_withBlankIdentifier_returnsBadRequest() {
+        SendOtpRequest request = new SendOtpRequest();
+        request.setEmail("   ");
+
+        ResponseEntity<PasswordResetResponse> response =
+                controller.sendPasswordResetOtp(null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("RESET_CODE_INVALID", response.getBody().getCode());
+        assertEquals("Email or phone number is required.", response.getBody().getMessage());
+    }
+
     private static void assertEquivalentInvalidCredentialResponse(ResponseEntity<?> response) {
         assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
         LoginResponse body = (LoginResponse) response.getBody();

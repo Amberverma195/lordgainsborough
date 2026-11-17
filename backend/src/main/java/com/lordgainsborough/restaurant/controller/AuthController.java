@@ -357,16 +357,38 @@ public class AuthController {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
-        String email = normalizeEmail(request.getEmail());
-        if (email.isBlank()) {
+        String rawIdentifier = request.getEmail();
+        if (rawIdentifier == null || rawIdentifier.isBlank()) {
+            rawIdentifier = request.getPhone();
+        }
+        if (rawIdentifier == null || rawIdentifier.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(
                     "RESET_CODE_INVALID",
-                    "Email is required.",
+                    "Email or phone number is required.",
                     Instant.now()));
+        }
+        String normalized;
+        if (looksLikeEmail(rawIdentifier)) {
+            normalized = normalizeEmail(rawIdentifier);
+            if (!EmailValidator.isValidEmail(normalized)) {
+                return ResponseEntity.badRequest().body(PasswordResetResponse.of(
+                        "RESET_CODE_INVALID",
+                        "Please enter a valid email address.",
+                        Instant.now()));
+            }
+        } else {
+            String digits = normalizePhone(rawIdentifier);
+            if (digits.length() != 10) {
+                return ResponseEntity.badRequest().body(PasswordResetResponse.of(
+                        "RESET_CODE_INVALID",
+                        "Please enter a valid email or 10-digit phone number.",
+                        Instant.now()));
+            }
+            normalized = digits;
         }
 
         PasswordResetService.Result result = userAuthStore.requestPasswordReset(
-                passwordResetService, email, resolveClientIp(httpRequest), idempotencyKey);
+                passwordResetService, normalized, resolveClientIp(httpRequest), idempotencyKey);
         return passwordResetResponse(result);
     }
 
@@ -380,15 +402,15 @@ public class AuthController {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
-        String email = normalizeEmail(request.getEmail());
-        if (email.isBlank()) {
+        String identifier = normalizeResetIdentifier(request.getEmail());
+        if (identifier.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(
                     "RESET_CODE_INVALID",
-                    "Email is required.",
+                    "Email or phone number is required.",
                     Instant.now()));
         }
         PasswordResetService.Result result = passwordResetService.resend(
-                email,
+                identifier,
                 request.getChallengeId(),
                 resolveClientIp(httpRequest),
                 idempotencyKey);
@@ -405,21 +427,33 @@ public class AuthController {
             throw new IllegalStateException(
                     "PostgreSQL password reset path is isolated and cannot be invoked from an incompatible identity store.");
         }
-        String email = normalizeEmail(request.getEmail());
-        if (email.isBlank()) {
+        String identifier = normalizeResetIdentifier(request.getEmail());
+        if (identifier.isBlank()) {
             return ResponseEntity.badRequest().body(PasswordResetResponse.of(
                     "RESET_CODE_INVALID",
-                    "Email is required.",
+                    "Email or phone number is required.",
                     Instant.now()));
         }
         PasswordResetService.Result result = passwordResetService.complete(
-                email,
+                identifier,
                 request.getChallengeId(),
                 request.getOtp(),
                 request.getPassword(),
                 resolveClientIp(httpRequest),
                 idempotencyKey);
         return passwordResetResponse(result);
+    }
+
+    private String normalizeResetIdentifier(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (looksLikeEmail(trimmed)) {
+            return normalizeEmail(trimmed);
+        }
+        String digits = normalizePhone(trimmed);
+        return digits.length() == 10 ? digits : normalizeEmail(trimmed);
     }
 
     private ResponseEntity<LoginResponse> invalidLoginCredentials(

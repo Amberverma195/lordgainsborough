@@ -23,6 +23,7 @@ test('HttpOnly session, CSRF protection, CSP, profile editing and logout', async
     const scripts = csp.split(';').find(value => value.trim().startsWith('script-src'))!;
     expect(scripts).not.toContain("'unsafe-inline'");
     await page.getByPlaceholder('Email or phone number', { exact: true }).fill(email);
+    await page.getByRole('button', { name: 'Continue' }).click();
     await page.locator('input[type=password]').fill(password);
     const login = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/login');
     await page.getByRole('button', { name: 'Sign In', exact: true }).click();
@@ -74,6 +75,7 @@ test('administrator login still authorizes the admin page through the server coo
   const state = JSON.parse(await readFile('.e2e/state.json', 'utf8'));
   await page.goto('/login');
   await page.getByPlaceholder('Email or phone number', { exact: true }).fill(state.adminEmail);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.locator('input[type=password]').fill(state.adminPassword);
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await expect(page).toHaveURL(/\/profile$/);
@@ -90,7 +92,7 @@ test('password reset remains usable without exposing a session JWT', async ({ pa
   try {
     await db.query("insert into users(id,name,email,password,role) values ($1,'Reset Cookie Member',$2,$3,'MEMBER')", [randomUUID(), email, hashSync('OldCookie1!', 10)]);
     await page.goto('/forgot-password');
-    await page.getByPlaceholder('Enter email address', { exact: true }).fill(email);
+    await page.getByPlaceholder(/email/i).fill(email);
     await page.getByRole('button', { name: 'Send Reset Code', exact: true }).click();
     let code = '';
     await expect.poll(async () => {
@@ -105,6 +107,7 @@ test('password reset remains usable without exposing a session JWT', async ({ pa
     await expect(page.getByRole('heading', { name: 'Password Updated', exact: true })).toBeVisible();
     await page.goto('/login');
     await page.getByPlaceholder('Email or phone number', { exact: true }).fill(email);
+    await page.getByRole('button', { name: 'Continue' }).click();
     await page.locator('input[type=password]').fill(password);
     await page.getByRole('button', { name: 'Sign In', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Reset Cookie Member', exact: true })).toBeVisible();
@@ -125,7 +128,7 @@ test('signup, cart persistence, checkout, and live order updates use the cookie 
   await page.getByPlaceholder('Re-enter password', { exact: true }).fill(password);
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Create Account', exact: true }).click();
-  await expect(page).toHaveURL(/\/signup\/verify/);
+  await expect(page.getByRole('heading', { name: 'Verify Your Email', exact: true })).toBeVisible();
   const challenge = await page.evaluate(() => JSON.parse(sessionStorage.getItem('signupOtpChallenge') || 'null'));
   expect(challenge.attemptToken).toBeTruthy();
   const statusUrl = `/api/auth/signup/otp-status?${new URLSearchParams({ email, challengeId: challenge.challengeId })}`;

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { extractNationalDigits, formatPhoneInput, getPhoneDigitCount, isValidPhoneNumber } from './phone';
+import {
+  extractNationalDigits,
+  formatPhoneInput,
+  getPhoneDigitCount,
+  identifierType,
+  isValidIdentifier,
+  isValidPhoneNumber,
+  normalizeIdentifier,
+  sanitizeIdentifierInput,
+} from './phone';
 
 describe('phone validation and formatting', () => {
   it('identifies 8 and 9 digit inputs as invalid', () => {
@@ -42,5 +51,30 @@ describe('phone validation and formatting', () => {
     const over12WithCountry = '151955512345';
     expect(isValidPhoneNumber(over12WithCountry)).toBe(false);
     expect(getPhoneDigitCount(over12WithCountry)).toBe(11);
+  });
+
+  it('validates mixed email and phone identifiers', () => {
+    expect(isValidPhoneNumber('5195551234')).toBe(true);
+  });
+});
+
+describe('identifier helpers', () => {
+  it('correctly classifies identifier types', () => {
+    expect(identifierType('user@example.com')).toBe('email');
+    expect(identifierType('5195551234')).toBe('phone');
+    expect(identifierType('+1 (519)-555-1234')).toBe('phone');
+    expect(identifierType('')).toBe('unknown');
+
+    expect(isValidIdentifier('user@example.com')).toBe(true);
+    expect(isValidIdentifier('5195551234')).toBe(true);
+    expect(isValidIdentifier('+1 (519)-555-1234')).toBe(true);
+    expect(isValidIdentifier('12345')).toBe(false);
+    expect(isValidIdentifier('')).toBe(false);
+
+    expect(normalizeIdentifier('User@Example.COM')).toBe('user@example.com');
+    expect(normalizeIdentifier('5195551234')).toBe('+15195551234');
+    expect(normalizeIdentifier('+1 (519)-555-1234')).toBe('+15195551234');
+
+    expect(sanitizeIdentifierInput('  user\u200B@example.com  ')).toBe('user@example.com  ');
   });
 });

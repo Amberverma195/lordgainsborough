@@ -34,6 +34,7 @@ async function inbox(address: string, offset = 0) {
 }
 async function login(page: Page, address: string, password: string) {
   await page.goto('/login');await page.getByPlaceholder('Email or phone number', { exact: true }).fill(address);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.locator('input[type=password]').fill(password);await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await expect(page).toHaveURL(/\/profile$/);await expect(page.getByRole('heading', { name: 'My Account', exact: true })).toBeVisible();
 }
@@ -45,7 +46,7 @@ async function signup(page: Page, user = account, wrongCode = false) {
   await page.getByPlaceholder('Enter Password', { exact: true }).fill(user.password);
   await page.getByPlaceholder('Re-enter password', { exact: true }).fill(user.password);
   await page.getByRole('checkbox').check();await page.getByRole('button', { name: 'Create Account', exact: true }).click();
-  await expect(page).toHaveURL(/\/signup\/verify/);const code=await inbox(user.email);
+  await expect(page.getByRole('heading', { name: 'Verify Your Email', exact: true })).toBeVisible();const code=await inbox(user.email);
   if (wrongCode) {
     const wrong=code==='000000'?'111111':'000000';
     for(let i=0;i<6;i++)await page.getByRole('textbox',{name:`Digit ${i+1}`,exact:true}).fill(wrong[i]);
@@ -178,6 +179,7 @@ test('08 profile update, logout, wrong password, email and phone login',async()=
   await expect(customer.getByRole('heading',{name:'E2E Updated Customer',exact:true})).toBeVisible();
   await customer.getByRole('button',{name:'Logout',exact:true}).click();await customer.getByRole('button',{name:'Log Out',exact:true}).click();
   await customer.goto('/login');await customer.getByPlaceholder('Email or phone number',{exact:true}).fill(account.email);
+  await customer.getByRole('button', { name: 'Continue', exact: true }).click();
   await customer.locator('input[type=password]').fill('WrongPassword1!');await customer.getByRole('button',{name:'Sign In',exact:true}).click();
   await expect(customer.getByText('The email, phone number, or password is incorrect.',{exact:true})).toBeVisible();
   await login(customer,account.email,account.password);await login(customer,account.phone,account.password);
@@ -185,7 +187,7 @@ test('08 profile update, logout, wrong password, email and phone login',async()=
 test('09 forgot password through local inbox and prior JWT rejection',async()=>{
   const previous=await customer.evaluate(()=>localStorage.getItem('authToken'));
   const offset=(await(await fetch('http://127.0.0.1:8025/messages')).json()).length;
-  await customer.goto('/forgot-password');await customer.getByPlaceholder('Enter email address',{exact:true}).fill(account.email);
+  await customer.goto('/forgot-password');await customer.getByPlaceholder(/email/i).fill(account.email);
   await customer.getByRole('button',{name:/Send.*Code/i}).click();
   await customer.getByPlaceholder('6-digit code',{exact:true}).fill(await inbox(account.email,offset));
   const replacement=`NewAa2!${randomBytes(16).toString('hex')}`;
