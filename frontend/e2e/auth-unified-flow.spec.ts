@@ -30,6 +30,15 @@ async function getLatestInboxOtp(toAddress: string, offset = 0): Promise<string>
 }
 
 test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
+  test.beforeEach(async () => {
+    const { db } = await getE2eDb();
+    try {
+      await db.query('TRUNCATE signup_abuse_limits, login_failure_states');
+    } finally {
+      await db.end();
+    }
+  });
+
   test('01: Two-step Login with email, phone, and change-identifier', async ({ page }) => {
     const { db } = await getE2eDb();
     const email = `two-step-${randomUUID()}@example.test`;
@@ -117,8 +126,8 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       // Fetch OTP from loopback inbox
       const otpCode = await getLatestInboxOtp(email, offset);
       await page.getByPlaceholder('6-digit code').fill(otpCode);
-      await page.getByPlaceholder('Enter new password').fill(newPassword);
-      await page.getByPlaceholder('Re-enter new password').fill(newPassword);
+      await page.getByPlaceholder('Enter new password', { exact: true }).fill(newPassword);
+      await page.getByPlaceholder('Re-enter new password', { exact: true }).fill(newPassword);
       await page.getByRole('button', { name: 'Reset Password' }).click();
 
       // Shows Password Updated screen
@@ -172,8 +181,8 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       // OTP was delivered to user's registered email
       const otpCode = await getLatestInboxOtp(email, offset);
       await page.getByPlaceholder('6-digit code').fill(otpCode);
-      await page.getByPlaceholder('Enter new password').fill(newPassword);
-      await page.getByPlaceholder('Re-enter new password').fill(newPassword);
+      await page.getByPlaceholder('Enter new password', { exact: true }).fill(newPassword);
+      await page.getByPlaceholder('Re-enter new password', { exact: true }).fill(newPassword);
       await page.getByRole('button', { name: 'Reset Password' }).click();
 
       await expect(page.getByRole('heading', { name: 'Password Updated' })).toBeVisible();
@@ -218,7 +227,7 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
 
     // Fill partial sensitive inputs
     await page.getByPlaceholder('6-digit code').fill('123456');
-    await page.getByPlaceholder('Enter new password').fill('PartialSecret1!');
+    await page.getByPlaceholder('Enter new password', { exact: true }).fill('PartialSecret1!');
 
     // Click "Change Email or Phone Number"
     await page.getByRole('button', { name: /Change Email or Phone Number/i }).click();
@@ -315,8 +324,8 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       await page.getByPlaceholder('Enter your full name').fill(name);
       await page.getByPlaceholder('+1 (123)-456-7890').fill(phone);
       await page.getByPlaceholder('Enter email address').fill(email);
-      await page.getByPlaceholder('Enter Password').fill(password);
-      await page.getByPlaceholder('Re-enter password').fill(password);
+      await page.getByPlaceholder('Enter Password', { exact: true }).fill(password);
+      await page.getByPlaceholder('Re-enter password', { exact: true }).fill(password);
       await page.getByRole('checkbox').check();
       await page.getByRole('button', { name: 'Create Account' }).click();
 
@@ -331,12 +340,16 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       await expect(page.getByPlaceholder('Enter your full name')).toHaveValue(name);
       await expect(page.getByPlaceholder('+1 (123)-456-7890')).toHaveValue(phone);
 
-      // 4. Re-submit and verify
+      // 4. Update to the corrected email address, re-submit and verify
+      const correctedEmail = `consolidated-corrected-${randomUUID()}@example.test`;
+      await page.getByPlaceholder('Enter email address').fill(correctedEmail);
+      await page.getByPlaceholder('Enter Password', { exact: true }).fill(password);
+      await page.getByPlaceholder('Re-enter password', { exact: true }).fill(password);
       await page.getByRole('checkbox').check();
       await page.getByRole('button', { name: 'Create Account' }).click();
       await expect(page.getByRole('heading', { name: 'Verify Your Email' })).toBeVisible();
 
-      const otp = await getLatestInboxOtp(email, offset);
+      const otp = await getLatestInboxOtp(correctedEmail, offset);
       for (let i = 0; i < 6; i++) {
         await page.getByRole('textbox', { name: `Digit ${i + 1}` }).fill(otp[i]);
       }

@@ -232,6 +232,9 @@ export default function LoginPage() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('intent') === 'recover') {
+        queueMicrotask(() => {
+          setStep('reset-request');
+        });
         historyPushedRef.current = false;
         try {
           window.history.replaceState({ lgbAuthRecovery: true }, '', '/login');

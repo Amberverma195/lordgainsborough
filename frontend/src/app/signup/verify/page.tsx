@@ -1,7 +1,4 @@
-'use client';
-
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { redirect } from 'next/navigation';
 
 /**
  * Legacy /signup/verify route.
@@ -9,11 +6,5 @@ import { useRouter } from 'next/navigation';
  * both registration and OTP verification under a single route.
  */
 export default function SignupVerifyRedirect() {
-  const router = useRouter();
-
-  useEffect(() => {
-    router.replace('/signup');
-  }, [router]);
-
-  return null;
+  redirect('/signup');
 }

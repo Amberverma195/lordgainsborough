@@ -1,7 +1,4 @@
-'use client';
-
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { redirect } from 'next/navigation';
 
 /**
  * Legacy /forgot-password route.
@@ -9,11 +6,5 @@ import { useRouter } from 'next/navigation';
  * operate under the unified /login state machine.
  */
 export default function ForgotPasswordRedirect() {
-  const router = useRouter();
-
-  useEffect(() => {
-    router.replace('/login?intent=recover');
-  }, [router]);
-
-  return null;
+  redirect('/login?intent=recover');
 }
