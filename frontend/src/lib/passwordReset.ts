@@ -197,7 +197,10 @@ export async function fetchPasswordResetWithRetry(
 ): Promise<Response> {
   try {
     return await buildRequest(idempotencyKey);
-  } catch {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw err;
+    }
     return buildRequest(idempotencyKey);
   }
 }

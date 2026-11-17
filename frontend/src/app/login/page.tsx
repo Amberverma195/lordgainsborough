@@ -116,6 +116,16 @@ export default function LoginPage() {
   const historyPushedRef = useRef(false);
   const stepRef = useRef<StepName>(step);
   const identifierRef = useRef(identifier);
+  const requestGenerationRef = useRef(0);
+  const requestAbortControllerRef = useRef<AbortController | null>(null);
+  const recoverySessionStartedAtRef = useRef(0);
+  const abandonedChallengeIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (recoverySessionStartedAtRef.current === 0) {
+      recoverySessionStartedAtRef.current = Date.now();
+    }
+  }, []);
 
   useEffect(() => {
     stepRef.current = step;
@@ -133,6 +143,17 @@ export default function LoginPage() {
   const rateCooldownSec = remainingServerCooldownSeconds(rateCooldown, nowTick);
   const challengeExpired = isPasswordResetChallengeExpired(challenge, nowTick);
   const resendExhausted = isPasswordResetResendExhausted(challenge);
+
+  const abortInFlightRequests = useCallback(() => {
+    requestGenerationRef.current++;
+    if (requestAbortControllerRef.current) {
+      requestAbortControllerRef.current.abort();
+      requestAbortControllerRef.current = null;
+    }
+    requestInFlight.current = false;
+    setActiveRequest(null);
+    setLoading(false);
+  }, []);
 
   // Challenge persistence & state syncing
   const updateChallenge = useCallback((next: PasswordResetChallengeState | null) => {
@@ -166,6 +187,11 @@ export default function LoginPage() {
     const onPopState = (event: PopStateEvent) => {
       // If user presses browser Back while in any reset step, return to clean login
       if (!event.state?.lgbAuthRecovery) {
+        abortInFlightRequests();
+        if (challengeRef.current?.challengeId) {
+          abandonedChallengeIdsRef.current.add(challengeRef.current.challengeId);
+        }
+        recoverySessionStartedAtRef.current = Date.now();
         historyPushedRef.current = false;
         setStep((currentStep) => {
           if (currentStep === 'reset-request' || currentStep === 'reset-verify' || currentStep === 'reset-complete') {
@@ -199,7 +225,7 @@ export default function LoginPage() {
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [clearSensitiveFields, updateChallenge]);
+  }, [abortInFlightRequests, clearSensitiveFields, updateChallenge]);
 
   // Initial load check for ?intent=recover
   useEffect(() => {
@@ -223,33 +249,44 @@ export default function LoginPage() {
         ? normalizeIdentifier(identifierRef.current.trim())
         : '';
 
-      // Cross-tab events only apply if this tab is actively in the recovery flow
+      // 1. Cross-tab events only apply if this tab is actively in the recovery flow
       const isInRecovery = currentStep === 'reset-request' || currentStep === 'reset-verify';
       if (!isInRecovery) {
         return;
       }
 
-      // Check whether payload matches this tab's active recovery identity
-      const payloadEmail = payload.email ? normalizeIdentifier(payload.email) : '';
-      const payloadChallengeId = payload.challengeId;
-
-      const matchesChallengeId = Boolean(
-        payloadChallengeId && activeChallenge?.challengeId && payloadChallengeId === activeChallenge.challengeId
-      );
-      const matchesActiveEmail = Boolean(
-        payloadEmail && (
-          (activeChallenge?.email && normalizeIdentifier(activeChallenge.email) === payloadEmail)
-          || (activeIdentifier && activeIdentifier === payloadEmail)
-        )
-      );
-      const matchesIdentity = matchesChallengeId || matchesActiveEmail;
-
-      if (!matchesIdentity) {
-        // Discard: belongs to a different recovery session or unrelated account
+      // 2. Reject if this challenge was explicitly abandoned in this tab
+      if (payload.challengeId && abandonedChallengeIdsRef.current.has(payload.challengeId)) {
         return;
       }
 
+      const payloadEmail = payload.email ? normalizeIdentifier(payload.email) : '';
+      const payloadChallengeId = payload.challengeId;
+
+      // 3. Strict challenge ID & generation checks
+      if (activeChallenge) {
+        // When a challenge is already active, REQUIRE its exact challenge ID
+        if (!payloadChallengeId || payloadChallengeId !== activeChallenge.challengeId) {
+          return;
+        }
+        // Also reject older generation updates for the same challenge
+        if (payload.updatedAt && activeChallenge.observedAt && payload.updatedAt < activeChallenge.observedAt) {
+          return;
+        }
+      } else {
+        // No challenge is currently active (e.g. on reset-request with typed identifier)
+        // Must match active typed identifier
+        if (!payloadEmail || !activeIdentifier || payloadEmail !== activeIdentifier) {
+          return;
+        }
+        // Generation check: Reject updates that were generated BEFORE the current recovery attempt started
+        if (payload.updatedAt && payload.updatedAt < recoverySessionStartedAtRef.current) {
+          return;
+        }
+      }
+
       if (payload.type === 'completed') {
+        abortInFlightRequests();
         updateChallenge(null);
         clearSensitiveFields();
         setError('');
@@ -258,6 +295,7 @@ export default function LoginPage() {
         return;
       }
       if (payload.type === 'cleared') {
+        abortInFlightRequests();
         updateChallenge(null);
         clearSensitiveFields();
         setError('');
@@ -279,7 +317,7 @@ export default function LoginPage() {
       handle.close();
       crossTabRef.current = null;
     };
-  }, [clearSensitiveFields, updateChallenge]);
+  }, [abortInFlightRequests, clearSensitiveFields, updateChallenge]);
 
   // Periodic tick for authoritative countdowns
   useEffect(() => {
@@ -380,6 +418,8 @@ export default function LoginPage() {
 
   // Switch to Recovery Flow
   const goToResetRequest = () => {
+    abortInFlightRequests();
+    recoverySessionStartedAtRef.current = Date.now();
     setError('');
     setSuccess('');
     clearSensitiveFields();
@@ -405,6 +445,10 @@ export default function LoginPage() {
       return;
     }
 
+    const currentGen = ++requestGenerationRef.current;
+    const abortController = new AbortController();
+    requestAbortControllerRef.current = abortController;
+
     requestInFlight.current = true;
     setActiveRequest('send');
     setLoading(true);
@@ -421,7 +465,15 @@ export default function LoginPage() {
             'Idempotency-Key': key,
           },
           body: JSON.stringify({ email: normalized }),
+          signal: abortController.signal,
         }), idempotencyKey);
+
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
+      }
+      if (stepRef.current !== 'reset-request') {
+        return;
+      }
 
       const body = await readPasswordResetResponse(res);
       const retrySeconds = resolveRetryAfterSeconds(
@@ -429,6 +481,13 @@ export default function LoginPage() {
         body.retryAfterSeconds,
         body.serverTime
       );
+
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
+      }
+      if (stepRef.current !== 'reset-request') {
+        return;
+      }
 
       if (body.code === 'RESET_RATE_LIMITED' || res.status === 429) {
         setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
@@ -454,11 +513,19 @@ export default function LoginPage() {
 
       setCodedResetError(body.code, retrySeconds);
     } catch {
+      if (abortController.signal.aborted || currentGen !== requestGenerationRef.current) {
+        return;
+      }
       setError('Unable to connect to the server. Please try again.');
     } finally {
-      requestInFlight.current = false;
-      setActiveRequest(null);
-      setLoading(false);
+      if (requestAbortControllerRef.current === abortController) {
+        requestAbortControllerRef.current = null;
+      }
+      if (currentGen === requestGenerationRef.current) {
+        requestInFlight.current = false;
+        setActiveRequest(null);
+        setLoading(false);
+      }
     }
   };
 
@@ -474,6 +541,10 @@ export default function LoginPage() {
     ) {
       return;
     }
+
+    const currentGen = ++requestGenerationRef.current;
+    const abortController = new AbortController();
+    requestAbortControllerRef.current = abortController;
 
     requestInFlight.current = true;
     setActiveRequest('resend');
@@ -493,7 +564,15 @@ export default function LoginPage() {
             email: current.email,
             challengeId: current.challengeId,
           }),
+          signal: abortController.signal,
         }), idempotencyKey);
+
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
+      }
+      if (stepRef.current !== 'reset-verify') {
+        return;
+      }
 
       const body = await readPasswordResetResponse(res);
       const retrySeconds = resolveRetryAfterSeconds(
@@ -501,6 +580,13 @@ export default function LoginPage() {
         body.retryAfterSeconds,
         body.serverTime
       );
+
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
+      }
+      if (stepRef.current !== 'reset-verify') {
+        return;
+      }
 
       if (body.code === 'RESET_RATE_LIMITED' || res.status === 429) {
         setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
@@ -519,16 +605,29 @@ export default function LoginPage() {
       }
       setCodedResetError(body.code, retrySeconds);
     } catch {
+      if (abortController.signal.aborted || currentGen !== requestGenerationRef.current) {
+        return;
+      }
       setError('Unable to connect to the server. Please try again.');
     } finally {
-      requestInFlight.current = false;
-      setActiveRequest(null);
+      if (requestAbortControllerRef.current === abortController) {
+        requestAbortControllerRef.current = null;
+      }
+      if (currentGen === requestGenerationRef.current) {
+        requestInFlight.current = false;
+        setActiveRequest(null);
+      }
     }
   };
 
   // --- Step 4: Change Identifier from Verification Screen ---
   const handleChangeIdentifier = () => {
+    abortInFlightRequests();
     const prevChallenge = challengeRef.current;
+    if (prevChallenge?.challengeId) {
+      abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
+    }
+    recoverySessionStartedAtRef.current = Date.now();
     updateChallenge(null);
     clearSensitiveFields();
     setError('');
@@ -561,6 +660,10 @@ export default function LoginPage() {
       return;
     }
 
+    const currentGen = ++requestGenerationRef.current;
+    const abortController = new AbortController();
+    requestAbortControllerRef.current = abortController;
+
     requestInFlight.current = true;
     setActiveRequest('reset');
     setLoading(true);
@@ -580,7 +683,15 @@ export default function LoginPage() {
             otp: resetOtp.replace(/\D/g, '').slice(0, 6),
             password: sanitizePasswordInput(resetPassword),
           }),
+          signal: abortController.signal,
         }), idempotencyKey);
+
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
+      }
+      if (stepRef.current !== 'reset-verify') {
+        return;
+      }
 
       const body = await readPasswordResetResponse(res);
       const retrySeconds = resolveRetryAfterSeconds(
@@ -589,8 +700,8 @@ export default function LoginPage() {
         body.serverTime
       );
 
-      if (body.code === 'RESET_RATE_LIMITED' || res.status === 429) {
-        setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
+      if (currentGen !== requestGenerationRef.current || abortController.signal.aborted) {
+        return;
       }
 
       if (res.ok && body.code === 'PASSWORD_RESET_COMPLETED') {
@@ -602,20 +713,37 @@ export default function LoginPage() {
         return;
       }
 
+      if (body.code === 'RESET_RATE_LIMITED' || res.status === 429) {
+        setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
+      }
+
       applyPasswordResetResponse(current, current.email, body, retrySeconds);
       setCodedResetError(body.code, retrySeconds);
     } catch {
+      if (abortController.signal.aborted || currentGen !== requestGenerationRef.current) {
+        return;
+      }
       setError('Unable to connect to the server. Please try again.');
     } finally {
-      requestInFlight.current = false;
-      setActiveRequest(null);
-      setLoading(false);
+      if (requestAbortControllerRef.current === abortController) {
+        requestAbortControllerRef.current = null;
+      }
+      if (currentGen === requestGenerationRef.current) {
+        requestInFlight.current = false;
+        setActiveRequest(null);
+        setLoading(false);
+      }
     }
   };
 
   // Exit Recovery back to Login Identifier
   const returnToLogin = () => {
+    abortInFlightRequests();
     const prevChallenge = challengeRef.current;
+    if (prevChallenge?.challengeId) {
+      abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
+    }
+    recoverySessionStartedAtRef.current = Date.now();
     updateChallenge(null);
     clearSensitiveFields();
     setError('');

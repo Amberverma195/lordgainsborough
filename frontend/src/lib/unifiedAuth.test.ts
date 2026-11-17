@@ -184,45 +184,115 @@ describe('Unified Auth: Cross-Tab Invariants', () => {
     expect(parsedCleared?.type).toBe('cleared');
   });
 
-  it('rejects cross-tab updates when tab is in normal login or identity mismatches', () => {
-    // Helper function reproducing the isolation policy check in LoginPage
+  it('enforces airtight cross-tab challenge isolation and generation checks', () => {
     const shouldAcceptCrossTab = (
       currentStep: string,
-      activeChallenge: { challengeId?: string; email?: string } | null,
+      activeChallenge: { challengeId: string; email: string; observedAt: number } | null,
       activeIdentifier: string,
-      payload: { email?: string; challengeId?: string }
+      sessionStartedAt: number,
+      abandonedChallengeIds: Set<string>,
+      payload: { email?: string; challengeId?: string; updatedAt?: number }
     ) => {
       const isInRecovery = currentStep === 'reset-request' || currentStep === 'reset-verify';
       if (!isInRecovery) return false;
 
+      if (payload.challengeId && abandonedChallengeIds.has(payload.challengeId)) {
+        return false;
+      }
+
       const payloadEmail = payload.email ? normalizeIdentifier(payload.email) : '';
       const payloadChallengeId = payload.challengeId;
 
-      const matchesChallengeId = Boolean(
-        payloadChallengeId && activeChallenge?.challengeId && payloadChallengeId === activeChallenge.challengeId
-      );
-      const matchesActiveEmail = Boolean(
-        payloadEmail && (
-          (activeChallenge?.email && normalizeIdentifier(activeChallenge.email) === payloadEmail)
-          || (activeIdentifier && normalizeIdentifier(activeIdentifier) === payloadEmail)
-        )
-      );
-      return matchesChallengeId || matchesActiveEmail;
+      if (activeChallenge) {
+        // When active, REQUIRE exact challenge ID
+        if (!payloadChallengeId || payloadChallengeId !== activeChallenge.challengeId) {
+          return false;
+        }
+        if (payload.updatedAt && activeChallenge.observedAt && payload.updatedAt < activeChallenge.observedAt) {
+          return false;
+        }
+        return true;
+      } else {
+        if (!payloadEmail || !activeIdentifier || payloadEmail !== normalizeIdentifier(activeIdentifier)) {
+          return false;
+        }
+        if (payload.updatedAt && payload.updatedAt < sessionStartedAt) {
+          return false;
+        }
+        return true;
+      }
     };
 
-    // 1. Ordinary login tab ignores recovery updates from other tabs
-    expect(shouldAcceptCrossTab('login-identifier', null, '', { email: 'alice@example.com', challengeId: 'c1' })).toBe(false);
-    expect(shouldAcceptCrossTab('login-password', null, 'bob@example.com', { email: 'alice@example.com', challengeId: 'c1' })).toBe(false);
+    const abandoned = new Set<string>();
+    const now = 100000;
 
-    // 2. Recovery tab for Alice rejects incoming challenge for Mallory
-    expect(shouldAcceptCrossTab('reset-verify', { challengeId: 'c-alice', email: 'alice@example.com' }, 'alice@example.com', { email: 'mallory@example.com', challengeId: 'c-mallory' })).toBe(false);
+    // 1. Normal login tab ignores cross-tab recovery updates
+    expect(shouldAcceptCrossTab('login-identifier', null, '', now, abandoned, { email: 'alice@example.com', challengeId: 'c1', updatedAt: now + 10 })).toBe(false);
+    expect(shouldAcceptCrossTab('login-password', null, 'bob@example.com', now, abandoned, { email: 'alice@example.com', challengeId: 'c1', updatedAt: now + 10 })).toBe(false);
 
-    // 3. Recovery tab accepts update matching its active challenge ID or email
-    expect(shouldAcceptCrossTab('reset-verify', { challengeId: 'c-alice', email: 'alice@example.com' }, 'alice@example.com', { email: 'alice@example.com', challengeId: 'c-alice' })).toBe(true);
-    expect(shouldAcceptCrossTab('reset-request', null, 'alice@example.com', { email: 'alice@example.com', challengeId: 'c-new' })).toBe(true);
+    // 2. Active challenge REQUIRES exact challenge ID (matching email alone is rejected!)
+    const active = { challengeId: 'c-active-1', email: 'alice@example.com', observedAt: now };
+    expect(shouldAcceptCrossTab('reset-verify', active, 'alice@example.com', now, abandoned, { email: 'alice@example.com', challengeId: 'c-old-or-different', updatedAt: now + 50 })).toBe(false);
+    expect(shouldAcceptCrossTab('reset-verify', active, 'alice@example.com', now, abandoned, { email: 'alice@example.com', challengeId: 'c-active-1', updatedAt: now + 50 })).toBe(true);
 
-    // 4. Abandoned recovery (activeChallenge null, blank identifier) rejects incoming updates
-    expect(shouldAcceptCrossTab('reset-request', null, '', { email: 'alice@example.com', challengeId: 'c-old' })).toBe(false);
+    // 3. Stale update with earlier updatedAt is rejected
+    expect(shouldAcceptCrossTab('reset-verify', active, 'alice@example.com', now, abandoned, { email: 'alice@example.com', challengeId: 'c-active-1', updatedAt: now - 50 })).toBe(false);
+
+    // 4. Abandoned challenge is rejected even if user left same identifier in input
+    abandoned.add('c-active-1');
+    const newSessionStarted = now + 100;
+    expect(shouldAcceptCrossTab('reset-request', null, 'alice@example.com', newSessionStarted, abandoned, { email: 'alice@example.com', challengeId: 'c-active-1', updatedAt: newSessionStarted + 10 })).toBe(false);
+
+    // 5. Delayed update generated BEFORE the new session started is rejected
+    expect(shouldAcceptCrossTab('reset-request', null, 'alice@example.com', newSessionStarted, abandoned, { email: 'alice@example.com', challengeId: 'c-new', updatedAt: newSessionStarted - 20 })).toBe(false);
+
+    // 6. Fresh update generated AFTER new session started is accepted
+    expect(shouldAcceptCrossTab('reset-request', null, 'alice@example.com', newSessionStarted, abandoned, { email: 'alice@example.com', challengeId: 'c-new', updatedAt: newSessionStarted + 20 })).toBe(true);
+  });
+});
+
+describe('Unified Auth: In-Flight Request Cancellation & Attempt Generation', () => {
+  it('discards late responses when user navigates away or presses browser Back during request', async () => {
+    let currentGen = 0;
+    let activeController: AbortController | undefined;
+    let screenStep = 'reset-request';
+    let challengeUpdated = false;
+
+    // Simulate starting an in-flight send-otp request
+    const startRequest = () => {
+      const gen = ++currentGen;
+      const controller = new AbortController();
+      activeController = controller;
+      const signal = controller.signal;
+
+      const finishRequest = () => {
+        if (gen !== currentGen || signal.aborted) {
+          return; // Discard!
+        }
+        if (screenStep !== 'reset-request') {
+          return; // Discard!
+        }
+        challengeUpdated = true;
+        screenStep = 'reset-verify';
+      };
+
+      return { gen, finishRequest };
+    };
+
+    // User starts request
+    const { finishRequest } = startRequest();
+
+    // User immediately presses browser Back (popstate fires)
+    currentGen++;
+    activeController?.abort();
+    screenStep = 'login-identifier';
+
+    // Delayed network response arrives later
+    finishRequest();
+
+    // Verify screen did NOT jump to reset-verify and challenge was NOT set
+    expect(screenStep).toBe('login-identifier');
+    expect(challengeUpdated).toBe(false);
   });
 });
 

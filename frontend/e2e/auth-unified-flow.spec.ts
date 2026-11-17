@@ -245,13 +245,61 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
     await expect(page.getByPlaceholder('Email or phone number')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
 
+    // Repeated cycles of Forgot Password -> Back to Sign In do not accumulate history
+    for (let i = 0; i < 3; i++) {
+      await page.getByPlaceholder('Email or phone number').fill('test@example.test');
+      await page.getByRole('button', { name: 'Continue' }).click();
+      await page.getByRole('button', { name: 'Forgot password?' }).click();
+      await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
+      await page.getByRole('button', { name: /Back to Sign In/i }).click();
+      await expect(page.getByPlaceholder('Email or phone number')).toBeVisible();
+    }
+
     // Direct access to /forgot-password route redirects to /login with recovery intent
     await page.goto('/forgot-password');
     await expect(page).toHaveURL(/\/login(\?intent=recover)?$/);
     await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
   });
 
-  test('07: Consolidated Signup: single-route registration and inline OTP verification', async ({ page }) => {
+  test('07: Browser Back during in-flight OTP request discards response and remains on login', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByPlaceholder('Email or phone number').fill('inflight-test@example.test');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Forgot password?' }).click();
+
+    // Delay send-otp response to test in-flight race condition
+    await page.route('**/auth/forgot-password/send-otp', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'RESET_CODE_SENT',
+          challengeId: 'c-delayed-test',
+          serverTime: new Date().toISOString(),
+        }),
+      });
+    });
+
+    // Click Send Reset Code
+    await page.getByRole('button', { name: 'Send Reset Code' }).click();
+
+    // Immediately press browser Back while request is in flight
+    await page.goBack();
+
+    // Verify user is back on login identifier step
+    await expect(page.getByPlaceholder('Email or phone number')).toBeVisible();
+
+    // Wait 1.2s for delayed response to arrive
+    await page.waitForTimeout(1200);
+
+    // Verify screen REMAINS on login identifier and did NOT jump to reset-verify
+    await expect(page.getByPlaceholder('Email or phone number')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reset Password' })).toHaveCount(0);
+  });
+
+  test('08: Consolidated Signup: single-route registration and inline OTP verification', async ({ page }) => {
     const { db } = await getE2eDb();
     const email = `consolidated-signup-${randomUUID()}@example.test`;
     const phone = `+1 (519)-${randomInt(200, 999)}-${randomInt(1000, 9999)}`;
