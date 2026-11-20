@@ -279,12 +279,6 @@
   cursor: wait;
 }
 
-.resendHint {
-  margin: 0;
-  color: var(--text-light);
-  font-size: 0.85rem;
-}
-
 .backLink {
   display: inline-flex;
   align-items: center;

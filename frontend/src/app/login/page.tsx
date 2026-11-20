@@ -15,7 +15,6 @@ import {
   KeyRound,
   ShieldCheck,
   Phone,
-  RefreshCw,
 } from 'lucide-react';
 import styles from './login.module.css';
 import { apiFetch } from '@/lib/apiFetch';
@@ -623,22 +622,6 @@ export default function LoginPage() {
     }
   };
 
-  // --- Step 4: Change Identifier from Verification Screen ---
-  const handleChangeIdentifier = () => {
-    abortInFlightRequests();
-    const prevChallenge = challengeRef.current;
-    if (prevChallenge?.challengeId) {
-      abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
-    }
-    recoverySessionStartedAtRef.current = Date.now();
-    updateChallenge(null);
-    clearSensitiveFields();
-    setError('');
-    setSuccess('');
-    publishCrossTab(prevChallenge, 'cleared');
-    setStep('reset-request');
-  };
-
   // --- Step 4: Complete Reset Password ---
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1151,20 +1134,6 @@ export default function LoginPage() {
                   disabled={resendDisabled}
                 >
                   {resendLabel}
-                </button>
-                {challenge?.resendsRemaining !== undefined && (
-                  <p className={styles.resendHint}>
-                    {challenge.resendsRemaining} resend{challenge.resendsRemaining === 1 ? '' : 's'} remaining
-                  </p>
-                )}
-                <button
-                  type="button"
-                  className={styles.textBtn}
-                  onClick={handleChangeIdentifier}
-                  disabled={loading}
-                >
-                  <RefreshCw size={14} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
-                  Change Email or Phone Number
                 </button>
                 <button
                   type="button"

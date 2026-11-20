@@ -121,7 +121,6 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
 
       // Enters OTP verification step
       await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
-      await expect(page.getByRole('button', { name: /Change Email or Phone Number/i })).toBeVisible();
 
       // Fetch OTP from loopback inbox
       const otpCode = await getLatestInboxOtp(email, offset);
@@ -206,8 +205,8 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
     await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
     await expect(page.getByText('If an account matches that email or phone, a reset code has been sent.')).toBeVisible();
 
-    // Change identifier back to test unknown phone
-    await page.getByRole('button', { name: /Change Email or Phone Number/i }).click();
+    // Start a fresh recovery request for the unknown phone
+    await page.goto('/login?intent=recover');
     await expect(page.getByPlaceholder(/email.*phone/i)).toBeVisible();
 
     // Unknown phone
@@ -215,29 +214,6 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
     await page.getByRole('button', { name: 'Send Reset Code' }).click();
     await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
     await expect(page.getByText('If an account matches that email or phone, a reset code has been sent.')).toBeVisible();
-  });
-
-  test('05: "Change Email or Phone Number" clears challenge and secrets cleanly', async ({ page }) => {
-    const email = `change-id-${randomUUID()}@example.test`;
-
-    await page.goto('/login?intent=recover');
-    await page.getByPlaceholder(/email.*phone/i).fill(email);
-    await page.getByRole('button', { name: 'Send Reset Code' }).click();
-    await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
-
-    // Fill partial sensitive inputs
-    await page.getByPlaceholder('6-digit code').fill('123456');
-    await page.getByPlaceholder('Enter new password', { exact: true }).fill('PartialSecret1!');
-
-    // Click "Change Email or Phone Number"
-    await page.getByRole('button', { name: /Change Email or Phone Number/i }).click();
-
-    // Stays under /login, returns to request step
-    await expect(page.getByRole('button', { name: 'Send Reset Code' })).toBeVisible();
-
-    // Ensure session storage does NOT contain an active challenge
-    const challengeState = await page.evaluate(() => sessionStorage.getItem('passwordResetChallenge'));
-    expect(challengeState).toBeNull();
   });
 
   test('06: Browser navigation: Back from recovery returns to clean login', async ({ page }) => {
