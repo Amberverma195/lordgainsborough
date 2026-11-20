@@ -1056,14 +1056,6 @@ export default function LoginPage() {
                 <span className={styles.identifierText}>
                   {looksLikeEmail(identifier) ? <Mail size={14} /> : <Phone size={14} />} {identifier}
                 </span>
-                <button
-                  type="button"
-                  className={styles.changeIdentifierBtn}
-                  onClick={handleChangeIdentifier}
-                  disabled={loading}
-                >
-                  Change
-                </button>
               </div>
 
               <div className={styles.inputGroup}>
