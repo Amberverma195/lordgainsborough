@@ -96,13 +96,44 @@ public class PasswordResetService {
         }
 
         Optional<PasswordResetOtpChallenge> current = persistence.findByEmailKey(emailKey);
+        String normalizedIdempotency = normalizeIdempotencyKey(idempotencyKey);
+
         if (userId != null && current.isPresent()
-                && normalizeIdempotencyKey(idempotencyKey)
-                        .equals(current.get().getClientIdempotencyKey())
+                && normalizedIdempotency.equals(current.get().getClientIdempotencyKey())
                 && current.get().getStatus() != PasswordResetChallengeStatus.CONSUMED
                 && current.get().getChallengeExpiresAt() != null
-                && current.get().getChallengeExpiresAt().isAfter(now)) {
+                && current.get().getChallengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
             return accepted(current.get(), now);
+        }
+
+        if (userId != null && current.isPresent()
+                && current.get().getStatus() == PasswordResetChallengeStatus.ACTIVE
+                && current.get().getChallengeExpiresAt() != null
+                && current.get().getChallengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
+            PasswordResetOtpChallenge active = current.get();
+            if (active.getNextResendAt() != null && active.getNextResendAt().isAfter(now)) {
+                return cooldown(active, now);
+            }
+            if (active.getResendCount() >= properties.getMaxResends()) {
+                return resendLimit(active, now);
+            }
+            String rawCode = generateCode();
+            String operationId = UUID.randomUUID().toString();
+            Optional<PasswordResetOtpChallenge> reserved = persistence.tryReserveResend(
+                    emailKey,
+                    active.getChallengeId(),
+                    persistence.digestCode(rawCode),
+                    normalizedIdempotency,
+                    operationId,
+                    now);
+            if (reserved.isPresent()) {
+                deliver(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get());
+                return accepted(persistence.findByEmailKey(emailKey).orElse(reserved.get()), now);
+            }
         }
 
         OptionalLong challengeLimit = abuseLimiter.consumeNewChallenge(emailKey);
@@ -110,16 +141,13 @@ public class PasswordResetService {
             return rateLimited(challengeLimit.getAsLong(), now);
         }
 
-        if (userId != null && current.isPresent()
-                && current.get().getStatus() != PasswordResetChallengeStatus.CONSUMED
-                && current.get().getChallengeExpiresAt() != null
-                && current.get().getChallengeExpiresAt().isAfter(now)) {
-            return accepted(current.get(), now);
-        }
-
         if (userId == null) {
             // Match the dominant local cryptographic work of a real challenge creation.
             persistence.digestCode(generateCode());
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
             return acceptedShadow(emailKey, now, 0);
         }
 
@@ -129,14 +157,20 @@ public class PasswordResetService {
                 emailKey,
                 userId,
                 persistence.digestCode(rawCode),
-                normalizeIdempotencyKey(idempotencyKey),
+                normalizedIdempotency,
                 operationId,
                 now);
         Optional<PasswordResetOtpChallenge> reserved =
                 persistence.tryCreateOrReplaceExpired(challenge, now);
         if (reserved.isEmpty()) {
             return persistence.findByEmailKey(emailKey)
-                    .map(existing -> accepted(existing, now))
+                    .map(existing -> {
+                        observability.record(
+                                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                                AuthSecurityObservability.Outcome.SUCCESS,
+                                AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
+                        return accepted(existing, now);
+                    })
                     .orElseGet(() -> acceptedShadow(emailKey, now, 0));
         }
 
@@ -376,6 +410,10 @@ public class PasswordResetService {
                     challenge.getSendOperationId(),
                     OtpSendStatus.SENT,
                     persistence.now());
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.PROVIDER_ACCEPTED);
         } catch (AmbiguousEmailDeliveryException ambiguous) {
             persistence.markSendOutcome(
                     challenge.getEmailKey(),
@@ -385,17 +423,23 @@ public class PasswordResetService {
             observability.record(
                     AuthSecurityObservability.Flow.PASSWORD_RESET,
                     AuthSecurityObservability.Outcome.FAILURE,
-                    AuthSecurityObservability.Reason.PROVIDER_FAILURE);
+                    AuthSecurityObservability.Reason.PROVIDER_TIMEOUT_OR_AMBIGUOUS);
         } catch (RuntimeException definite) {
             persistence.markSendOutcome(
                     challenge.getEmailKey(),
                     challenge.getSendOperationId(),
                     OtpSendStatus.DEFINITELY_FAILED,
                     persistence.now());
+            if (challenge.getResendCount() == 0) {
+                persistence.expireAfterDefiniteInitialFailure(
+                        challenge.getEmailKey(),
+                        challenge.getSendOperationId(),
+                        persistence.now());
+            }
             observability.record(
                     AuthSecurityObservability.Flow.PASSWORD_RESET,
                     AuthSecurityObservability.Outcome.FAILURE,
-                    AuthSecurityObservability.Reason.PROVIDER_FAILURE);
+                    AuthSecurityObservability.Reason.PROVIDER_DEFINITE_FAILURE);
         }
     }
 
@@ -430,7 +474,7 @@ public class PasswordResetService {
             String idempotencyKey,
             String clientIp,
             Instant now) {
-        if (!handle.challengeExpiresAt().isAfter(now)) {
+        if (!handle.challengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
             return challengeExpired(now);
         }
         if (handle.resendCount() >= properties.getMaxResends()) {
@@ -459,7 +503,7 @@ public class PasswordResetService {
 
     private Result resendStateDenial(PasswordResetOtpChallenge challenge, Instant now) {
         if (challenge.getChallengeExpiresAt() == null
-                || !challenge.getChallengeExpiresAt().isAfter(now)) {
+                || !challenge.getChallengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
             return challengeExpired(now);
         }
         if (challenge.getStatus() == PasswordResetChallengeStatus.LOCKED) {

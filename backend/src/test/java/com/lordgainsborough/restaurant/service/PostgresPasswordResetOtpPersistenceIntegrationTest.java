@@ -1736,4 +1736,176 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                     assertNotNull(rolledBackCh.getCodeDigest());
                 });
     }
+
+    @Test
+    @Order(48)
+    @DisplayName("48. Fake-clock: Resending at 29 minutes 50 seconds rejects due to insufficient parent challenge lifetime")
+    void test48_resendAt29Minutes50SecondsRejectsDueToInsufficientLifetime() {
+        requirePostgres();
+        PasswordResetService.Result initialResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.10", "idemp-2950-init");
+        assertEquals(HttpStatus.ACCEPTED, initialResult.status());
+        String handle = initialResult.body().getChallengeId();
+        assertNotNull(handle);
+
+        // Advance fake clock to 29 minutes and 50 seconds later (10 seconds remaining, < 1m min remaining lifetime)
+        clock.advance(Duration.ofMinutes(29).plusSeconds(50));
+
+        // Resend attempt at 29m 50s
+        PasswordResetService.Result resendResult = service.resend(TEST_USER_EMAIL, handle, "192.168.1.10", "idemp-2950-resend");
+        assertEquals(HttpStatus.GONE, resendResult.status());
+        assertEquals("RESET_CHALLENGE_EXPIRED", resendResult.body().getCode());
+
+        // Verify underlying store enforces min remaining lifetime
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        PasswordResetOtpChallenge ch = store.findByEmailKey(emailKey).orElseThrow();
+        Optional<PasswordResetOtpChallenge> storeResend = store.tryReserveResend(
+                emailKey, ch.getChallengeId(), persistence.digestCode("999999"), "idemp-direct", "op-direct", clock.instant());
+        assertTrue(storeResend.isEmpty(), "Store must refuse resend when challenge remaining lifetime is under 1 minute");
+    }
+
+    @Test
+    @Order(49)
+    @DisplayName("49. Fake-clock: Expired initial challenge is atomically replaced with a fresh challenge")
+    void test49_expiredInitialChallengeAtomicallyReplacedWithFreshChallenge() {
+        requirePostgres();
+        PasswordResetService.Result initialResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.11", "idemp-exp-init");
+        assertEquals(HttpStatus.ACCEPTED, initialResult.status());
+        String firstChallengeId = initialResult.body().getChallengeId();
+
+        // Advance clock past 30 minutes challenge TTL
+        clock.advance(Duration.ofMinutes(30).plusSeconds(1));
+
+        // New requestInitial atomically replaces expired challenge
+        PasswordResetService.Result freshResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.11", "idemp-exp-fresh");
+        assertEquals(HttpStatus.ACCEPTED, freshResult.status());
+        assertEquals("RESET_CODE_SENT", freshResult.body().getCode());
+        String secondChallengeId = freshResult.body().getChallengeId();
+        assertNotEquals(firstChallengeId, secondChallengeId);
+
+        // Fresh challenge expires at now + 30m
+        assertEquals(clock.instant().plus(properties.getChallengeTtl()), freshResult.body().getChallengeExpiresAt());
+    }
+
+    @Test
+    @Order(50)
+    @DisplayName("50. Fake-clock: Active-challenge reuse behaves deterministically with idempotent replay and cooldown")
+    void test50_activeChallengeReuseIdempotentReplayAndCooldown() {
+        requirePostgres();
+        // 1. Initial request
+        PasswordResetService.Result res1 = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.12", "idemp-reuse-key");
+        assertEquals(HttpStatus.ACCEPTED, res1.status());
+        String challengeHandle = res1.body().getChallengeId();
+
+        // Advance clock 5 seconds (within 30s cooldown)
+        clock.advance(Duration.ofSeconds(5));
+
+        // 2. Replay with identical idempotency key -> returns existing challenge, no error, no cooldown block
+        PasswordResetService.Result resReplay = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.12", "idemp-reuse-key");
+        assertEquals(HttpStatus.ACCEPTED, resReplay.status());
+        assertEquals(challengeHandle, resReplay.body().getChallengeId());
+
+        // 3. Retry with new idempotency key during cooldown -> HTTP 429 RESET_CODE_RESEND_COOLDOWN
+        PasswordResetService.Result resCooldown = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.12", "idemp-new-during-cooldown");
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, resCooldown.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", resCooldown.body().getCode());
+
+        // 4. Advance clock past cooldown (30s) -> requesting initial with new key delivers new code and returns 202
+        clock.advance(Duration.ofSeconds(30));
+        PasswordResetService.Result resAfterCooldown = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.12", "idemp-after-cooldown");
+        assertEquals(HttpStatus.ACCEPTED, resAfterCooldown.status());
+        assertEquals("RESET_CODE_SENT", resAfterCooldown.body().getCode());
+    }
+
+    @Test
+    @Order(51)
+    @DisplayName("51. Fake-clock: Definite delivery failure marks outcome and allows immediate retry without 30m lock")
+    void test51_deliveryDefiniteFailureAllowsImmediateRetry() {
+        requirePostgres();
+        org.mockito.Mockito.doThrow(new RuntimeException("Simulated provider failure: invalid recipient"))
+                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+
+        // Initial request fails delivery
+        PasswordResetService.Result failResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.13", "idemp-fail");
+        // Public endpoint returns 202 to avoid account enumeration
+        assertEquals(HttpStatus.ACCEPTED, failResult.status());
+
+        // In DB, send status is DEFINITELY_FAILED and challenge is immediately expired
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        PasswordResetOtpChallenge ch = store.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(OtpSendStatus.DEFINITELY_FAILED, ch.getSendStatus());
+        assertTrue(!ch.getChallengeExpiresAt().isAfter(clock.instant()));
+
+        // Restore mock to succeed
+        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+
+        // Immediate retry succeeds because the failed challenge was expired and can be replaced
+        PasswordResetService.Result retryResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.13", "idemp-retry-after-fail");
+        assertEquals(HttpStatus.ACCEPTED, retryResult.status());
+        PasswordResetOtpChallenge retriedCh = store.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(OtpSendStatus.SENT, retriedCh.getSendStatus());
+        assertEquals(PasswordResetChallengeStatus.ACTIVE, retriedCh.getStatus());
+    }
+
+    @Test
+    @Order(52)
+    @DisplayName("52. Fake-clock: Delayed delivery / timeout transitions to DELIVERY_UNKNOWN and clears send lease")
+    void test52_delayedDeliveryTimeoutTransitionsToDeliveryUnknownAndClearsLease() {
+        requirePostgres();
+        org.mockito.Mockito.doThrow(new AmbiguousEmailDeliveryException("Simulated Resend API timeout"))
+                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+
+        PasswordResetService.Result ambiguousResult = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.14", "idemp-ambiguous");
+        assertEquals(HttpStatus.ACCEPTED, ambiguousResult.status());
+
+        String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        PasswordResetOtpChallenge ch = store.findByEmailKey(emailKey).orElseThrow();
+        assertEquals(OtpSendStatus.DELIVERY_UNKNOWN, ch.getSendStatus());
+        assertNull(ch.getSendLeaseUntil(), "Send lease must be cleared on DELIVERY_UNKNOWN");
+
+        // Clean up mock
+        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @Order(53)
+    @DisplayName("53. Fake-clock: Repeated requests respect IP and challenge abuse limits")
+    void test53_repeatedRequestsAbuseLimiterEnforcement() {
+        requirePostgres();
+        properties.setEmailOperationsPerIp(3);
+        try {
+            // Send initial
+            PasswordResetService.Result res1 = service.requestInitial(
+                    TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.99", "idemp-abuse-1");
+            assertEquals(HttpStatus.ACCEPTED, res1.status());
+            String handle = res1.body().getChallengeId();
+
+            // Advance clock past cooldown
+            clock.advance(Duration.ofSeconds(35));
+            PasswordResetService.Result res2 = service.resend(TEST_USER_EMAIL, handle, "192.168.1.99", "idemp-abuse-2");
+            assertEquals(HttpStatus.ACCEPTED, res2.status());
+
+            clock.advance(Duration.ofSeconds(35));
+            PasswordResetService.Result res3 = service.resend(TEST_USER_EMAIL, handle, "192.168.1.99", "idemp-abuse-3");
+            assertEquals(HttpStatus.ACCEPTED, res3.status());
+
+            // 4th operation from same IP exceeds limit (limit is 3)
+            clock.advance(Duration.ofSeconds(35));
+            PasswordResetService.Result res4 = service.resend(TEST_USER_EMAIL, handle, "192.168.1.99", "idemp-abuse-4");
+            assertEquals(HttpStatus.TOO_MANY_REQUESTS, res4.status());
+            assertEquals("RESET_RATE_LIMITED", res4.body().getCode());
+            assertTrue(res4.retryAfterSeconds() > 0);
+        } finally {
+            properties.setEmailOperationsPerIp(1_000);
+        }
+    }
 }

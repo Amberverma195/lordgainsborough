@@ -722,6 +722,25 @@ export default function LoginPage() {
     }
   };
 
+  // Start New Reset on Challenge Expiry or explicit restart
+  const handleStartNewReset = () => {
+    abortInFlightRequests();
+    const prevChallenge = challengeRef.current;
+    if (prevChallenge?.challengeId) {
+      abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
+    }
+    recoverySessionStartedAtRef.current = Date.now();
+    updateChallenge(null);
+    clearSensitiveFields();
+    setError('');
+    setSuccess('');
+    publishCrossTab(prevChallenge, 'cleared');
+    try {
+      window.history.replaceState({ lgbAuthRecovery: true }, '', '/login');
+    } catch {}
+    setStep('reset-request');
+  };
+
   // Exit Recovery back to Login Identifier
   const returnToLogin = () => {
     abortInFlightRequests();
@@ -1114,27 +1133,47 @@ export default function LoginPage() {
 
               <PasswordStrengthIndicator password={resetPassword} confirmPassword={resetConfirmPassword} />
 
-              <button
-                type="submit"
-                className={styles.primaryBtn}
-                disabled={loading || !canSubmitReset || challengeExpired || rateCooldownSec > 0}
-              >
-                {activeRequest === 'reset'
-                  ? 'Resetting...'
-                  : rateCooldownSec > 0
-                  ? `Try Again (${rateCooldownSec}s)`
-                  : 'Reset Password'} <ArrowRight size={18} />
-              </button>
-
-              <div className={styles.actions}>
+              {challengeExpired ? (
                 <button
                   type="button"
-                  className={styles.textBtn}
-                  onClick={handleResendResetOtp}
-                  disabled={resendDisabled}
+                  className={styles.primaryBtn}
+                  onClick={handleStartNewReset}
                 >
-                  {resendLabel}
+                  Start New Reset <ArrowRight size={18} />
                 </button>
+              ) : (
+                <button
+                  type="submit"
+                  className={styles.primaryBtn}
+                  disabled={loading || !canSubmitReset || rateCooldownSec > 0}
+                >
+                  {activeRequest === 'reset'
+                    ? 'Resetting...'
+                    : rateCooldownSec > 0
+                    ? `Try Again (${rateCooldownSec}s)`
+                    : 'Reset Password'} <ArrowRight size={18} />
+                </button>
+              )}
+
+              <div className={styles.actions}>
+                {challengeExpired ? (
+                  <button
+                    type="button"
+                    className={styles.textBtn}
+                    onClick={handleStartNewReset}
+                  >
+                    Start New Reset
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.textBtn}
+                    onClick={handleResendResetOtp}
+                    disabled={resendDisabled}
+                  >
+                    {resendLabel}
+                  </button>
+                )}
                 <button
                   type="button"
                   className={styles.backLink}

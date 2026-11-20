@@ -96,6 +96,13 @@ public class PasswordResetOtpChallengePersistence {
         return store.markSendOutcome(emailKey, sendOperationId, outcome, now);
     }
 
+    public Optional<PasswordResetOtpChallenge> expireAfterDefiniteInitialFailure(
+            String emailKey,
+            String sendOperationId,
+            Instant now) {
+        return store.expireAfterDefiniteInitialFailure(emailKey, sendOperationId, now);
+    }
+
     public Optional<PasswordResetOtpChallenge> recordFailedVerification(
             String emailKey,
             String challengeId,

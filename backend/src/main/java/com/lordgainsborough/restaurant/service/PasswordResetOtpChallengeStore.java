@@ -49,6 +49,15 @@ public interface PasswordResetOtpChallengeStore {
             Instant now);
 
     /**
+     * After a definite initial-send failure, atomically expires the challenge so a subsequent
+     * initial request can replace it with a fresh challenge.
+     */
+    Optional<PasswordResetOtpChallenge> expireAfterDefiniteInitialFailure(
+            String emailKey,
+            String sendOperationId,
+            Instant now);
+
+    /**
      * Atomically records a failed verification attempt.
      * Enforces atomic transition to {@code LOCKED} on reaching the maximum failed attempt threshold.
      */

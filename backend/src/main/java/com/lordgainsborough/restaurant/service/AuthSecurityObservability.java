@@ -33,7 +33,12 @@ public class AuthSecurityObservability {
         PASSWORD_RESET_COMPLETED,
         SIGNUP_ATTEMPT_MISMATCH,
         SIGNUP_ATTEMPT_RESTARTED,
-        SIGNUP_SUCCESS
+        SIGNUP_SUCCESS,
+        RESET_SHADOW_CHALLENGE,
+        RESET_CHALLENGE_REUSED,
+        PROVIDER_ACCEPTED,
+        PROVIDER_DEFINITE_FAILURE,
+        PROVIDER_TIMEOUT_OR_AMBIGUOUS
     }
 
     private static final Logger logger = LoggerFactory.getLogger(AuthSecurityObservability.class);

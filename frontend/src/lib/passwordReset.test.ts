@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyPasswordResetResponse,
+  clearPasswordResetChallengeState,
   fetchPasswordResetWithRetry,
+  isPasswordResetChallengeExpired,
+  isPasswordResetResendExhausted,
   loadPasswordResetChallengeState,
   PASSWORD_RESET_CHALLENGE_KEY,
   passwordResetCooldownSeconds,
@@ -118,5 +121,43 @@ describe('password reset helpers', () => {
 
     expect(response.status).toBe(202);
     expect(keys).toEqual(['one-click-key', 'one-click-key']);
+  });
+
+  it('evaluates challenge expiry taking clock skew into account', () => {
+    const observedAt = Date.parse('2026-07-13T07:00:00.000-04:00'); // 11:00 UTC
+    const serverTime = '2026-07-13T12:00:00.000Z'; // Server says 12:00 UTC (client is 1h behind)
+    const challengeExpiresAt = '2026-07-13T12:30:00.000Z'; // 30 minutes after server time
+
+    const state = applyPasswordResetResponse(null, 'member@example.com', {
+      challengeId: 'challenge-skew',
+      serverTime,
+      challengeExpiresAt,
+      resendsRemaining: 3,
+    }, 0, observedAt);
+
+    expect(state).not.toBeNull();
+    // At observedAt (server time 12:00 UTC), not expired
+    expect(isPasswordResetChallengeExpired(state, observedAt)).toBe(false);
+    // 29 minutes later in client time (server time 12:29 UTC), not expired
+    expect(isPasswordResetChallengeExpired(state, observedAt + 29 * 60 * 1000)).toBe(false);
+    // 30 minutes and 1 second later (server time 12:30:01 UTC), expired!
+    expect(isPasswordResetChallengeExpired(state, observedAt + 30 * 60 * 1000 + 1000)).toBe(true);
+  });
+
+  it('detects resend exhaustion and clears challenge state cleanly', () => {
+    const state = applyPasswordResetResponse(null, 'member@example.com', {
+      challengeId: 'challenge-exhaust',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      resendsRemaining: 0,
+    }, 0, 1000);
+
+    expect(isPasswordResetResendExhausted(state)).toBe(true);
+
+    savePasswordResetChallengeState(state!);
+    expect(sessionStorage.getItem(PASSWORD_RESET_CHALLENGE_KEY)).not.toBeNull();
+
+    clearPasswordResetChallengeState();
+    expect(sessionStorage.getItem(PASSWORD_RESET_CHALLENGE_KEY)).toBeNull();
+    expect(loadPasswordResetChallengeState()).toBeNull();
   });
 });

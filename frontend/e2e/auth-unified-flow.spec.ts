@@ -342,4 +342,106 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       await db.end();
     }
   });
+
+  test('09: Password reset expiry, Start New Reset action, cooldown, history hygiene, and fresh OTP recovery', async ({ page }) => {
+    const { db } = await getE2eDb();
+    const email = `expiry-restart-${randomUUID()}@example.test`;
+    const oldPassword = 'OldPassword1!';
+    const newPassword = 'NewPassword100!';
+    const userId = randomUUID();
+
+    try {
+      await db.query(
+        'INSERT INTO users(id, name, email, password, role, token_version) VALUES($1, $2, $3, $4, $5, 0)',
+        [userId, 'Expiry Member', email, hashSync(oldPassword, 10), 'MEMBER']
+      );
+
+      const offset = (await (await fetch('http://127.0.0.1:8025/messages')).json()).length;
+
+      // 1. Route send-otp to return a challenge that expires in 2 seconds
+      await page.route('**/auth/forgot-password/send-otp', async (route) => {
+        const response = await route.fetch();
+        const json = await response.json();
+        json.challengeExpiresAt = new Date(Date.now() + 2000).toISOString();
+        json.nextResendAt = new Date(Date.now() + 1000).toISOString();
+        await route.fulfill({
+          response,
+          json,
+        });
+      });
+
+      await page.goto('/login');
+      await page.getByPlaceholder('Email or phone number').fill(email);
+      await page.getByRole('button', { name: 'Continue' }).click();
+      await page.getByRole('button', { name: 'Forgot password?' }).click();
+      await page.getByRole('button', { name: 'Send Reset Code' }).click();
+
+      // Verify we are on reset-verify step
+      await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
+
+      // Fill in dummy OTP and password fields to test clearing
+      await page.getByPlaceholder('6-digit code').fill('123456');
+      await page.getByPlaceholder('Enter new password', { exact: true }).fill(newPassword);
+      await page.getByPlaceholder('Re-enter new password', { exact: true }).fill(newPassword);
+
+      // 2. Wait 2.5s for challenge to expire
+      await page.waitForTimeout(2500);
+      // Synchronize database to reflect challenge expiry so backend atomically replaces it on fresh request
+      await db.query(
+        "UPDATE password_reset_otp_challenges SET challenge_expires_at = NOW() - INTERVAL '5 seconds', next_resend_at = NOW() - INTERVAL '5 seconds' WHERE user_id = $1",
+        [userId]
+      );
+
+      // Verify "Start New Reset" button appears
+      const startNewResetBtn = page.getByRole('button', { name: 'Start New Reset' }).first();
+      await expect(startNewResetBtn).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Reset Password' })).toHaveCount(0);
+
+      // 3. Click "Start New Reset"
+      await startNewResetBtn.click();
+
+      // Verify returned to reset-request (identifier step)
+      await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Send Reset Code' })).toBeVisible();
+
+      // Unroute so subsequent requests interact with real backend challenge
+      await page.unroute('**/auth/forgot-password/send-otp');
+
+      // 4. Verify browser Back/Forward hygiene: Back goes to login identifier, Forward returns to recovery
+      await page.goBack();
+      await expect(page.getByPlaceholder('Email or phone number')).toBeVisible();
+
+      await page.goForward();
+      await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
+
+      // 5. Complete fresh recovery with real OTP
+      await page.getByPlaceholder(/email.*phone/i).fill(email);
+      await page.getByRole('button', { name: 'Send Reset Code' }).click();
+
+      await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
+      // Verify stale fields were cleared
+      await expect(page.getByPlaceholder('6-digit code')).toHaveValue('');
+      await expect(page.getByPlaceholder('Enter new password', { exact: true })).toHaveValue('');
+
+      // Fetch new real OTP from inbox
+      const freshOtp = await getLatestInboxOtp(email, offset);
+      await page.getByPlaceholder('6-digit code').fill(freshOtp);
+      await page.getByPlaceholder('Enter new password', { exact: true }).fill(newPassword);
+      await page.getByPlaceholder('Re-enter new password', { exact: true }).fill(newPassword);
+      await page.getByRole('button', { name: 'Reset Password' }).click();
+
+      // Password updated successfully
+      await expect(page.getByRole('heading', { name: 'Password Updated' })).toBeVisible();
+
+      // Sign in works with new password
+      await page.getByRole('button', { name: 'Sign In' }).click();
+      await page.getByPlaceholder('Email or phone number').fill(email);
+      await page.getByRole('button', { name: 'Continue' }).click();
+      await page.locator('input[type=password]').fill(newPassword);
+      await page.getByRole('button', { name: 'Sign In' }).click();
+      await expect(page).toHaveURL(/\/profile$/);
+    } finally {
+      await db.end();
+    }
+  });
 });

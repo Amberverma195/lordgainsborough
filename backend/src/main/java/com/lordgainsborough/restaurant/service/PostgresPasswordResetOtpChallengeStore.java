@@ -282,7 +282,7 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
                     toTimestamp(challenge.getCreatedAt()),
                     toTimestamp(challenge.getUpdatedAt()),
                     challenge.getEmailKey(),
-                    toTimestamp(now)
+                    toTimestamp(now.plus(properties.getMinRemainingChallengeLifetime()))
             );
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });
@@ -306,7 +306,7 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
             String sql = """
                 UPDATE password_reset_otp_challenges
                 SET code_digest = ?,
-                    code_expires_at = ?,
+                    code_expires_at = LEAST(?, challenge_expires_at),
                     next_resend_at = ?,
                     resend_count = resend_count + 1,
                     client_idempotency_key = ?,
@@ -340,10 +340,47 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
                     toTimestamp(now),
                     emailKey,
                     challengeId,
-                    toTimestamp(now),
+                    toTimestamp(now.plus(properties.getMinRemainingChallengeLifetime())),
                     toTimestamp(now),
                     properties.getMaxResends(),
                     clientIdempotencyKey
+            );
+            return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        });
+    }
+
+    @Override
+    @Transactional(transactionManager = "transactionManager")
+    public Optional<PasswordResetOtpChallenge> expireAfterDefiniteInitialFailure(
+            String emailKey,
+            String sendOperationId,
+            Instant now) {
+        Objects.requireNonNull(emailKey, "emailKey is required");
+        Objects.requireNonNull(sendOperationId, "sendOperationId is required");
+        Objects.requireNonNull(now, "now is required");
+
+        return transactionTemplate.execute(status -> {
+            String sql = """
+                UPDATE password_reset_otp_challenges
+                SET challenge_expires_at = ?,
+                    updated_at = ?
+                WHERE email_key = ?
+                  AND send_operation_id = ?
+                  AND send_status = 'DEFINITELY_FAILED'
+                  AND resend_count = 0
+                RETURNING email_key, challenge_id, user_id, purpose, status, code_digest,
+                          code_expires_at, challenge_expires_at, next_resend_at, resend_count,
+                          failed_verification_attempts, client_idempotency_key, send_operation_id,
+                          send_status, send_lease_until, reset_operation_id, password_updated,
+                          consumed_at, created_at, updated_at
+                """;
+            List<PasswordResetOtpChallenge> results = jdbcTemplate.query(
+                    sql,
+                    ROW_MAPPER,
+                    toTimestamp(now),
+                    toTimestamp(now),
+                    emailKey,
+                    sendOperationId
             );
             return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
         });

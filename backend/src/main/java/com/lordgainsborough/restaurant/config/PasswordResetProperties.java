@@ -11,6 +11,7 @@ public class PasswordResetProperties {
     private int maxResends = 5;
     private Duration codeTtl = Duration.ofMinutes(10);
     private Duration challengeTtl = Duration.ofMinutes(30);
+    private Duration minRemainingChallengeLifetime = Duration.ofMinutes(1);
     private int maxVerificationFailures = 5;
     private int newChallengesPerEmail = 3;
     private Duration newChallengeWindow = Duration.ofHours(1);
@@ -31,6 +32,10 @@ public class PasswordResetProperties {
     public void setCodeTtl(Duration value) { this.codeTtl = value; }
     public Duration getChallengeTtl() { return challengeTtl; }
     public void setChallengeTtl(Duration value) { this.challengeTtl = value; }
+    public Duration getMinRemainingChallengeLifetime() { return minRemainingChallengeLifetime; }
+    public void setMinRemainingChallengeLifetime(Duration minRemainingChallengeLifetime) {
+        this.minRemainingChallengeLifetime = minRemainingChallengeLifetime;
+    }
     public int getMaxVerificationFailures() { return maxVerificationFailures; }
     public void setMaxVerificationFailures(int value) { this.maxVerificationFailures = value; }
     public int getNewChallengesPerEmail() { return newChallengesPerEmail; }
