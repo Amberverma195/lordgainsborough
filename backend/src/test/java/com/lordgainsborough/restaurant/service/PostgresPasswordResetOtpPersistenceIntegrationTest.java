@@ -2136,4 +2136,70 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         assertEquals("If an account exists for that email, a reset code was already sent.", replay.body().getMessage());
         verify(emailSenderService, never()).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
     }
+
+    @Test
+    @Order(58)
+    @DisplayName("58. Restart safety: Nonexistent account cooldown survives service re-instantiation across shared PostgreSQL store")
+    void test58_restartSafetyPreservesUnknownAccountCooldownInPostgres() {
+        requirePostgres();
+        String regEmail = "restart-pg-reg@example.com";
+        String regUserId = "usr-restart-pg-reg";
+        String nonEmail = "restart-pg-non@example.com";
+
+        // Step 1: Initial request on service before restart
+        PasswordResetService.Result reg1 = service.requestInitial(
+                regEmail, regUserId, regEmail, "192.168.6.1", "idemp-pg-rst-1");
+        PasswordResetService.Result non1 = service.requestInitial(
+                nonEmail, null, null, "192.168.6.2", "idemp-pg-rst-1");
+
+        assertEquals(HttpStatus.ACCEPTED, reg1.status());
+        assertEquals(HttpStatus.ACCEPTED, non1.status());
+
+        // Step 2: Advance clock by 10s (during 30s cooldown)
+        clock.advance(Duration.ofSeconds(10));
+
+        // Step 3: Re-instantiate PasswordResetService pointing to the same PostgreSQL store (simulating service restart)
+        PasswordResetService serviceAfterRestart = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, hasher, observability);
+
+        // Step 4: Cooldown is preserved in PostgreSQL for both accounts
+        PasswordResetService.Result regCooldown = serviceAfterRestart.requestInitial(
+                regEmail, regUserId, regEmail, "192.168.6.1", "idemp-pg-rst-2");
+        PasswordResetService.Result nonCooldown = serviceAfterRestart.requestInitial(
+                nonEmail, null, null, "192.168.6.2", "idemp-pg-rst-2");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, regCooldown.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, nonCooldown.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", regCooldown.body().getCode());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", nonCooldown.body().getCode());
+        assertEquals(20L, regCooldown.retryAfterSeconds());
+        assertEquals(20L, nonCooldown.retryAfterSeconds());
+    }
+
+    @Test
+    @Order(59)
+    @DisplayName("59. Multi-instance safety: Multiple service instances sharing PostgreSQL enforce identical cooldown and throttling")
+    void test59_multiInstanceConcurrencySafetyInPostgres() {
+        requirePostgres();
+        String nonEmail = "multi-pg-non@example.com";
+
+        PasswordResetService node1 = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, hasher, observability);
+        PasswordResetService node2 = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, hasher, observability);
+
+        // Initial on node1
+        PasswordResetService.Result res1 = node1.requestInitial(
+                nonEmail, null, null, "192.168.7.1", "idemp-pg-node-1");
+        assertEquals(HttpStatus.ACCEPTED, res1.status());
+
+        // Follow-up after 5s on node2
+        clock.advance(Duration.ofSeconds(5));
+        PasswordResetService.Result res2 = node2.requestInitial(
+                nonEmail, null, null, "192.168.7.2", "idemp-pg-node-2");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, res2.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", res2.body().getCode());
+        assertEquals(25L, res2.retryAfterSeconds());
+    }
 }

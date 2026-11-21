@@ -183,7 +183,6 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
         Objects.requireNonNull(challenge, "challenge is required");
         Objects.requireNonNull(challenge.getEmailKey(), "emailKey is required");
         Objects.requireNonNull(challenge.getChallengeId(), "challengeId is required");
-        Objects.requireNonNull(challenge.getUserId(), "userId is required");
 
         Boolean result = transactionTemplate.execute(status -> {
             String sql = """
@@ -728,6 +727,12 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
                     status.setRollbackOnly();
                     return PasswordResetExecutionResult.failure(
                             PasswordResetExecutionResult.Status.INVALID_CHALLENGE, "Unexpected challenge status: " + challenge.getStatus());
+                }
+
+                if (challenge.getUserId() == null) {
+                    status.setRollbackOnly();
+                    return PasswordResetExecutionResult.failure(
+                            PasswordResetExecutionResult.Status.USER_NOT_FOUND, "Synthetic challenge cannot reset password");
                 }
 
                 // Test failure injection hook before user update

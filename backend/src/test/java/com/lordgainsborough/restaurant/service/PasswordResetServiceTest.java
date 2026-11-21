@@ -450,4 +450,139 @@ class PasswordResetServiceTest {
         PasswordResetOtpChallenge retriedCh = store.findByEmailKey(persistence.emailKey(email)).orElseThrow();
         assertEquals(OtpSendStatus.SENT, retriedCh.getSendStatus());
     }
+
+    @Test
+    @DisplayName("Restart safety: Unknown-account cooldowns and replays survive backend restarts identically to registered accounts")
+    void restartSafetyPreservesCooldownAndResendLimitsForBothKnownAndUnknownAccounts() {
+        String regEmail = "restart-reg@example.com";
+        String regUserId = "usr-restart-reg";
+        store.userEmails.put(regUserId, regEmail);
+        String nonEmail = "restart-non@example.com";
+
+        // Step 1: Initial request on service before restart
+        PasswordResetService.Result reg1 = service.requestInitial(regEmail, regUserId, regEmail, "192.168.1.1", "idemp-rst-001");
+        PasswordResetService.Result non1 = service.requestInitial(nonEmail, null, null, "192.168.1.2", "idemp-rst-001");
+
+        assertEquals(HttpStatus.ACCEPTED, reg1.status());
+        assertEquals(HttpStatus.ACCEPTED, non1.status());
+        assertEquals("RESET_CODE_SENT", reg1.body().getCode());
+        assertEquals("RESET_CODE_SENT", non1.body().getCode());
+
+        // Step 2: Advance clock by 10s (during 30s cooldown)
+        clock.advance(Duration.ofSeconds(10));
+
+        // Step 3: Simulate backend restart: instantiate a fresh PasswordResetService connected to the same shared persistence store
+        PasswordResetService serviceAfterRestart = new PasswordResetService(
+                persistence,
+                abuseLimiter,
+                handleService,
+                properties,
+                emailSenderService,
+                hasher,
+                observability);
+
+        // Step 4: Cooldown survives restart for BOTH accounts with identical status (429) and retryAfterSeconds (20s)
+        PasswordResetService.Result regCooldown = serviceAfterRestart.requestInitial(regEmail, regUserId, regEmail, "192.168.1.1", "idemp-rst-002");
+        PasswordResetService.Result nonCooldown = serviceAfterRestart.requestInitial(nonEmail, null, null, "192.168.1.2", "idemp-rst-002");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, regCooldown.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, nonCooldown.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", regCooldown.body().getCode());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", nonCooldown.body().getCode());
+        assertEquals(20L, regCooldown.retryAfterSeconds());
+        assertEquals(20L, nonCooldown.retryAfterSeconds());
+        assertEquals(regCooldown.body().getMessage(), nonCooldown.body().getMessage());
+
+        // Step 5: Idempotent replay of initial request also survives restart
+        PasswordResetService.Result regReplay = serviceAfterRestart.requestInitial(regEmail, regUserId, regEmail, "192.168.1.1", "idemp-rst-001");
+        PasswordResetService.Result nonReplay = serviceAfterRestart.requestInitial(nonEmail, null, null, "192.168.1.2", "idemp-rst-001");
+
+        assertEquals(HttpStatus.ACCEPTED, regReplay.status());
+        assertEquals(HttpStatus.ACCEPTED, nonReplay.status());
+        assertEquals("RESET_CHALLENGE_REUSED", regReplay.body().getCode());
+        assertEquals("RESET_CHALLENGE_REUSED", nonReplay.body().getCode());
+        assertEquals(reg1.body().getChallengeId(), regReplay.body().getChallengeId());
+        assertEquals(non1.body().getChallengeId(), nonReplay.body().getChallengeId());
+
+        // Step 6: Advance clock past 30s cooldown -> both deliver next code and decrement resendsRemaining to 4
+        clock.advance(Duration.ofSeconds(25));
+        PasswordResetService.Result regResend = serviceAfterRestart.requestInitial(regEmail, regUserId, regEmail, "192.168.1.1", "idemp-rst-003");
+        PasswordResetService.Result nonResend = serviceAfterRestart.requestInitial(nonEmail, null, null, "192.168.1.2", "idemp-rst-003");
+
+        assertEquals(HttpStatus.ACCEPTED, regResend.status());
+        assertEquals(HttpStatus.ACCEPTED, nonResend.status());
+        assertEquals("RESET_CODE_SENT", regResend.body().getCode());
+        assertEquals("RESET_CODE_SENT", nonResend.body().getCode());
+        assertEquals(4, regResend.body().getResendsRemaining());
+        assertEquals(4, nonResend.body().getResendsRemaining());
+    }
+
+    @Test
+    @DisplayName("Multi-server safety: Challenge metadata and rate limiting are shared across multiple service instances")
+    void multiInstanceConcurrencySafetyAcrossNodes() {
+        String regEmail = "multi-reg@example.com";
+        String regUserId = "usr-multi-reg";
+        store.userEmails.put(regUserId, regEmail);
+        String nonEmail = "multi-non@example.com";
+
+        // Create two service instances simulating two application server nodes sharing the same database
+        PasswordResetService node1 = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, hasher, observability);
+        PasswordResetService node2 = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, hasher, observability);
+
+        // Initial request on node1
+        PasswordResetService.Result reg1 = node1.requestInitial(regEmail, regUserId, regEmail, "192.168.1.10", "idemp-node1-1");
+        PasswordResetService.Result non1 = node1.requestInitial(nonEmail, null, null, "192.168.1.20", "idemp-node1-1");
+        assertEquals(HttpStatus.ACCEPTED, reg1.status());
+        assertEquals(HttpStatus.ACCEPTED, non1.status());
+
+        // Subsequent request routed by load balancer to node2 during cooldown (after 5s)
+        clock.advance(Duration.ofSeconds(5));
+        PasswordResetService.Result reg2 = node2.requestInitial(regEmail, regUserId, regEmail, "192.168.1.10", "idemp-node2-2");
+        PasswordResetService.Result non2 = node2.requestInitial(nonEmail, null, null, "192.168.1.20", "idemp-node2-2");
+
+        // Both node2 calls enforce cooldown identically
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, reg2.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, non2.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", reg2.body().getCode());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", non2.body().getCode());
+        assertEquals(25L, reg2.retryAfterSeconds());
+        assertEquals(25L, non2.retryAfterSeconds());
+
+        // Resend on node2 via public handle
+        clock.advance(Duration.ofSeconds(30));
+        PasswordResetService.Result regResend = node2.resend(regEmail, reg1.body().getChallengeId(), "192.168.1.10", "idemp-resend-n2");
+        PasswordResetService.Result nonResend = node2.resend(nonEmail, non1.body().getChallengeId(), "192.168.1.20", "idemp-resend-n2");
+        assertEquals(HttpStatus.ACCEPTED, regResend.status());
+        assertEquals(HttpStatus.ACCEPTED, nonResend.status());
+        assertEquals(4, regResend.body().getResendsRemaining());
+        assertEquals(4, nonResend.body().getResendsRemaining());
+    }
+
+    @Test
+    @DisplayName("Bounded storage: Shared store contains at most one active challenge per email and replaces expired challenges without accumulation")
+    void boundedStoreGuaranteesAtMostOneActiveChallengePerEmailAndZeroMemoryAccumulation() {
+        for (int i = 1; i <= 5; i++) {
+            String fakeEmail = "bounded-test-" + i + "@example.com";
+            PasswordResetService.Result res = service.requestInitial(fakeEmail, null, null, "192.168.1.30", "idemp-bnd-001");
+            assertEquals(HttpStatus.ACCEPTED, res.status());
+        }
+
+        // 5 distinct emails produced exactly 5 entries in store
+        assertEquals(5, store.challenges.size());
+
+        // Advance past challenge TTL (30 minutes)
+        clock.advance(Duration.ofMinutes(35));
+
+        // Start new resets for the same 5 emails
+        for (int i = 1; i <= 5; i++) {
+            String fakeEmail = "bounded-test-" + i + "@example.com";
+            PasswordResetService.Result res = service.requestInitial(fakeEmail, null, null, "192.168.1.30", "idemp-bnd-002");
+            assertEquals(HttpStatus.ACCEPTED, res.status());
+        }
+
+        // Store still contains exactly 5 entries (atomic replace expired, bounded storage, zero memory accumulation)
+        assertEquals(5, store.challenges.size());
+    }
 }
