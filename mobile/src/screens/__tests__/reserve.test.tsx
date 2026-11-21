@@ -1,3 +1,4 @@
+import * as SecureStore from 'expo-secure-store';
 import React from 'react';
 import {
   render,
@@ -7,7 +8,11 @@ import {
 } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiRequest } from '../../api/client';
-import Reserve from '../../app/reserve';
+import Reserve, { RESERVATION_REFERENCE_KEY } from '../../app/reserve';
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(),
+  setItemAsync: jest.fn(),
+}));
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
@@ -18,10 +23,14 @@ jest.mock('../../components/Screen', () => ({
 }));
 beforeEach(async () => {
   jest.clearAllMocks();
+  (SecureStore.getItemAsync as jest.Mock).mockReset();
+  (SecureStore.setItemAsync as jest.Mock).mockReset();
   await AsyncStorage.clear();
 });
 it('sends a pending request once and retains an interruption marker', async () => {
-  (apiRequest as jest.Mock).mockResolvedValue({ body: { status: 'PENDING' } });
+  (apiRequest as jest.Mock).mockResolvedValue({
+    body: { id: 'request-123', status: 'PENDING' },
+  });
   await render(<Reserve />);
   await waitFor(() => expect(screen.getByLabelText('Guest name')).toBeTruthy());
   for (const [label, value] of Object.entries({
@@ -49,6 +58,11 @@ it('sends a pending request once and retains an interruption marker', async () =
   await waitFor(() =>
     expect(screen.getByText(/Request received/)).toBeTruthy(),
   );
+  expect(screen.getByLabelText('Reservation request reference')).toBeTruthy();
+  expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
+    RESERVATION_REFERENCE_KEY,
+    JSON.stringify({ id: 'request-123', status: 'PENDING' }),
+  );
   expect(apiRequest).toHaveBeenCalledTimes(1);
   expect(await AsyncStorage.getItem('lgb.reservation.pending.v1')).toBe('sent');
 });
@@ -61,3 +75,68 @@ it('blocks another submission after an interrupted request', async () => {
   expect(screen.queryByText('Submit reservation request')).toBeNull();
   expect(apiRequest).not.toHaveBeenCalled();
 });
+
+it('restores the reference securely without implying live booking confirmation', async () => {
+  await AsyncStorage.setItem('lgb.reservation.pending.v1', 'sent');
+  (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(
+    JSON.stringify({ id: 'restored-123', status: 'PENDING' }),
+  );
+  await render(<Reserve />);
+  await waitFor(() =>
+    expect(screen.getByLabelText('Reservation request reference')).toBeTruthy(),
+  );
+  expect(screen.getByText(/restored-123/)).toBeTruthy();
+  expect(screen.getByText(/Pending confirmation at submission/)).toBeTruthy();
+  expect(apiRequest).not.toHaveBeenCalled();
+});
+it('does not invent a reference for malformed saved data', async () => {
+  (SecureStore.getItemAsync as jest.Mock).mockResolvedValue('{invalid');
+  await render(<Reserve />);
+  await waitFor(() =>
+    expect(
+      screen.getByText(/Saved request details could not be read/),
+    ).toBeTruthy(),
+  );
+  expect(screen.queryByText('Submit reservation request')).toBeNull();
+});
+
+it.each(['storage failure', 'malformed response'])(
+  'preserves duplicate protection after %s',
+  async (mode) => {
+    (apiRequest as jest.Mock).mockResolvedValue({
+      body:
+        mode === 'malformed response'
+          ? { status: 'PENDING' }
+          : { id: 'received-123', status: 'PENDING' },
+    });
+    if (mode === 'storage failure')
+      (SecureStore.setItemAsync as jest.Mock).mockRejectedValue(
+        new Error('locked'),
+      );
+    await render(<Reserve />);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Guest name')).toBeTruthy(),
+    );
+    for (const [label, value] of [
+      ['Guest name', 'Guest'],
+      ['Email address', 'guest@example.com'],
+      ['Telephone number', '5195550100'],
+      ['Date YYYY-MM-DD', '2026-12-01'],
+      ['Time HH:mm (24-hour)', '18:00'],
+    ])
+      await fireEvent.changeText(screen.getByLabelText(label), value);
+    await fireEvent.press(screen.getByText('Submit reservation request'));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByText('Submit reservation request')).toBeNull();
+    expect(await AsyncStorage.getItem('lgb.reservation.pending.v1')).toBe(
+      'uncertain',
+    );
+    if (mode === 'storage failure')
+      expect(screen.getByText(/received-123/)).toBeTruthy();
+    else
+      expect(
+        screen.queryByLabelText('Reservation request reference'),
+      ).toBeNull();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+  },
+);

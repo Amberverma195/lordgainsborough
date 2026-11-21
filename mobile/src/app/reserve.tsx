@@ -1,3 +1,4 @@
+import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import { Linking, Text, TextInput } from 'react-native';
@@ -19,6 +20,20 @@ const labels = {
   specialRequests: 'Special requests',
 };
 const KEY = 'lgb.reservation.pending.v1';
+export const RESERVATION_REFERENCE_KEY = 'lgb.reservation.reference.v1';
+function requestReference(body: unknown): string {
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    !('id' in body) ||
+    !('status' in body) ||
+    body.status !== 'PENDING' ||
+    typeof body.id !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(body.id)
+  )
+    throw new Error('Invalid reservation response');
+  return body.id;
+}
 export default function ReserveScreen() {
   const [form, setForm] = useState({
     name: '',
@@ -31,15 +46,31 @@ export default function ReserveScreen() {
   });
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
+  const [reference, setReference] = useState<string | null>(null);
   const guard = useRef(false);
   useEffect(() => {
     let live = true;
-    void AsyncStorage.getItem(KEY)
-      .then((value) => {
-        if (live) setState(value || 'ready');
+    void Promise.all([
+      AsyncStorage.getItem(KEY),
+      SecureStore.getItemAsync(RESERVATION_REFERENCE_KEY),
+    ])
+      .then(([marker, saved]) => {
+        const id = saved ? requestReference(JSON.parse(saved)) : null;
+        if (!live) return;
+        setReference(id);
+        setState(marker === 'sent' ? 'sent' : marker ? 'uncertain' : 'ready');
+        if (marker === 'sent' && !id)
+          setError(
+            'Your request was received, but its reference is unavailable on this device. Call the restaurant for help.',
+          );
       })
       .catch(() => {
-        if (live) setState('uncertain');
+        if (live) {
+          setState('uncertain');
+          setError(
+            'Saved request details could not be read. Call the restaurant before submitting again.',
+          );
+        }
       });
     return () => {
       live = false;
@@ -65,9 +96,10 @@ export default function ReserveScreen() {
     guard.current = true;
     setState('sending');
     setError('');
+    let accepted = false;
     try {
       await AsyncStorage.setItem(KEY, 'uncertain');
-      await apiRequest('/api/reservations', {
+      const response = await apiRequest('/api/reservations', {
         method: 'POST',
         body: {
           ...form,
@@ -76,10 +108,21 @@ export default function ReserveScreen() {
           partySize: Number(form.partySize),
         },
       });
-      await AsyncStorage.setItem(KEY, 'sent');
+      const id = requestReference(response.body);
+      accepted = true;
+      setReference(id);
       setState('sent');
+      await SecureStore.setItemAsync(
+        RESERVATION_REFERENCE_KEY,
+        JSON.stringify({ id, status: 'PENDING' }),
+      );
+      await AsyncStorage.setItem(KEY, 'sent');
     } catch (failure) {
-      if (
+      if (accepted) {
+        setError(
+          'Your request was received, but its reference could not be saved. Copy the reference shown here and call the restaurant before submitting again.',
+        );
+      } else if (
         failure instanceof ApiError &&
         failure.status >= 400 &&
         failure.status < 500
@@ -161,16 +204,32 @@ export default function ReserveScreen() {
           Request received - pending confirmation. The team will contact you.
         </Text>
       ) : null}
+      {reference ? (
+        <Text
+          selectable
+          accessibilityLabel="Reservation request reference"
+          style={{ color: colors.text }}
+        >
+          Last received request reference: {reference}. Pending confirmation at
+          submission; call the restaurant for current status.
+        </Text>
+      ) : null}
       {state === 'sent' || state === 'uncertain' ? (
         <>
           <Text style={{ color: colors.text }}>
             Call to check your previous request before making another.
           </Text>
           <Button
-            label="I checked with the restaurant ? start another request"
+            label="I checked with the restaurant - start another request"
             variant="ghost"
             onPress={() => {
-              void AsyncStorage.removeItem(KEY).then(() => setState('ready'));
+              void AsyncStorage.removeItem(KEY)
+                .then(() => setState('ready'))
+                .catch(() =>
+                  setError(
+                    'Device storage could not clear the previous request. Please call the restaurant.',
+                  ),
+                );
             }}
           />
         </>
