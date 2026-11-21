@@ -23,6 +23,7 @@ public class PasswordResetProperties {
     private Duration globalEmailWindow = Duration.ofMinutes(1);
     private Duration sendLease = Duration.ofMinutes(1);
     private boolean requireTransaction = false;
+    private String queueEncryptionKey;
 
     public Duration getResendCooldown() { return resendCooldown; }
     public void setResendCooldown(Duration value) { this.resendCooldown = value; }
@@ -58,4 +59,6 @@ public class PasswordResetProperties {
     public void setSendLease(Duration value) { this.sendLease = value; }
     public boolean isRequireTransaction() { return requireTransaction; }
     public void setRequireTransaction(boolean requireTransaction) { this.requireTransaction = requireTransaction; }
+    public String getQueueEncryptionKey() { return queueEncryptionKey; }
+    public void setQueueEncryptionKey(String queueEncryptionKey) { this.queueEncryptionKey = queueEncryptionKey; }
 }

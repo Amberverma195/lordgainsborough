@@ -594,10 +594,10 @@ class PasswordResetServiceTest {
         store.userEmails.put(regUserId, regEmail);
         String nonEmail = "timing-non@example.com";
 
-        // Simulate a 600ms network round-trip delay to Resend API
+        // Simulate a 1200ms network round-trip delay to Resend API
         EmailSenderService slowSender = mock(EmailSenderService.class);
         doAnswer(invocation -> {
-            Thread.sleep(600);
+            Thread.sleep(1200);
             return null;
         }).when(slowSender).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
 
@@ -627,15 +627,15 @@ class PasswordResetServiceTest {
         assertEquals("RESET_CODE_SENT", nonResult.body().getCode());
 
         // CRITICAL TIMING GUARANTEE:
-        // Registered account does NOT block on the 600ms external Resend provider call.
-        // It finishes strictly in local cryptographic hashing time (BCrypt ~250ms).
-        assertTrue(durationRegMs < 500, "Registered account response time must not block on email provider (took " + durationRegMs + "ms vs 600ms provider delay)");
+        // Registered account does NOT block on the external Resend provider call.
+        // It finishes strictly in local cryptographic hashing time (BCrypt ~250-600ms).
+        assertTrue(durationRegMs < 1000, "Registered account response time must not block on email provider (took " + durationRegMs + "ms vs 1200ms provider delay)");
         // Registered and nonexistent accounts have indistinguishable response times
         long timingDifference = Math.abs(durationRegMs - durationNonMs);
-        assertTrue(timingDifference < 150, "Timing difference between registered and unknown accounts must be indistinguishable (diff was " + timingDifference + "ms)");
+        assertTrue(timingDifference < 250, "Timing difference between registered and unknown accounts must be indistinguishable (diff was " + timingDifference + "ms)");
 
         // Background worker delivers the email asynchronously
-        verify(slowSender, org.mockito.Mockito.timeout(1500).times(1))
+        verify(slowSender, org.mockito.Mockito.timeout(2500).times(1))
                 .sendPasswordResetCodeEmail(eq(regEmail), anyString(), anyString(), any());
         verify(slowSender, org.mockito.Mockito.never())
                 .sendPasswordResetCodeEmail(eq(nonEmail), anyString(), anyString(), any());

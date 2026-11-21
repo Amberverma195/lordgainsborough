@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.service;
 import com.lordgainsborough.restaurant.config.PasswordResetProperties;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetDeliveryTask;
+import com.lordgainsborough.restaurant.security.PasswordResetQueuePayloadEncryptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -24,6 +25,11 @@ import java.util.concurrent.Executors;
  * dispatches them via {@link EmailSenderService}. This completely decouples external network latency
  * (e.g. Resend REST API calls) from the public HTTP response, eliminating timing side channels
  * that would otherwise reveal registered account existence.
+ *
+ * <p>Payload Security: Queued OTP payloads are encrypted at the application level using AES-256-GCM
+ * with a key stored separately from PostgreSQL. Plaintext OTPs are NEVER stored in PostgreSQL.
+ * Decryption occurs strictly inside the delivery worker thread, and {@code encrypted_code} is immediately
+ * cleared upon dispatch to minimize retention.
  */
 public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEmailDeliveryQueue {
 
@@ -36,13 +42,14 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
     private final PasswordResetProperties properties;
     private final AuthSecurityObservability observability;
     private final Executor asyncExecutor;
+    final PasswordResetQueuePayloadEncryptor encryptor;
 
-    private record QueuedItem(
+    record QueuedItem(
             String id,
             String emailKey,
             String challengeId,
             String recipientEmail,
-            String rawCode,
+            String encryptedCode,
             String sendOperationId,
             Duration validity
     ) {}
@@ -61,7 +68,8 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                 persistence,
                 properties,
                 observability,
-                Executors.newVirtualThreadPerTaskExecutor()
+                Executors.newVirtualThreadPerTaskExecutor(),
+                new PasswordResetQueuePayloadEncryptor(properties)
         );
     }
 
@@ -73,6 +81,27 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
             PasswordResetProperties properties,
             AuthSecurityObservability observability,
             Executor asyncExecutor) {
+        this(
+                dataSource,
+                transactionManager,
+                emailSenderService,
+                persistence,
+                properties,
+                observability,
+                asyncExecutor,
+                new PasswordResetQueuePayloadEncryptor(properties)
+        );
+    }
+
+    public PostgresPasswordResetEmailDeliveryQueue(
+            DataSource dataSource,
+            PlatformTransactionManager transactionManager,
+            EmailSenderService emailSenderService,
+            PasswordResetOtpChallengePersistence persistence,
+            PasswordResetProperties properties,
+            AuthSecurityObservability observability,
+            Executor asyncExecutor,
+            PasswordResetQueuePayloadEncryptor encryptor) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource is required");
         this.transactionManager = Objects.requireNonNull(transactionManager, "transactionManager is required");
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -82,6 +111,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         this.properties = properties;
         this.observability = observability;
         this.asyncExecutor = asyncExecutor != null ? asyncExecutor : Executors.newVirtualThreadPerTaskExecutor();
+        this.encryptor = encryptor != null ? encryptor : new PasswordResetQueuePayloadEncryptor(properties);
     }
 
     public DataSource getDataSource() {
@@ -92,6 +122,20 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         return transactionManager;
     }
 
+    public PasswordResetQueuePayloadEncryptor getEncryptor() {
+        return encryptor;
+    }
+
+    private Instant now() {
+        if (persistence != null) {
+            Instant current = persistence.now();
+            if (current != null) {
+                return current;
+            }
+        }
+        return Instant.now();
+    }
+
     @Override
     public boolean isDurableStore() {
         return true;
@@ -100,11 +144,15 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
     @Override
     public CompletableFuture<Void> enqueue(PasswordResetDeliveryTask task) {
         Objects.requireNonNull(task, "task is required");
-        Instant now = persistence != null ? persistence.now() : Instant.now();
+        Instant now = now();
+
+        String encryptedCode = task.isSynthetic()
+                ? null
+                : encryptor.encrypt(task.getRawCode(), task.getId());
 
         String sql = """
             INSERT INTO password_reset_email_queue (
-                id, email_key, challenge_id, recipient_email, raw_code,
+                id, email_key, challenge_id, recipient_email, encrypted_code,
                 send_operation_id, validity_seconds, status, attempts,
                 lease_until, is_synthetic, created_at, updated_at
             ) VALUES (
@@ -121,7 +169,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                 task.getEmailKey(),
                 task.getChallengeId(),
                 task.getRecipientEmail(),
-                task.isSynthetic() ? null : task.getRawCode(),
+                encryptedCode,
                 task.getSendOperationId(),
                 task.getValidity() != null ? task.getValidity().getSeconds() : 600L,
                 status,
@@ -146,7 +194,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
 
     @Override
     public int processPending() {
-        Instant now = persistence != null ? persistence.now() : Instant.now();
+        Instant now = now();
         String selectPendingSql = """
             SELECT id FROM password_reset_email_queue
             WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND lease_until <= ?))
@@ -170,7 +218,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
     }
 
     private void processTask(String taskId) {
-        Instant now = persistence != null ? persistence.now() : Instant.now();
+        Instant now = now();
         Duration leaseDuration = properties != null && properties.getSendLease() != null
                 ? properties.getSendLease()
                 : Duration.ofSeconds(60);
@@ -187,7 +235,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                 WHERE id = ?
                   AND (status = 'PENDING' OR (status = 'PROCESSING' AND lease_until <= ?))
                   AND is_synthetic = FALSE
-                RETURNING id, email_key, challenge_id, recipient_email, raw_code,
+                RETURNING id, email_key, challenge_id, recipient_email, encrypted_code,
                           send_operation_id, validity_seconds
             """;
             return jdbcTemplate.query(claimSql, (rs, rowNum) -> new QueuedItem(
@@ -195,7 +243,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                     rs.getString("email_key"),
                     rs.getString("challenge_id"),
                     rs.getString("recipient_email"),
-                    rs.getString("raw_code"),
+                    rs.getString("encrypted_code"),
                     rs.getString("send_operation_id"),
                     Duration.ofSeconds(rs.getLong("validity_seconds"))
             ), leaseUntil, Timestamp.from(now), taskId, Timestamp.from(now));
@@ -209,23 +257,25 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         deliverItem(item);
     }
 
-    private void deliverItem(QueuedItem item) {
-        Instant sendNow = persistence != null ? persistence.now() : Instant.now();
+    void deliverItem(QueuedItem item) {
+        Instant sendNow = now();
         try {
-            if (emailSenderService != null) {
+            // Decrypt OTP strictly inside delivery worker just before dispatch
+            String plainCode = encryptor.decrypt(item.encryptedCode(), item.id());
+            if (emailSenderService != null && plainCode != null) {
                 emailSenderService.sendPasswordResetCodeEmail(
                         item.recipientEmail(),
-                        item.rawCode(),
+                        plainCode,
                         item.sendOperationId(),
                         item.validity());
             }
 
-            // On success: clear raw_code, mark SENT
+            // On success: clear encrypted_code, mark SENT (minimize retention)
             transactionTemplate.execute(status -> {
                 jdbcTemplate.update("""
                     UPDATE password_reset_email_queue
                     SET status = 'SENT',
-                        raw_code = NULL,
+                        encrypted_code = NULL,
                         lease_until = NULL,
                         updated_at = ?
                     WHERE id = ?
@@ -281,7 +331,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                 jdbcTemplate.update("""
                     UPDATE password_reset_email_queue
                     SET status = 'FAILED',
-                        raw_code = NULL,
+                        encrypted_code = NULL,
                         lease_until = NULL,
                         last_error = ?,
                         updated_at = ?
@@ -311,3 +361,4 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         }
     }
 }
+

@@ -1,5 +1,6 @@
 package com.lordgainsborough.restaurant.config;
 
+import com.lordgainsborough.restaurant.security.PasswordResetQueuePayloadEncryptor;
 import com.lordgainsborough.restaurant.service.AuthSecurityObservability;
 import com.lordgainsborough.restaurant.service.EmailSenderService;
 import com.lordgainsborough.restaurant.service.PasswordResetEmailDeliveryQueue;
@@ -32,6 +33,12 @@ public class PostgresPasswordResetPersistenceConfiguration {
         return new PostgresPasswordResetOtpChallengeStore(dataSource, transactionManager, properties);
     }
 
+    @Bean(name = "passwordResetQueuePayloadEncryptor")
+    @Primary
+    public PasswordResetQueuePayloadEncryptor passwordResetQueuePayloadEncryptor(PasswordResetProperties properties) {
+        return new PasswordResetQueuePayloadEncryptor(properties);
+    }
+
     @Bean(name = "passwordResetEmailDeliveryQueue")
     @Primary
     public PasswordResetEmailDeliveryQueue passwordResetEmailDeliveryQueue(
@@ -40,14 +47,17 @@ public class PostgresPasswordResetPersistenceConfiguration {
             ObjectProvider<EmailSenderService> emailSenderServiceProvider,
             ObjectProvider<PasswordResetOtpChallengePersistence> persistenceProvider,
             PasswordResetProperties properties,
-            ObjectProvider<AuthSecurityObservability> observabilityProvider) {
+            ObjectProvider<AuthSecurityObservability> observabilityProvider,
+            ObjectProvider<PasswordResetQueuePayloadEncryptor> encryptorProvider) {
         return new PostgresPasswordResetEmailDeliveryQueue(
                 dataSource,
                 transactionManager,
                 emailSenderServiceProvider.getIfAvailable(),
                 persistenceProvider.getIfAvailable(),
                 properties,
-                observabilityProvider.getIfAvailable());
+                observabilityProvider.getIfAvailable(),
+                java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor(),
+                encryptorProvider.getIfAvailable(() -> new PasswordResetQueuePayloadEncryptor(properties)));
     }
 
 }
