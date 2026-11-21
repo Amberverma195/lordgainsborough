@@ -37,6 +37,7 @@ jest.mock('../../api/catalog', () => ({
 
 jest.mock('../../api/orders', () => ({
   createOrder: jest.fn(),
+  fetchOrderHistory: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../../auth/AuthContext', () => ({
@@ -300,5 +301,68 @@ describe('Checkout uncertain order submission recovery', () => {
       expect(screen.getByText('Submission Status Uncertain')).toBeTruthy(),
     );
     expect(mockCreateOrder).not.toHaveBeenCalled();
+  });
+  it('persists acknowledgement across remount and preserves other account markers', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    const other =
+      'lgb.checkout.pending.' + toAccountNamespace('other@example.com');
+    await AsyncStorage.multiSet([
+      [key, 'pending'],
+      [other, 'pending'],
+    ]);
+    const view = await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+    await waitFor(() =>
+      expect(screen.getByText('Place pickup order')).toBeTruthy(),
+    );
+    expect(await AsyncStorage.getItem(key)).toBeNull();
+    expect(await AsyncStorage.getItem(other)).toBe('pending');
+    await view.unmount();
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText('Place pickup order')).toBeTruthy(),
+    );
+  });
+  it('keeps the blocker when history verification fails', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    await AsyncStorage.setItem(key, 'pending');
+    (ordersApi.fetchOrderHistory as jest.Mock).mockRejectedValueOnce(
+      new Error('Offline'),
+    );
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+    await waitFor(() => expect(screen.getByText('Offline')).toBeTruthy());
+    expect(await AsyncStorage.getItem(key)).toBe('pending');
+    expect(screen.queryByText('Place pickup order')).toBeNull();
+  });
+  it('does not unlock checkout when persistent marker removal fails', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    await AsyncStorage.setItem(key, 'pending');
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+    const removal = jest
+      .spyOn(AsyncStorage, 'removeItem')
+      .mockRejectedValueOnce(new Error('Storage unavailable'));
+    try {
+      await fireEvent.press(screen.getByText("I've checked, try again"));
+      await waitFor(() =>
+        expect(screen.getByText('Storage unavailable')).toBeTruthy(),
+      );
+      expect(await AsyncStorage.getItem(key)).toBe('pending');
+      expect(screen.queryByText('Place pickup order')).toBeNull();
+    } finally {
+      removal.mockRestore();
+    }
   });
 });

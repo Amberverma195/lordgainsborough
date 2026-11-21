@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 
 import { fetchStoreSettings } from '../api/catalog';
-import { createOrder } from '../api/orders';
+import { createOrder, fetchOrderHistory } from '../api/orders';
 import { ApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { writeTrackingToken } from '../auth/secureSession';
@@ -97,6 +97,53 @@ export default function CheckoutScreen() {
   };
   const handlePickupChange = (date: string, time: string) => {
     setPickup(date, time);
+  };
+
+  const [reconciling, setReconciling] = useState(false);
+  const reconciliationGuard = useRef(false);
+  const reconcileSubmission = async () => {
+    if (!user || reconciliationGuard.current) return;
+    const account = user;
+    reconciliationGuard.current = true;
+    setReconciling(true);
+    try {
+      // Refresh authenticated history; a failed refresh must not unlock checkout.
+      const orders = await fetchOrderHistory(account.token);
+      if (currentToken.current !== account.token) return;
+      const marker = await AsyncStorage.getItem(pendingKey);
+      if (marker?.startsWith('confirmed:')) {
+        const id = marker.slice('confirmed:'.length);
+        if (!orders.some((order) => order.id === id))
+          throw new Error(
+            'Your previous order could not be verified. Check your orders or contact the restaurant.',
+          );
+        await AsyncStorage.removeItem(pendingKey);
+        if ((await AsyncStorage.getItem(pendingKey)) !== null)
+          throw new Error(
+            'Device storage could not clear the previous order marker.',
+          );
+        if (currentToken.current !== account.token) return;
+        router.replace('/order/' + id);
+        return;
+      }
+      // History alone cannot prove absence. Preserve the original idempotency key for safe replay.
+      await AsyncStorage.removeItem(pendingKey);
+      if ((await AsyncStorage.getItem(pendingKey)) !== null)
+        throw new Error('Device storage could not clear the retry marker.');
+      if (currentToken.current !== account.token) return;
+      setUncertainSubmission(false);
+      setError(null);
+    } catch (failure) {
+      if (currentToken.current === account.token)
+        setError(
+          failure instanceof Error
+            ? failure.message
+            : 'Unable to verify your orders. Please try again.',
+        );
+    } finally {
+      reconciliationGuard.current = false;
+      setReconciling(false);
+    }
   };
 
   const placeOrder = async () => {
@@ -186,6 +233,18 @@ export default function CheckoutScreen() {
         setUncertainSubmission(true);
         setError(UNCERTAIN_ORDER_MESSAGE);
       } else {
+        try {
+          await AsyncStorage.removeItem(pendingKey);
+          if ((await AsyncStorage.getItem(pendingKey)) !== null)
+            throw new Error('Retry marker was not cleared');
+        } catch {
+          setUncertainSubmission(true);
+          setError(
+            'The request was rejected, but device storage could not clear its marker. Check existing orders before retrying.',
+          );
+          return;
+        }
+        if (currentToken.current !== user?.token) return;
         setUncertainSubmission(false);
         setError(
           requestError instanceof ApiError
@@ -305,6 +364,9 @@ export default function CheckoutScreen() {
               Submission Status Uncertain
             </Text>
             <Text style={styles.uncertainCopy}>{UNCERTAIN_ORDER_MESSAGE}</Text>
+            {error && error !== UNCERTAIN_ORDER_MESSAGE ? (
+              <Text style={styles.error}>{error}</Text>
+            ) : null}
             <View style={styles.uncertainActions}>
               <Button
                 label="Check existing orders"
@@ -314,10 +376,8 @@ export default function CheckoutScreen() {
               <Button
                 label="I've checked, try again"
                 variant="secondary"
-                onPress={() => {
-                  setUncertainSubmission(false);
-                  setError(null);
-                }}
+                loading={reconciling}
+                onPress={() => void reconcileSubmission()}
               />
             </View>
           </View>
