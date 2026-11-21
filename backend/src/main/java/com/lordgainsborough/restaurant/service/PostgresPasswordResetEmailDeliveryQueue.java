@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
  * <p>Payload Security: Queued OTP payloads are encrypted at the application level using AES-256-GCM
  * with a key stored separately from PostgreSQL. Plaintext OTPs are NEVER stored in PostgreSQL.
  * Decryption occurs strictly inside the delivery worker thread, and {@code encrypted_code} is immediately
- * cleared upon dispatch to minimize retention.
+ * cleared after acceptance or a terminal outcome to minimize retention.
  */
 public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEmailDeliveryQueue {
 
@@ -51,7 +51,8 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
             String recipientEmail,
             String encryptedCode,
             String sendOperationId,
-            Duration validity
+            Duration validity,
+            int attempt
     ) {}
 
     public PostgresPasswordResetEmailDeliveryQueue(
@@ -108,7 +109,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         this.jdbcTemplate = new JdbcTemplate(dataSource);
         this.emailSenderService = emailSenderService;
         this.persistence = persistence;
-        this.properties = properties;
+        this.properties = properties != null ? properties : new PasswordResetProperties();
         this.observability = observability;
         this.asyncExecutor = asyncExecutor != null ? asyncExecutor : Executors.newVirtualThreadPerTaskExecutor();
         this.encryptor = encryptor != null ? encryptor : new PasswordResetQueuePayloadEncryptor(properties);
@@ -154,11 +155,11 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
             INSERT INTO password_reset_email_queue (
                 id, email_key, challenge_id, recipient_email, encrypted_code,
                 send_operation_id, validity_seconds, status, attempts,
-                lease_until, is_synthetic, created_at, updated_at
+                lease_until, is_synthetic, created_at, updated_at, next_attempt_at
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, 0,
-                NULL, ?, ?, ?
+                NULL, ?, ?, ?, ?
             )
         """;
 
@@ -175,6 +176,7 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
                 status,
                 task.isSynthetic(),
                 Timestamp.from(task.getCreatedAt() != null ? task.getCreatedAt() : now),
+                Timestamp.from(now),
                 Timestamp.from(now)
         );
 
@@ -192,173 +194,143 @@ public class PostgresPasswordResetEmailDeliveryQueue implements PasswordResetEma
         return CompletableFuture.runAsync(() -> processTask(task.getId()), asyncExecutor);
     }
 
+    // A resend replaces the operation and digest. Never send a superseded code.
+    private static final String LIVE_CHALLENGE = """
+            EXISTS (SELECT 1 FROM password_reset_otp_challenges c
+                WHERE c.email_key = q.email_key AND c.challenge_id = q.challenge_id
+                  AND c.send_operation_id = q.send_operation_id AND c.status = 'ACTIVE'
+                  AND c.code_expires_at > ? AND c.challenge_expires_at > ?)
+            """;
+
     @Override
     public int processPending() {
-        Instant now = now();
-        String selectPendingSql = """
+        Instant current = now();
+        cleanup(current);
+        List<String> ids = jdbcTemplate.query("""
             SELECT id FROM password_reset_email_queue
-            WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND lease_until <= ?))
-              AND is_synthetic = FALSE
-            ORDER BY created_at ASC
-            LIMIT 50
-        """;
-
-        List<String> ids = jdbcTemplate.query(
-                selectPendingSql,
-                (rs, rowNum) -> rs.getString("id"),
-                Timestamp.from(now)
-        );
-
+            WHERE ((status = 'PENDING' AND next_attempt_at <= ?)
+                OR (status = 'PROCESSING' AND (lease_until IS NULL OR lease_until <= ?)))
+              AND is_synthetic = FALSE AND attempts < ?
+            ORDER BY created_at ASC LIMIT 50
+            """, (rs, rowNum) -> rs.getString("id"),
+                Timestamp.from(current), Timestamp.from(current), properties.getQueueMaxAttempts());
         int processed = 0;
         for (String id : ids) {
-            processTask(id);
-            processed++;
+            if (processTask(id)) processed++;
         }
         return processed;
     }
 
-    private void processTask(String taskId) {
-        Instant now = now();
-        Duration leaseDuration = properties != null && properties.getSendLease() != null
-                ? properties.getSendLease()
-                : Duration.ofSeconds(60);
-        Timestamp leaseUntil = Timestamp.from(now.plus(leaseDuration));
+    private void cleanup(Instant current) {
+        Timestamp timestamp = Timestamp.from(current);
+        // Never invalidate a live owner's lease. Expired leases can be retired safely.
+        jdbcTemplate.update("""
+            UPDATE password_reset_email_queue q
+            SET status = CASE WHEN attempts >= ? THEN 'FAILED' ELSE 'EXPIRED' END,
+                encrypted_code = NULL, lease_until = NULL, updated_at = ?
+            WHERE (status = 'PENDING' OR (status = 'PROCESSING'
+                AND (lease_until IS NULL OR lease_until <= ?)))
+              AND (attempts >= ? OR created_at + validity_seconds * INTERVAL '1 second' <= ?
+                OR NOT (
+            """ + LIVE_CHALLENGE + "))", properties.getQueueMaxAttempts(), timestamp, timestamp,
+                properties.getQueueMaxAttempts(), timestamp, timestamp, timestamp);
+        jdbcTemplate.update("""
+            DELETE FROM password_reset_email_queue WHERE id IN (
+                SELECT id FROM password_reset_email_queue
+                WHERE status IN ('SENT', 'FAILED', 'SKIPPED', 'EXPIRED') AND updated_at < ?
+                ORDER BY updated_at LIMIT 500)
+            """, Timestamp.from(current.minus(properties.getQueueRetention())));
+    }
 
-        // Atomic claim with lease and attempts increment
-        List<QueuedItem> claimed = transactionTemplate.execute(status -> {
-            String claimSql = """
-                UPDATE password_reset_email_queue
-                SET status = 'PROCESSING',
-                    lease_until = ?,
-                    attempts = attempts + 1,
-                    updated_at = ?
-                WHERE id = ?
-                  AND (status = 'PENDING' OR (status = 'PROCESSING' AND lease_until <= ?))
-                  AND is_synthetic = FALSE
-                RETURNING id, email_key, challenge_id, recipient_email, encrypted_code,
-                          send_operation_id, validity_seconds
-            """;
-            return jdbcTemplate.query(claimSql, (rs, rowNum) -> new QueuedItem(
-                    rs.getString("id"),
-                    rs.getString("email_key"),
-                    rs.getString("challenge_id"),
-                    rs.getString("recipient_email"),
-                    rs.getString("encrypted_code"),
-                    rs.getString("send_operation_id"),
-                    Duration.ofSeconds(rs.getLong("validity_seconds"))
-            ), leaseUntil, Timestamp.from(now), taskId, Timestamp.from(now));
-        });
-
-        if (claimed == null || claimed.isEmpty()) {
-            return; // Already processed or claimed by another worker
+    private boolean processTask(String taskId) {
+        Instant current = now();
+        Timestamp timestamp = Timestamp.from(current);
+        Duration lease = properties.getSendLease();
+        if (lease == null || lease.isNegative() || lease.isZero()) {
+            throw new IllegalStateException("Password reset send lease must be positive");
         }
-
-        QueuedItem item = claimed.get(0);
-        deliverItem(item);
+        // Claim and commit before network I/O. Incremented attempts also fence stale owners.
+        List<QueuedItem> claimed = transactionTemplate.execute(status -> jdbcTemplate.query("""
+            UPDATE password_reset_email_queue q
+            SET status = 'PROCESSING', lease_until = ?, attempts = attempts + 1, updated_at = ?
+            WHERE id = ? AND is_synthetic = FALSE AND attempts < ?
+              AND ((status = 'PENDING' AND next_attempt_at <= ?)
+                OR (status = 'PROCESSING' AND (lease_until IS NULL OR lease_until <= ?)))
+              AND created_at + validity_seconds * INTERVAL '1 second' > ?
+              AND
+            """ + LIVE_CHALLENGE + """
+            RETURNING id, email_key, challenge_id, recipient_email, encrypted_code,
+                      send_operation_id, validity_seconds, attempts
+            """, (rs, rowNum) -> new QueuedItem(
+                rs.getString("id"), rs.getString("email_key"), rs.getString("challenge_id"),
+                rs.getString("recipient_email"), rs.getString("encrypted_code"),
+                rs.getString("send_operation_id"), Duration.ofSeconds(rs.getLong("validity_seconds")),
+                rs.getInt("attempts")),
+                Timestamp.from(current.plus(lease)), timestamp, taskId, properties.getQueueMaxAttempts(),
+                timestamp, timestamp, timestamp, timestamp, timestamp));
+        if (claimed == null || claimed.isEmpty()) return false;
+        deliverItem(claimed.get(0));
+        return true;
     }
 
     void deliverItem(QueuedItem item) {
-        Instant sendNow = now();
         try {
-            // Decrypt OTP strictly inside delivery worker just before dispatch
             String plainCode = encryptor.decrypt(item.encryptedCode(), item.id());
-            if (emailSenderService != null && plainCode != null) {
-                emailSenderService.sendPasswordResetCodeEmail(
-                        item.recipientEmail(),
-                        plainCode,
-                        item.sendOperationId(),
-                        item.validity());
+            if (emailSenderService == null || plainCode == null) {
+                throw new IllegalStateException("Missing reset email sender or payload");
             }
-
-            // On success: clear encrypted_code, mark SENT (minimize retention)
-            transactionTemplate.execute(status -> {
-                jdbcTemplate.update("""
-                    UPDATE password_reset_email_queue
-                    SET status = 'SENT',
-                        encrypted_code = NULL,
-                        lease_until = NULL,
-                        updated_at = ?
-                    WHERE id = ?
-                    """, Timestamp.from(sendNow), item.id());
-
-                if (persistence != null) {
-                    persistence.markSendOutcome(
-                            item.emailKey(),
-                            item.sendOperationId(),
-                            OtpSendStatus.SENT,
-                            sendNow);
-                }
-                return null;
-            });
-
-            if (observability != null) {
-                observability.record(
-                        AuthSecurityObservability.Flow.PASSWORD_RESET,
-                        AuthSecurityObservability.Outcome.SUCCESS,
-                        AuthSecurityObservability.Reason.PROVIDER_ACCEPTED);
-            }
-
+            // Keep body and idempotency key identical across retries, including validity text.
+            emailSenderService.sendPasswordResetCodeEmail(item.recipientEmail(), plainCode,
+                    item.sendOperationId(), item.validity());
         } catch (AmbiguousEmailDeliveryException ambiguous) {
-            transactionTemplate.execute(status -> {
-                jdbcTemplate.update("""
-                    UPDATE password_reset_email_queue
-                    SET status = 'PENDING',
-                        lease_until = NULL,
-                        last_error = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                    """, "Ambiguous delivery: " + ambiguous.getMessage(), Timestamp.from(sendNow), item.id());
-
-                if (persistence != null) {
-                    persistence.markSendOutcome(
-                            item.emailKey(),
-                            item.sendOperationId(),
-                            OtpSendStatus.DELIVERY_UNKNOWN,
-                            sendNow);
-                }
-                return null;
-            });
-
-            if (observability != null) {
-                observability.record(
-                        AuthSecurityObservability.Flow.PASSWORD_RESET,
-                        AuthSecurityObservability.Outcome.FAILURE,
-                        AuthSecurityObservability.Reason.PROVIDER_TIMEOUT_OR_AMBIGUOUS);
-            }
-
+            finish(item, true, false);
+            return;
         } catch (RuntimeException definite) {
-            transactionTemplate.execute(status -> {
-                jdbcTemplate.update("""
-                    UPDATE password_reset_email_queue
-                    SET status = 'FAILED',
-                        encrypted_code = NULL,
-                        lease_until = NULL,
-                        last_error = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                    """, "Definite rejection: " + definite.getMessage(), Timestamp.from(sendNow), item.id());
+            finish(item, false, false);
+            return;
+        }
+        // A DB failure after acceptance leaves the lease recoverable; it is not a provider rejection.
+        finish(item, false, true);
+    }
 
-                if (persistence != null) {
-                    persistence.markSendOutcome(
-                            item.emailKey(),
-                            item.sendOperationId(),
-                            OtpSendStatus.DEFINITELY_FAILED,
-                            sendNow);
-                    persistence.expireAfterDefiniteInitialFailure(
-                            item.emailKey(),
-                            item.sendOperationId(),
-                            sendNow);
+    private void finish(QueuedItem item, boolean ambiguous, boolean sent) {
+        Instant current = now();
+        boolean retry = ambiguous && item.attempt() < properties.getQueueMaxAttempts();
+        Duration backoff = properties.getQueueRetryBackoff();
+        Duration cap = properties.getQueueMaxRetryBackoff();
+        for (int i = 1; i < item.attempt() && backoff.compareTo(cap) < 0; i++) {
+            backoff = backoff.multipliedBy(2);
+        }
+        if (backoff.compareTo(cap) > 0) backoff = cap;
+        String finalStatus = sent ? "SENT" : retry ? "PENDING" : "FAILED";
+        OtpSendStatus outcome = sent ? OtpSendStatus.SENT
+                : ambiguous ? OtpSendStatus.DELIVERY_UNKNOWN : OtpSendStatus.DEFINITELY_FAILED;
+        Instant nextAttempt = current.plus(backoff);
+        Boolean owned = transactionTemplate.execute(status -> {
+            int changed = jdbcTemplate.update("""
+                UPDATE password_reset_email_queue
+                SET status = ?, encrypted_code = CASE WHEN ? THEN encrypted_code ELSE NULL END,
+                    lease_until = NULL, next_attempt_at = ?, last_error = ?, updated_at = ?
+                WHERE id = ? AND status = 'PROCESSING' AND attempts = ? AND lease_until > ?
+                """, finalStatus, retry, Timestamp.from(nextAttempt),
+                    sent ? null : ambiguous ? "Provider delivery uncertain" : "Provider delivery failed",
+                    Timestamp.from(current), item.id(), item.attempt(), Timestamp.from(current));
+            if (changed == 0) return false;
+            if (persistence != null) {
+                persistence.markSendOutcome(item.emailKey(), item.sendOperationId(), outcome, current);
+                // Ambiguous exhaustion must not invalidate a code which may have arrived.
+                if (!sent && !ambiguous) {
+                    persistence.expireAfterDefiniteInitialFailure(item.emailKey(), item.sendOperationId(), current);
                 }
-                return null;
-            });
-
-            if (observability != null) {
-                observability.record(
-                        AuthSecurityObservability.Flow.PASSWORD_RESET,
-                        AuthSecurityObservability.Outcome.FAILURE,
-                        AuthSecurityObservability.Reason.PROVIDER_DEFINITE_FAILURE);
             }
+            return true;
+        });
+        if (Boolean.TRUE.equals(owned) && observability != null) {
+            observability.record(AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    sent ? AuthSecurityObservability.Outcome.SUCCESS : AuthSecurityObservability.Outcome.FAILURE,
+                    sent ? AuthSecurityObservability.Reason.PROVIDER_ACCEPTED
+                            : ambiguous ? AuthSecurityObservability.Reason.PROVIDER_TIMEOUT_OR_AMBIGUOUS
+                            : AuthSecurityObservability.Reason.PROVIDER_DEFINITE_FAILURE);
         }
     }
 }
-

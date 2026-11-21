@@ -72,6 +72,7 @@ class PostgresPasswordResetEmailDeliveryQueueTest {
         lenient().when(dataSource.getConnection()).thenReturn(connection);
         lenient().when(connection.prepareStatement(anyString())).thenReturn(preparedStatement);
         lenient().when(preparedStatement.getConnection()).thenReturn(connection);
+        lenient().when(preparedStatement.executeUpdate()).thenReturn(1);
         lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         lenient().when(persistence.now()).thenReturn(Instant.parse("2026-11-20T20:00:00Z"));
 
@@ -209,7 +210,7 @@ class PostgresPasswordResetEmailDeliveryQueueTest {
                 "customer@example.com",
                 encryptedPayload,
                 "send-op-deliver-1",
-                Duration.ofMinutes(10)
+                Duration.ofMinutes(10), 1
         );
 
         queue.deliverItem(item);
@@ -226,7 +227,7 @@ class PostgresPasswordResetEmailDeliveryQueueTest {
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
         verify(connection, atLeastOnce()).prepareStatement(sqlCaptor.capture());
         boolean clearedRetention = sqlCaptor.getAllValues().stream()
-                .anyMatch(sql -> sql.contains("status = 'SENT'") && sql.contains("encrypted_code = NULL"));
+                .anyMatch(sql -> sql.contains("status = ?") && sql.contains("ELSE NULL END"));
         assertTrue(clearedRetention, "Update statement must clear encrypted_code on success");
 
         // 3. Mark send outcome SENT
@@ -266,7 +267,7 @@ class PostgresPasswordResetEmailDeliveryQueueTest {
                 "bad-email@example.com",
                 encryptedPayload,
                 "send-op-fail-1",
-                Duration.ofMinutes(10)
+                Duration.ofMinutes(10), 1
         );
 
         queue.deliverItem(item);
@@ -275,7 +276,7 @@ class PostgresPasswordResetEmailDeliveryQueueTest {
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
         verify(connection, atLeastOnce()).prepareStatement(sqlCaptor.capture());
         boolean clearedRetention = sqlCaptor.getAllValues().stream()
-                .anyMatch(sql -> sql.contains("status = 'FAILED'") && sql.contains("encrypted_code = NULL"));
+                .anyMatch(sql -> sql.contains("status = ?") && sql.contains("ELSE NULL END"));
         assertTrue(clearedRetention, "Update statement must clear encrypted_code on definite failure");
 
         // Mark send outcome DEFINITELY_FAILED

@@ -195,6 +195,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 || "true".equalsIgnoreCase(System.getenv("CI"));
 
         properties = new PasswordResetProperties();
+        properties.setQueueEncryptionKey("password-reset-persistence-integration-test-queue-secret");
         properties.setCodeTtl(Duration.ofMinutes(10));
         properties.setChallengeTtl(Duration.ofMinutes(30));
         properties.setResendCooldown(Duration.ofSeconds(30));
@@ -282,6 +283,10 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 handleService,
                 properties,
                 emailSenderService,
+                // This suite advances its clock between requests; finish delivery before advancing it.
+                // Asynchronous and crash recovery behavior has its own real PostgreSQL suite.
+                new PostgresPasswordResetEmailDeliveryQueue(dataSource, transactionManager,
+                        emailSenderService, persistence, properties, observability, Runnable::run),
                 hasher,
                 observability
         );
@@ -301,6 +306,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         }
         if (!postgresAvailable) return;
         clock.set(FIXED_NOW);
+        jdbcTemplate.update("DELETE FROM password_reset_email_queue");
         jdbcTemplate.update("DELETE FROM password_reset_otp_challenges");
         jdbcTemplate.update("DELETE FROM users");
         createTestUser(TEST_USER_ID, TEST_USER_EMAIL, OLD_PASSWORD);
@@ -1837,7 +1843,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     void test51_deliveryDefiniteFailureAllowsImmediateRetry() {
         requirePostgres();
         org.mockito.Mockito.doThrow(new RuntimeException("Simulated provider failure: invalid recipient"))
-                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
 
         // Initial request fails delivery
         PasswordResetService.Result failResult = service.requestInitial(
@@ -1847,17 +1853,21 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
         // In DB, send status is DEFINITELY_FAILED and challenge is immediately expired
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertEquals(OtpSendStatus.DEFINITELY_FAILED, store.findByEmailKey(emailKey).orElseThrow().getSendStatus()));
         PasswordResetOtpChallenge ch = store.findByEmailKey(emailKey).orElseThrow();
         assertEquals(OtpSendStatus.DEFINITELY_FAILED, ch.getSendStatus());
         assertTrue(!ch.getChallengeExpiresAt().isAfter(clock.instant()));
 
         // Restore mock to succeed
-        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
 
         // Immediate retry succeeds because the failed challenge was expired and can be replaced
         PasswordResetService.Result retryResult = service.requestInitial(
                 TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.13", "idemp-retry-after-fail");
         assertEquals(HttpStatus.ACCEPTED, retryResult.status());
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertEquals(OtpSendStatus.SENT, store.findByEmailKey(emailKey).orElseThrow().getSendStatus()));
         PasswordResetOtpChallenge retriedCh = store.findByEmailKey(emailKey).orElseThrow();
         assertEquals(OtpSendStatus.SENT, retriedCh.getSendStatus());
         assertEquals(PasswordResetChallengeStatus.ACTIVE, retriedCh.getStatus());
@@ -1869,19 +1879,21 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
     void test52_delayedDeliveryTimeoutTransitionsToDeliveryUnknownAndClearsLease() {
         requirePostgres();
         org.mockito.Mockito.doThrow(new AmbiguousEmailDeliveryException("Simulated Resend API timeout"))
-                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+                .when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
 
         PasswordResetService.Result ambiguousResult = service.requestInitial(
                 TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.1.14", "idemp-ambiguous");
         assertEquals(HttpStatus.ACCEPTED, ambiguousResult.status());
 
         String emailKey = persistence.emailKey(TEST_USER_EMAIL);
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertEquals(OtpSendStatus.DELIVERY_UNKNOWN, store.findByEmailKey(emailKey).orElseThrow().getSendStatus()));
         PasswordResetOtpChallenge ch = store.findByEmailKey(emailKey).orElseThrow();
         assertEquals(OtpSendStatus.DELIVERY_UNKNOWN, ch.getSendStatus());
         assertNull(ch.getSendLeaseUntil(), "Send lease must be cleared on DELIVERY_UNKNOWN");
 
         // Clean up mock
-        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
     }
 
     @Test
@@ -1925,6 +1937,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         String registeredEmail = "registered.member@example.com";
         String registeredUserId = "usr-registered-1";
         String nonexistentEmail = "nonexistent.user@example.com";
+        createTestUser(registeredUserId, registeredEmail, OLD_PASSWORD);
 
         // Step 1: Initial request (both return 202 ACCEPTED with RESET_CODE_SENT, 5 resends remaining)
         PasswordResetService.Result reg1 = service.requestInitial(
@@ -2016,6 +2029,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         String registeredPhone = "4165551234";
         String registeredUserId = "usr-registered-phone-1";
         String nonexistentPhone = "4165559999";
+        createTestUser(registeredUserId, "phone.member@example.com", OLD_PASSWORD);
 
         // Step 1: Initial request
         PasswordResetService.Result reg1 = service.requestInitial(
@@ -2145,6 +2159,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         String regEmail = "restart-pg-reg@example.com";
         String regUserId = "usr-restart-pg-reg";
         String nonEmail = "restart-pg-non@example.com";
+        createTestUser(regUserId, regEmail, OLD_PASSWORD);
 
         // Step 1: Initial request on service before restart
         PasswordResetService.Result reg1 = service.requestInitial(

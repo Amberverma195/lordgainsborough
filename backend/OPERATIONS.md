@@ -1,5 +1,43 @@
 # Backend operations
 
+## Password reset delivery recovery
+
+Every API instance automatically sweeps the PostgreSQL reset email queue five
+seconds after startup and then every ten seconds after the previous sweep finishes.
+Railway's existing API start command starts this worker; no separate cron service
+is required. A sweep processes up to 50 due tasks. Atomic claims use a one-minute
+lease and increment the attempt number; completion updates require the same
+attempt and a live lease. An expired lease can be reclaimed after a crash.
+Provider requests reuse the original send operation as their idempotency key and
+the identical email body, so recovery after provider acceptance can be deduplicated.
+This is at-least-once delivery, with deduplication supplied by the provider.
+
+Set `PASSWORD_RESET_QUEUE_ENCRYPTION_KEY` to a persistent secret shared by all
+instances before deploying. Generate a random 32-byte key, encoded as hex or
+Base64, and store it in deployment secrets. Startup rejects an ephemeral queue
+key because another process could not decrypt pending messages. Keep this key
+stable across restarts; key rotation requires draining queued messages first.
+Existing messages encrypted with a lost ephemeral key cannot be recovered.
+Flyway migration V10 adds retry scheduling and queue indexes automatically.
+
+Ambiguous failures (including provider timeouts, 429 and 5xx responses) retry with
+delays of 10, 20, 40 and 80 seconds, for a maximum of five total attempts,
+including abandoned attempts. Definite rejections fail immediately. Exhausted
+ambiguous deliveries retain the challenge's unknown delivery outcome, since a
+code may already have arrived. Success and terminal failures clear encrypted OTP
+payloads. Each sweep retires expired, superseded, missing or inactive challenges
+and exhausted tasks once any processing lease has expired. Terminal records,
+including synthetic tasks, are deleted after 24 hours, up to 500 per sweep.
+
+Tune `PASSWORD_RESET_QUEUE_INITIAL_DELAY`, `PASSWORD_RESET_QUEUE_POLL_INTERVAL`,
+`PASSWORD_RESET_QUEUE_MAX_ATTEMPTS`, `PASSWORD_RESET_QUEUE_RETRY_BACKOFF`,
+`PASSWORD_RESET_QUEUE_MAX_RETRY_BACKOFF`, and `PASSWORD_RESET_QUEUE_RETENTION`
+with Spring duration values such as `PT10S` (except the integer attempt limit).
+Keep `PASSWORD_RESET_SEND_LEASE` longer than the provider request timeout.
+Expired codes are never retried, even if attempts remain. If recovery logs
+`Password reset queue recovery failed`, check database availability; the next
+scheduled sweep retries automatically.
+
 ## PostgreSQL verified TLS
 
 Remote PostgreSQL connections default to `DB_SSL_MODE=verify-full`. Set `DB_HOST`

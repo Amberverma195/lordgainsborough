@@ -38,7 +38,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(classes=RestaurantApplication.class, webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties={"management.server.port=0", "socketio.host=127.0.0.1", "spring.mail.username=test", "spring.mail.password=test",
                 "jwt.secret=pg-only-integration-test-secret-with-at-least-32-bytes", "jwt.expiration=86400000",
-                "app.abuse.ip-hash-secret=pg-only-integration-test-hash-secret-with-32-bytes"})
+                "app.abuse.ip-hash-secret=pg-only-integration-test-hash-secret-with-32-bytes",
+                "app.auth.password-reset.queue-encryption-key=pg-only-integration-test-queue-secret"})
 @org.springframework.test.annotation.DirtiesContext(classMode=org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 @org.springframework.test.context.TestExecutionListeners(listeners=PostgresOnlyApplicationIntegrationTest.DatabaseCleanup.class,mergeMode=org.springframework.test.context.TestExecutionListeners.MergeMode.MERGE_WITH_DEFAULTS)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -634,7 +635,8 @@ class PostgresOnlyApplicationIntegrationTest {
         var member=account("member","member@example.com","5195551111","MEMBER");String previous=token(member);
         var sent=send("/api/auth/forgot-password/send-otp",Map.of("email",member.getEmail()),202);
         var code=org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(email, org.mockito.Mockito.timeout(5000)).sendPasswordResetCodeEmail(eq(member.getEmail()),code.capture(),anyString());
+        verify(email, org.mockito.Mockito.timeout(5000)).sendPasswordResetCodeEmail(
+                eq(member.getEmail()),code.capture(),anyString(),eq(java.time.Duration.ofMinutes(10)));
         send("/api/auth/forgot-password/reset",Map.of("email",member.getEmail(),"challengeId",sent.get("challengeId").asText(),"otp",code.getValue(),"password","ChangedPassword2!"),200);
         assertThat(users.findById("member").orElseThrow().getTokenVersion()).isEqualTo(1);
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+previous)).andExpect(status().isUnauthorized());

@@ -56,6 +56,20 @@ tests specific to the retired database implementation were removed; current
 results are recorded in `docs/POSTGRESQL_MIGRATION.md` at the repository root.
 
 ## Endpoint smoke tests
+
+Queue crash recovery, scheduler wiring and continued execution after a failed
+sweep, concurrent claims, stale-owner fencing, retry backoff/limits, post-acceptance
+transaction rollback, expiry, supersession and retention cleanup use real PostgreSQL:
+
+```powershell
+.\mvnw.cmd '-Dtest=PasswordResetQueueRecoveryIntegrationTest,PostgresPasswordResetEmailDeliveryQueueTest' '-Dtest.postgres.port=54353' test
+```
+
+The recovery suite creates a new queue/encryptor instance after insertion to
+simulate losing the initial asynchronous dispatch. Test email delivery is mocked.
+Application startup tests supply a persistent synthetic queue encryption secret;
+deployment requires its own shared `PASSWORD_RESET_QUEUE_ENCRYPTION_KEY`.
+
 Run endpoint smoke tests against local or deployed environments:
 ```powershell
 # Local environment

@@ -405,7 +405,7 @@ public class PostgresPasswordResetOtpChallengeStore implements PasswordResetOtpC
                     updated_at = ?
                 WHERE email_key = ?
                   AND send_operation_id = ?
-                  AND send_status = 'RESERVED'
+                  AND send_status IN ('RESERVED', 'DELIVERY_UNKNOWN')
                 RETURNING email_key, challenge_id, user_id, purpose, status, code_digest,
                           code_expires_at, challenge_expires_at, next_resend_at, resend_count,
                           failed_verification_attempts, client_idempotency_key, send_operation_id,

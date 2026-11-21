@@ -24,6 +24,27 @@ public class PasswordResetProperties {
     private Duration sendLease = Duration.ofMinutes(1);
     private boolean requireTransaction = false;
     private String queueEncryptionKey;
+    private int queueMaxAttempts = 5;
+    private Duration queueRetryBackoff = Duration.ofSeconds(10);
+    private Duration queueMaxRetryBackoff = Duration.ofMinutes(2);
+    private Duration queueRetention = Duration.ofDays(1);
+
+    public int getQueueMaxAttempts() { return queueMaxAttempts; }
+    public void setQueueMaxAttempts(int value) {
+        if (value < 1 || value > 100) throw new IllegalArgumentException("queueMaxAttempts must be 1..100");
+        queueMaxAttempts = value;
+    }
+    public Duration getQueueRetryBackoff() { return queueRetryBackoff; }
+    public void setQueueRetryBackoff(Duration value) { queueRetryBackoff = positive(value); }
+    public Duration getQueueMaxRetryBackoff() { return queueMaxRetryBackoff; }
+    public void setQueueMaxRetryBackoff(Duration value) { queueMaxRetryBackoff = positive(value); }
+    public Duration getQueueRetention() { return queueRetention; }
+    public void setQueueRetention(Duration value) { queueRetention = positive(value); }
+    private static Duration positive(Duration value) {
+        if (value == null || value.isNegative() || value.isZero())
+            throw new IllegalArgumentException("Queue durations must be positive");
+        return value;
+    }
 
     public Duration getResendCooldown() { return resendCooldown; }
     public void setResendCooldown(Duration value) { this.resendCooldown = value; }

@@ -8,6 +8,7 @@ import com.lordgainsborough.restaurant.service.PasswordResetOtpChallengePersiste
 import com.lordgainsborough.restaurant.service.PasswordResetOtpChallengeStore;
 import com.lordgainsborough.restaurant.service.PostgresPasswordResetEmailDeliveryQueue;
 import com.lordgainsborough.restaurant.service.PostgresPasswordResetOtpChallengeStore;
+import com.lordgainsborough.restaurant.service.PasswordResetQueueWorker;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import javax.sql.DataSource;
 
@@ -22,7 +24,14 @@ import javax.sql.DataSource;
 @Configuration(proxyBeanMethods = false)
 @org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 @EnableTransactionManagement(proxyTargetClass = true)
+@EnableScheduling
 public class PostgresPasswordResetPersistenceConfiguration {
+
+    @Bean
+    public PasswordResetQueueWorker passwordResetQueueWorker(
+            PasswordResetEmailDeliveryQueue queue) {
+        return new PasswordResetQueueWorker(queue);
+    }
 
     @Bean(name = "postgresPasswordResetOtpChallengeStore")
     @Primary
@@ -36,7 +45,12 @@ public class PostgresPasswordResetPersistenceConfiguration {
     @Bean(name = "passwordResetQueuePayloadEncryptor")
     @Primary
     public PasswordResetQueuePayloadEncryptor passwordResetQueuePayloadEncryptor(PasswordResetProperties properties) {
-        return new PasswordResetQueuePayloadEncryptor(properties);
+        PasswordResetQueuePayloadEncryptor encryptor = new PasswordResetQueuePayloadEncryptor(properties);
+        if (encryptor.isEphemeralKey()) {
+            throw new IllegalStateException("Durable password reset delivery requires PASSWORD_RESET_QUEUE_ENCRYPTION_KEY "
+                    + "(app.auth.password-reset.queue-encryption-key), shared across restarts and instances");
+        }
+        return encryptor;
     }
 
     @Bean(name = "passwordResetEmailDeliveryQueue")
