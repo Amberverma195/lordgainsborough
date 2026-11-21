@@ -621,7 +621,7 @@ class PostgresOnlyApplicationIntegrationTest {
         var member=account("member","member@example.com","5195551111","MEMBER");String previous=token(member);
         var sent=send("/api/auth/forgot-password/send-otp",Map.of("email",member.getEmail()),202);
         var code=org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(email).sendPasswordResetCodeEmail(eq(member.getEmail()),code.capture(),anyString());
+        verify(email, org.mockito.Mockito.timeout(5000)).sendPasswordResetCodeEmail(eq(member.getEmail()),code.capture(),anyString());
         send("/api/auth/forgot-password/reset",Map.of("email",member.getEmail(),"challengeId",sent.get("challengeId").asText(),"otp",code.getValue(),"password","ChangedPassword2!"),200);
         assertThat(users.findById("member").orElseThrow().getTokenVersion()).isEqualTo(1);
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+previous)).andExpect(status().isUnauthorized());

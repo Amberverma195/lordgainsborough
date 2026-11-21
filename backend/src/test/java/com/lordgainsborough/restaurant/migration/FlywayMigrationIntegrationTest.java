@@ -334,7 +334,7 @@ public class FlywayMigrationIntegrationTest {
         assertThat(valResult.validationSuccessful).isTrue();
         assertThat(valResult.invalidMigrations).isEmpty();
         // Validation includes resolved migrations on classpath even while this historical smoke suite targets V1.
-        assertThat(valResult.validateCount).isEqualTo(7);
+        assertThat(valResult.validateCount).isEqualTo(8);
         assertThat(valResult.errorDetails).isNull();
     }
 

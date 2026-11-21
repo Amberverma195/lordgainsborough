@@ -2076,7 +2076,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-15m");
         assertEquals(HttpStatus.ACCEPTED, res15m.status());
         assertEquals(Duration.ofMinutes(10), Duration.between(clock.instant(), res15m.body().getCodeExpiresAt()));
-        verify(emailSenderService, atLeastOnce()).sendPasswordResetCodeEmail(
+        verify(emailSenderService, org.mockito.Mockito.timeout(5000).atLeastOnce()).sendPasswordResetCodeEmail(
                 eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
         assertEquals("10 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
 
@@ -2088,7 +2088,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-9m");
         assertEquals(HttpStatus.ACCEPTED, res9m.status());
         assertEquals(Duration.ofMinutes(9), Duration.between(clock.instant(), res9m.body().getCodeExpiresAt()));
-        verify(emailSenderService).sendPasswordResetCodeEmail(
+        verify(emailSenderService, org.mockito.Mockito.timeout(5000)).sendPasswordResetCodeEmail(
                 eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
         assertEquals("9 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
 
@@ -2100,7 +2100,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-3m");
         assertEquals(HttpStatus.ACCEPTED, res3m.status());
         assertEquals(Duration.ofMinutes(3), Duration.between(clock.instant(), res3m.body().getCodeExpiresAt()));
-        verify(emailSenderService).sendPasswordResetCodeEmail(
+        verify(emailSenderService, org.mockito.Mockito.timeout(5000)).sendPasswordResetCodeEmail(
                 eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
         assertEquals("3 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
 
@@ -2125,7 +2125,7 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
                 TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.5.1", "idemp-truthful-init");
         assertEquals(HttpStatus.ACCEPTED, init.status());
         assertEquals("RESET_CODE_SENT", init.body().getCode());
-        verify(emailSenderService, times(1)).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
+        verify(emailSenderService, org.mockito.Mockito.timeout(5000).times(1)).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
 
         // Replay with identical idempotency key returns RESET_CHALLENGE_REUSED, dispatches NO email
         org.mockito.Mockito.reset(emailSenderService);

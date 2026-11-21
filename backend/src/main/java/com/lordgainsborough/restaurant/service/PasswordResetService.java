@@ -4,10 +4,12 @@ import com.lordgainsborough.restaurant.config.PasswordResetProperties;
 import com.lordgainsborough.restaurant.dto.PasswordResetResponse;
 import com.lordgainsborough.restaurant.model.OtpSendStatus;
 import com.lordgainsborough.restaurant.model.PasswordResetChallengeStatus;
+import com.lordgainsborough.restaurant.model.PasswordResetDeliveryTask;
 import com.lordgainsborough.restaurant.model.PasswordResetOtpChallenge;
 import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.security.AbuseIpHasher;
 import com.lordgainsborough.restaurant.security.PasswordUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -40,17 +42,71 @@ public class PasswordResetService {
     private final PasswordResetPublicHandleService handleService;
     private final PasswordResetProperties properties;
     private final EmailSenderService emailSenderService;
+    private final PasswordResetEmailDeliveryQueue deliveryQueue;
     private final AbuseIpHasher hasher;
     private final AuthSecurityObservability observability;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    public PasswordResetService(PasswordResetOtpChallengePersistence persistence,
-            PasswordResetAbuseLimiter abuseLimiter, PasswordResetPublicHandleService handleService,
-            PasswordResetProperties properties, EmailSenderService emailSenderService,
-            AbuseIpHasher hasher, AuthSecurityObservability observability) {
-        this.persistence = persistence; this.abuseLimiter = abuseLimiter; this.handleService = handleService;
-        this.properties = properties; this.emailSenderService = emailSenderService;
-        this.hasher = hasher; this.observability = observability;
+    public PasswordResetService(
+            PasswordResetOtpChallengePersistence persistence,
+            PasswordResetAbuseLimiter abuseLimiter,
+            PasswordResetPublicHandleService handleService,
+            PasswordResetProperties properties,
+            EmailSenderService emailSenderService,
+            AbuseIpHasher hasher,
+            AuthSecurityObservability observability) {
+        this(
+                persistence,
+                abuseLimiter,
+                handleService,
+                properties,
+                emailSenderService,
+                createDefaultQueue(persistence, emailSenderService, properties, observability),
+                hasher,
+                observability);
+    }
+
+    @Autowired
+    public PasswordResetService(
+            PasswordResetOtpChallengePersistence persistence,
+            PasswordResetAbuseLimiter abuseLimiter,
+            PasswordResetPublicHandleService handleService,
+            PasswordResetProperties properties,
+            EmailSenderService emailSenderService,
+            PasswordResetEmailDeliveryQueue deliveryQueue,
+            AbuseIpHasher hasher,
+            AuthSecurityObservability observability) {
+        this.persistence = persistence;
+        this.abuseLimiter = abuseLimiter;
+        this.handleService = handleService;
+        this.properties = properties;
+        this.emailSenderService = emailSenderService;
+        this.deliveryQueue = deliveryQueue != null
+                ? deliveryQueue
+                : createDefaultQueue(persistence, emailSenderService, properties, observability);
+        this.hasher = hasher;
+        this.observability = observability;
+    }
+
+    private static PasswordResetEmailDeliveryQueue createDefaultQueue(
+            PasswordResetOtpChallengePersistence persistence,
+            EmailSenderService emailSenderService,
+            PasswordResetProperties properties,
+            AuthSecurityObservability observability) {
+        if (persistence != null && persistence.getStore() instanceof PostgresPasswordResetOtpChallengeStore pgStore
+                && pgStore.getDataSource() != null && pgStore.getTransactionManager() != null) {
+            return new PostgresPasswordResetEmailDeliveryQueue(
+                    pgStore.getDataSource(),
+                    pgStore.getTransactionManager(),
+                    emailSenderService,
+                    persistence,
+                    properties,
+                    observability);
+        }
+        return new InMemoryPasswordResetEmailDeliveryQueue(
+                emailSenderService,
+                persistence,
+                observability);
     }
 
     public boolean isPostgresStore() {
@@ -131,14 +187,7 @@ public class PasswordResetService {
                     operationId,
                     now);
             if (reserved.isPresent()) {
-                if (userId != null) {
-                    deliver(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get());
-                } else {
-                    observability.record(
-                            AuthSecurityObservability.Flow.PASSWORD_RESET,
-                            AuthSecurityObservability.Outcome.SUCCESS,
-                            AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
-                }
+                enqueueDelivery(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get(), userId == null, now);
                 return accepted(persistence.findByEmailKey(emailKey).orElse(reserved.get()), now);
             }
         }
@@ -166,14 +215,7 @@ public class PasswordResetService {
                     .orElseGet(() -> accepted(challenge, now));
         }
 
-        if (userId != null) {
-            deliver(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get());
-        } else {
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.SUCCESS,
-                    AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
-        }
+        enqueueDelivery(userEmail != null ? userEmail : normalizedEmail, rawCode, reserved.get(), userId == null, now);
         return accepted(persistence.findByEmailKey(emailKey).orElse(reserved.get()), now);
     }
 
@@ -239,22 +281,23 @@ public class PasswordResetService {
             return denial == null ? cooldown(latest, now) : denial;
         }
 
+        String recipientEmail = null;
         if (challenge.getUserId() != null) {
-            String recipientEmail = persistence.findUserEmailById(reserved.get().getUserId()).orElse(null);
-            if (recipientEmail != null) {
-                deliver(recipientEmail, rawCode, reserved.get());
-            } else {
-                persistence.markSendOutcome(
-                        emailKey,
-                        operationId,
-                        OtpSendStatus.DEFINITELY_FAILED,
-                        persistence.now());
-            }
+            recipientEmail = persistence.findUserEmailById(reserved.get().getUserId()).orElse(null);
+        }
+        if (challenge.getUserId() != null && recipientEmail == null) {
+            persistence.markSendOutcome(
+                    emailKey,
+                    operationId,
+                    OtpSendStatus.DEFINITELY_FAILED,
+                    persistence.now());
         } else {
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.SUCCESS,
-                    AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
+            enqueueDelivery(
+                    recipientEmail != null ? recipientEmail : normalizedEmail,
+                    rawCode,
+                    reserved.get(),
+                    challenge.getUserId() == null,
+                    now);
         }
         return accepted(persistence.findByEmailKey(emailKey).orElse(reserved.get()), now);
     }
@@ -405,52 +448,28 @@ public class PasswordResetService {
         return invalidCode(now);
     }
 
-    private void deliver(String recipient, String rawCode, PasswordResetOtpChallenge challenge) {
-        try {
-            Duration validity = challenge.getCodeExpiresAt() != null
-                    ? Duration.between(persistence.now(), challenge.getCodeExpiresAt())
-                    : properties.getCodeTtl();
-            emailSenderService.sendPasswordResetCodeEmail(
-                    recipient,
-                    rawCode,
-                    challenge.getSendOperationId(),
-                    validity);
-            persistence.markSendOutcome(
-                    challenge.getEmailKey(),
-                    challenge.getSendOperationId(),
-                    OtpSendStatus.SENT,
-                    persistence.now());
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.SUCCESS,
-                    AuthSecurityObservability.Reason.PROVIDER_ACCEPTED);
-        } catch (AmbiguousEmailDeliveryException ambiguous) {
-            persistence.markSendOutcome(
-                    challenge.getEmailKey(),
-                    challenge.getSendOperationId(),
-                    OtpSendStatus.DELIVERY_UNKNOWN,
-                    persistence.now());
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.FAILURE,
-                    AuthSecurityObservability.Reason.PROVIDER_TIMEOUT_OR_AMBIGUOUS);
-        } catch (RuntimeException definite) {
-            persistence.markSendOutcome(
-                    challenge.getEmailKey(),
-                    challenge.getSendOperationId(),
-                    OtpSendStatus.DEFINITELY_FAILED,
-                    persistence.now());
-            if (challenge.getResendCount() == 0) {
-                persistence.expireAfterDefiniteInitialFailure(
-                        challenge.getEmailKey(),
-                        challenge.getSendOperationId(),
-                        persistence.now());
-            }
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.FAILURE,
-                    AuthSecurityObservability.Reason.PROVIDER_DEFINITE_FAILURE);
-        }
+    private void enqueueDelivery(
+            String recipient,
+            String rawCode,
+            PasswordResetOtpChallenge challenge,
+            boolean synthetic,
+            Instant now) {
+        Duration validity = challenge.getCodeExpiresAt() != null
+                ? Duration.between(now, challenge.getCodeExpiresAt())
+                : properties.getCodeTtl();
+
+        PasswordResetDeliveryTask task = new PasswordResetDeliveryTask(
+                UUID.randomUUID().toString(),
+                challenge.getEmailKey(),
+                challenge.getChallengeId(),
+                synthetic ? "synthetic@shadow.local" : recipient,
+                rawCode,
+                challenge.getSendOperationId(),
+                validity,
+                synthetic,
+                now);
+
+        deliveryQueue.enqueue(task);
     }
 
     private PasswordResetOtpChallenge newChallenge(
@@ -713,4 +732,5 @@ public class PasswordResetService {
 
     public PasswordResetOtpChallengePersistence getPersistence() { return persistence; }
     public PasswordResetAbuseLimiter getAbuseLimiter() { return abuseLimiter; }
+    public PasswordResetEmailDeliveryQueue getDeliveryQueue() { return deliveryQueue; }
 }

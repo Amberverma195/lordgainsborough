@@ -585,4 +585,91 @@ class PasswordResetServiceTest {
         // Store still contains exactly 5 entries (atomic replace expired, bounded storage, zero memory accumulation)
         assertEquals(5, store.challenges.size());
     }
+
+    @Test
+    @DisplayName("Timing indistinguishability: Asynchronous delivery queue decouples email provider latency from public response time")
+    void timingIndistinguishability_asynchronousQueueDecouplesResendLatencyFromHttpResponse() throws Exception {
+        String regEmail = "timing-reg@example.com";
+        String regUserId = "usr-timing-reg";
+        store.userEmails.put(regUserId, regEmail);
+        String nonEmail = "timing-non@example.com";
+
+        // Simulate a 600ms network round-trip delay to Resend API
+        EmailSenderService slowSender = mock(EmailSenderService.class);
+        doAnswer(invocation -> {
+            Thread.sleep(600);
+            return null;
+        }).when(slowSender).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
+
+        java.util.concurrent.ExecutorService asyncPool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        PasswordResetEmailDeliveryQueue asyncQueue = new InMemoryPasswordResetEmailDeliveryQueue(
+                slowSender, persistence, observability, asyncPool);
+
+        PasswordResetService asyncService = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, slowSender, asyncQueue, hasher, observability);
+
+        // Measure response time for registered account
+        long startReg = System.currentTimeMillis();
+        PasswordResetService.Result regResult = asyncService.requestInitial(
+                regEmail, regUserId, regEmail, "192.168.1.50", "idemp-timing-reg");
+        long durationRegMs = System.currentTimeMillis() - startReg;
+
+        // Measure response time for nonexistent account
+        long startNon = System.currentTimeMillis();
+        PasswordResetService.Result nonResult = asyncService.requestInitial(
+                nonEmail, null, null, "192.168.1.51", "idemp-timing-non");
+        long durationNonMs = System.currentTimeMillis() - startNon;
+
+        // Both return HTTP 202 ACCEPTED with identical public messaging
+        assertEquals(HttpStatus.ACCEPTED, regResult.status());
+        assertEquals(HttpStatus.ACCEPTED, nonResult.status());
+        assertEquals("RESET_CODE_SENT", regResult.body().getCode());
+        assertEquals("RESET_CODE_SENT", nonResult.body().getCode());
+
+        // CRITICAL TIMING GUARANTEE:
+        // Registered account does NOT block on the 600ms external Resend provider call.
+        // It finishes strictly in local cryptographic hashing time (BCrypt ~250ms).
+        assertTrue(durationRegMs < 500, "Registered account response time must not block on email provider (took " + durationRegMs + "ms vs 600ms provider delay)");
+        // Registered and nonexistent accounts have indistinguishable response times
+        long timingDifference = Math.abs(durationRegMs - durationNonMs);
+        assertTrue(timingDifference < 150, "Timing difference between registered and unknown accounts must be indistinguishable (diff was " + timingDifference + "ms)");
+
+        // Background worker delivers the email asynchronously
+        verify(slowSender, org.mockito.Mockito.timeout(1500).times(1))
+                .sendPasswordResetCodeEmail(eq(regEmail), anyString(), anyString(), any());
+        verify(slowSender, org.mockito.Mockito.never())
+                .sendPasswordResetCodeEmail(eq(nonEmail), anyString(), anyString(), any());
+        asyncPool.shutdown();
+    }
+
+    @Test
+    @DisplayName("Delivery queue recovery: Pending queue items can be drained and processed without data loss")
+    void deliveryQueueRecovery_drainsPendingTasks() {
+        String email = "recovery@example.com";
+        String userId = "usr-recovery";
+        store.userEmails.put(userId, email);
+
+        // Queue with manual/deferred execution (no automatic executor)
+        InMemoryPasswordResetEmailDeliveryQueue manualQueue = new InMemoryPasswordResetEmailDeliveryQueue(
+                emailSenderService, persistence, observability, r -> {}); // does not run immediately
+
+        PasswordResetService manualService = new PasswordResetService(
+                persistence, abuseLimiter, handleService, properties, emailSenderService, manualQueue, hasher, observability);
+
+        PasswordResetService.Result res = manualService.requestInitial(
+                email, userId, email, "192.168.1.60", "idemp-queue-manual");
+        assertEquals(HttpStatus.ACCEPTED, res.status());
+
+        // Item is in pending queue and not yet sent
+        assertEquals(1, manualQueue.getPendingTasks().size());
+        verify(emailSenderService, never()).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
+
+        // Background / recovery processor triggers processPending()
+        int processed = manualQueue.processPending();
+        assertEquals(1, processed);
+        assertEquals(0, manualQueue.getPendingTasks().size());
+
+        // Email successfully delivered
+        verify(emailSenderService, times(1)).sendPasswordResetCodeEmail(eq(email), anyString(), anyString(), any());
+    }
 }
