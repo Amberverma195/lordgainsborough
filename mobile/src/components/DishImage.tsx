@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Image } from 'expo-image';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -15,17 +16,21 @@ export function DishImage({
   height?: number;
 }) {
   const uri = resolveMediaUrl(image, resolveApiOrigins());
-  if (!uri) {
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  if (!uri || failedUri === uri || (!__DEV__ && uri.startsWith('http:'))) {
     return (
       <View style={[styles.fallback, { height }]}>
         <Text style={styles.monogram}>LG</Text>
-        <Text style={styles.caption} numberOfLines={1}>{title}</Text>
+        <Text style={styles.caption} numberOfLines={1}>
+          {title}
+        </Text>
       </View>
     );
   }
   return (
     <Image
       source={{ uri }}
+      onError={() => setFailedUri(uri)}
       style={{ height, width: '100%' }}
       contentFit="cover"
       accessibilityLabel={title}

@@ -41,3 +41,6 @@ yarn-error.*
 /android
 
 coverage/
+
+# Local iOS Metro export verification
+dist-ios/

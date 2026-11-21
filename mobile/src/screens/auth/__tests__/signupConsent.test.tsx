@@ -42,7 +42,7 @@ jest.mock('../../../auth/AuthContext', () => ({
 }));
 
 import * as authApi from '../../../api/auth';
-import SignupScreen, { getLegalDocumentUrl } from '../signup';
+import SignupScreen, { getLegalDocumentUrl } from '../../../app/auth/signup';
 
 const mockSendSignupOtp = authApi.sendSignupOtp as jest.Mock;
 

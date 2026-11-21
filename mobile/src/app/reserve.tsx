@@ -1,50 +1,189 @@
-import { Linking, StyleSheet, Text } from 'react-native';
-
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useRef, useState } from 'react';
+import { Linking, Text, TextInput } from 'react-native';
+import { apiRequest } from '../api/client';
+import { ApiError } from '../api/errors';
 import { AppHeader } from '../components/AppHeader';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
 import { Screen } from '../components/Screen';
 import { restaurantFacts } from '../restaurant/facts';
-import { colors, space, type } from '../theme/tokens';
-
+import { isValidEmail, isValidPhone } from '../auth/validation';
+import { colors } from '../theme/tokens';
+const labels = {
+  name: 'Guest name',
+  email: 'Email address',
+  phone: 'Telephone number',
+  date: 'Date YYYY-MM-DD',
+  time: 'Time HH:mm (24-hour)',
+  partySize: 'Party size (1-10)',
+  specialRequests: 'Special requests',
+};
+const KEY = 'lgb.reservation.pending.v1';
 export default function ReserveScreen() {
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    date: '',
+    time: '',
+    partySize: '2',
+    specialRequests: '',
+  });
+  const [state, setState] = useState('loading');
+  const [error, setError] = useState('');
+  const guard = useRef(false);
+  useEffect(() => {
+    let live = true;
+    void AsyncStorage.getItem(KEY)
+      .then((value) => {
+        if (live) setState(value || 'ready');
+      })
+      .catch(() => {
+        if (live) setState('uncertain');
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  async function submit() {
+    if (guard.current || state !== 'ready') return;
+    if (
+      !form.name.trim() ||
+      !isValidEmail(form.email) ||
+      !isValidPhone(form.phone) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(form.date) ||
+      !/^\d{2}:(00|30)$/.test(form.time) ||
+      !Number.isInteger(Number(form.partySize)) ||
+      Number(form.partySize) < 1 ||
+      Number(form.partySize) > 10
+    ) {
+      setError(
+        'Enter name, valid email and Canadian/US phone, date YYYY-MM-DD, time HH:00 or HH:30, and 1-10 guests.',
+      );
+      return;
+    }
+    guard.current = true;
+    setState('sending');
+    setError('');
+    try {
+      await AsyncStorage.setItem(KEY, 'uncertain');
+      await apiRequest('/api/reservations', {
+        method: 'POST',
+        body: {
+          ...form,
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
+          partySize: Number(form.partySize),
+        },
+      });
+      await AsyncStorage.setItem(KEY, 'sent');
+      setState('sent');
+    } catch (failure) {
+      if (
+        failure instanceof ApiError &&
+        failure.status >= 400 &&
+        failure.status < 500
+      ) {
+        await AsyncStorage.removeItem(KEY);
+        setState('ready');
+        setError(
+          failure.status === 429
+            ? 'Too many requests. Retry in ' +
+                (failure.retryAfterSeconds ?? 60) +
+                ' seconds.'
+            : 'Check your details and choose a future time within dining hours.',
+        );
+      } else {
+        setState('uncertain');
+        setError(
+          'Delivery could not be confirmed. Call before submitting again to avoid duplicates.',
+        );
+      }
+    } finally {
+      guard.current = false;
+    }
+  }
   return (
     <Screen scroll>
       <AppHeader title="Book a Table" eyebrow="Reservations" showBack />
-      <Text style={styles.copy}>
-        Table requests from the mobile app are part of a later release. Call the restaurant and the team will confirm your booking.
+      <Text style={{ color: colors.text }}>
+        Request a table. Submission is pending confirmation, not a guaranteed
+        reservation. All dates and times are America/Toronto.
       </Text>
-      <Card>
-        <Text style={styles.heading}>{restaurantFacts.name}</Text>
-        {restaurantFacts.addressLines.map((line) => <Text key={line} style={styles.copy}>{line}</Text>)}
-        <Text style={styles.heading}>Dining hours</Text>
-        {restaurantFacts.diningHours.map((line) => <Text key={line} style={styles.copy}>{line}</Text>)}
-        <Text style={styles.note}>{restaurantFacts.privateDining}</Text>
-      </Card>
-      <Button label={`Call ${restaurantFacts.phoneDisplay}`} onPress={() => void Linking.openURL(`tel:${restaurantFacts.phoneTel}`)} />
+      {restaurantFacts.diningHours.map((line) => (
+        <Text key={line} style={{ color: colors.textSecondary }}>
+          {line}
+        </Text>
+      ))}
+      {state === 'ready' || state === 'sending' ? (
+        <>
+          {(Object.keys(form) as (keyof typeof form)[]).map((key) => (
+            <TextInput
+              key={key}
+              accessibilityLabel={labels[key]}
+              keyboardType={
+                key === 'email'
+                  ? 'email-address'
+                  : key === 'phone'
+                    ? 'phone-pad'
+                    : key === 'partySize'
+                      ? 'number-pad'
+                      : 'default'
+              }
+              multiline={key === 'specialRequests'}
+              placeholder={
+                key === 'date'
+                  ? 'Date YYYY-MM-DD'
+                  : key === 'time'
+                    ? 'Time HH:mm (24-hour)'
+                    : key
+              }
+              placeholderTextColor={colors.textMuted}
+              value={form[key]}
+              editable={state === 'ready'}
+              maxLength={key === 'specialRequests' ? 1000 : 255}
+              onChangeText={(value) =>
+                setForm((old) => ({ ...old, [key]: value }))
+              }
+              style={{ color: colors.text, minHeight: 52 }}
+            />
+          ))}
+          <Button
+            label="Submit reservation request"
+            loading={state === 'sending'}
+            onPress={() => void submit()}
+          />
+        </>
+      ) : null}
+      {state === 'loading' ? <Text>Checking saved requests...</Text> : null}
+      {state === 'sent' ? (
+        <Text style={{ color: colors.text }}>
+          Request received - pending confirmation. The team will contact you.
+        </Text>
+      ) : null}
+      {state === 'sent' || state === 'uncertain' ? (
+        <>
+          <Text style={{ color: colors.text }}>
+            Call to check your previous request before making another.
+          </Text>
+          <Button
+            label="I checked with the restaurant ? start another request"
+            variant="ghost"
+            onPress={() => {
+              void AsyncStorage.removeItem(KEY).then(() => setState('ready'));
+            }}
+          />
+        </>
+      ) : null}
+      {error ? (
+        <Text accessibilityRole="alert" style={{ color: colors.danger }}>
+          {error}
+        </Text>
+      ) : null}
+      <Button
+        label={'Call ' + restaurantFacts.phoneDisplay}
+        onPress={() => void Linking.openURL('tel:' + restaurantFacts.phoneTel)}
+      />
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  copy: {
-    color: colors.textSecondary,
-    fontFamily: type.body,
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: space.sm,
-  },
-  heading: {
-    color: colors.text,
-    fontFamily: type.heading,
-    fontSize: 22,
-    marginTop: space.sm,
-    marginBottom: space.sm,
-  },
-  note: {
-    color: colors.gold,
-    fontFamily: type.body,
-    lineHeight: 22,
-    marginTop: space.md,
-  },
-});

@@ -12,10 +12,16 @@ export function sanitizeIdentifier(value: string): string {
 }
 
 export function sanitizeEmail(email: string): string {
-  return email.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  return email
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '_');
 }
 
-export function getTrackingStorageKey(orderId: string, accountEmail?: string | null): string {
+export function getTrackingStorageKey(
+  orderId: string,
+  accountEmail?: string | null,
+): string {
   const safeOrder = sanitizeIdentifier(orderId);
   const namespace = toAccountNamespace(accountEmail);
   if (namespace === 'guest') {
@@ -24,7 +30,9 @@ export function getTrackingStorageKey(orderId: string, accountEmail?: string | n
   return `lgb.track.u.${namespace}.${safeOrder}.v2`;
 }
 
-export function getTrackingIndexStorageKey(accountEmail?: string | null): string {
+export function getTrackingIndexStorageKey(
+  accountEmail?: string | null,
+): string {
   const namespace = toAccountNamespace(accountEmail);
   if (namespace === 'guest') {
     return 'lgb.track.idx.guest.v2';
@@ -37,7 +45,10 @@ export function getLegacyTrackingStorageKey(orderId: string): string {
   return `lgb.track.${safeOrder}`;
 }
 
-export function getLegacyV1TrackingStorageKey(orderId: string, accountEmail?: string | null): string {
+export function getLegacyV1TrackingStorageKey(
+  orderId: string,
+  accountEmail?: string | null,
+): string {
   const safeOrder = sanitizeIdentifier(orderId);
   if (!accountEmail || !accountEmail.trim()) {
     return `lgb.track.guest.${safeOrder}.v1`;
@@ -46,7 +57,9 @@ export function getLegacyV1TrackingStorageKey(orderId: string, accountEmail?: st
   return `lgb.track.u.${safeEmail}.${safeOrder}.v1`;
 }
 
-export function getLegacyV1TrackingIndexStorageKey(accountEmail?: string | null): string {
+export function getLegacyV1TrackingIndexStorageKey(
+  accountEmail?: string | null,
+): string {
   if (!accountEmail || !accountEmail.trim()) {
     return 'lgb.track.idx.guest.v1';
   }
@@ -85,42 +98,55 @@ export async function purgeLegacyTrackingToken(
   try {
     await Promise.all([
       SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
-      SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
+      SecureStore.deleteItemAsync(
+        getLegacyV1TrackingStorageKey(orderId, accountEmail),
+      ),
     ]);
   } catch {
     // Missing key or deletion failure is ignored
   }
 }
 
-async function readTrackingIndex(accountEmail?: string | null): Promise<string[]> {
+async function readTrackingIndex(
+  accountEmail?: string | null,
+): Promise<string[]> {
   try {
-    const raw = await SecureStore.getItemAsync(getTrackingIndexStorageKey(accountEmail));
+    const raw = await SecureStore.getItemAsync(
+      getTrackingIndexStorageKey(accountEmail),
+    );
     if (!raw) {
       return [];
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((id) => typeof id === 'string')
+      : [];
   } catch {
     return [];
   }
 }
 
-async function addToTrackingIndex(orderId: string, accountEmail?: string | null): Promise<void> {
-  try {
-    const current = await readTrackingIndex(accountEmail);
-    if (!current.includes(orderId)) {
-      current.push(orderId);
-      await SecureStore.setItemAsync(
-        getTrackingIndexStorageKey(accountEmail),
-        JSON.stringify(current),
-      );
-    }
-  } catch {
-    // Non-fatal if index update fails
-  }
+async function addToTrackingIndex(
+  orderId: string,
+  accountEmail?: string | null,
+): Promise<void> {
+  const raw = await SecureStore.getItemAsync(
+    getTrackingIndexStorageKey(accountEmail),
+  );
+  const current: unknown = raw ? JSON.parse(raw) : [];
+  if (!Array.isArray(current) || !current.every((id) => typeof id === 'string'))
+    throw new Error('Tracking index is unavailable');
+  if (!current.includes(orderId))
+    await SecureStore.setItemAsync(
+      getTrackingIndexStorageKey(accountEmail),
+      JSON.stringify([...current, orderId]),
+    );
 }
 
-async function removeFromTrackingIndex(orderId: string, accountEmail?: string | null): Promise<void> {
+async function removeFromTrackingIndex(
+  orderId: string,
+  accountEmail?: string | null,
+): Promise<void> {
   try {
     const current = await readTrackingIndex(accountEmail);
     const updated = current.filter((id) => id !== orderId);
@@ -130,7 +156,9 @@ async function removeFromTrackingIndex(orderId: string, accountEmail?: string | 
         JSON.stringify(updated),
       );
     } else {
-      await SecureStore.deleteItemAsync(getTrackingIndexStorageKey(accountEmail));
+      await SecureStore.deleteItemAsync(
+        getTrackingIndexStorageKey(accountEmail),
+      );
     }
   } catch {
     // Non-fatal
@@ -146,8 +174,9 @@ export async function writeTrackingToken(
     return;
   }
   const key = getTrackingStorageKey(orderId, accountEmail);
-  await SecureStore.setItemAsync(key, token.trim());
+  // Index first so every saved credential remains discoverable for deletion.
   await addToTrackingIndex(orderId.trim(), accountEmail);
+  await SecureStore.setItemAsync(key, token.trim());
 
   // Purge legacy unisolated and v1 keys for this order if present to eliminate token leakage
   await purgeLegacyTrackingToken(orderId, accountEmail);
@@ -182,7 +211,9 @@ export async function deleteTrackingToken(
     await Promise.all([
       SecureStore.deleteItemAsync(getTrackingStorageKey(orderId, accountEmail)),
       SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
-      SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
+      SecureStore.deleteItemAsync(
+        getLegacyV1TrackingStorageKey(orderId, accountEmail),
+      ),
     ]);
   } catch {
     // Ignore cleanup failures
@@ -190,16 +221,22 @@ export async function deleteTrackingToken(
   await removeFromTrackingIndex(orderId.trim(), accountEmail);
 }
 
-export async function clearAccountTrackingTokens(accountEmail?: string | null): Promise<void> {
+export async function clearAccountTrackingTokens(
+  accountEmail?: string | null,
+): Promise<void> {
   try {
     const orderIds = await readTrackingIndex(accountEmail);
     await Promise.all(
       orderIds.map(async (orderId) => {
         try {
           await Promise.all([
-            SecureStore.deleteItemAsync(getTrackingStorageKey(orderId, accountEmail)),
+            SecureStore.deleteItemAsync(
+              getTrackingStorageKey(orderId, accountEmail),
+            ),
             SecureStore.deleteItemAsync(getLegacyTrackingStorageKey(orderId)),
-            SecureStore.deleteItemAsync(getLegacyV1TrackingStorageKey(orderId, accountEmail)),
+            SecureStore.deleteItemAsync(
+              getLegacyV1TrackingStorageKey(orderId, accountEmail),
+            ),
           ]);
         } catch {
           // Ignore individual delete failures
@@ -208,7 +245,9 @@ export async function clearAccountTrackingTokens(accountEmail?: string | null): 
     );
     await Promise.all([
       SecureStore.deleteItemAsync(getTrackingIndexStorageKey(accountEmail)),
-      SecureStore.deleteItemAsync(getLegacyV1TrackingIndexStorageKey(accountEmail)),
+      SecureStore.deleteItemAsync(
+        getLegacyV1TrackingIndexStorageKey(accountEmail),
+      ),
     ]);
   } catch {
     // Ignore cleanup failures

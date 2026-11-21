@@ -31,7 +31,7 @@ import * as authApi from '../../../api/auth';
 import { ApiError } from '../../../api/errors';
 import { SessionUser } from '../../../api/parse';
 import { useAuth } from '../../../auth/AuthContext';
-import SignupScreen from '../signup';
+import SignupScreen from '../../../app/auth/signup';
 
 const mockUseAuth = useAuth as jest.Mock;
 const mockSendSignupOtp = authApi.sendSignupOtp as jest.Mock;

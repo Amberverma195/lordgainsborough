@@ -69,7 +69,7 @@ abstract class PostgresPg020IntegrationSupport {
         jdbcUrl="jdbc:postgresql://127.0.0.1:"+port+"/"+database+"?sslmode=disable";
         var v1=Flyway.configure().dataSource(jdbcUrl,"postgres","postgres").target("1").cleanDisabled(true).load(); v1.migrate();
         var v2=Flyway.configure().dataSource(jdbcUrl,"postgres","postgres").cleanDisabled(true).load();
-        assertThat(v2.migrate().migrationsExecuted).isEqualTo(5); v2.validate();
+        assertThat(v2.migrate().migrationsExecuted).isEqualTo(v2.info().all().length - 1); v2.validate();
         sockets=mock(SocketIOServer.class,RETURNS_DEEP_STUBS);  jwt=mock(JwtUtil.class);
 
         context=new AnnotationConfigApplicationContext();context.getEnvironment().setActiveProfiles("test");

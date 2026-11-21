@@ -28,7 +28,16 @@
       "expo-router",
       "expo-secure-store",
       "expo-font",
-      "expo-image"
+      "expo-image",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#080808"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -26,7 +26,7 @@ import * as authApi from '../../../api/auth';
 import { ApiError } from '../../../api/errors';
 import { SessionUser } from '../../../api/parse';
 import { useAuth } from '../../../auth/AuthContext';
-import ProfileEditScreen from '../edit';
+import ProfileEditScreen from '../../../app/profile/edit';
 
 const mockUseAuth = useAuth as jest.Mock;
 const mockUpdateProfile = authApi.updateProfile as jest.Mock;

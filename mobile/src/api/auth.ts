@@ -1,6 +1,11 @@
 import { apiRequest } from './client';
 import { ApiError } from './errors';
-import { isRecord, parseLoginResponse, parseSessionUser, SessionUser } from './parse';
+import {
+  isRecord,
+  parseLoginResponse,
+  parseSessionUser,
+  SessionUser,
+} from './parse';
 import {
   buildPasswordResetComplete,
   buildPasswordResetResend,
@@ -27,6 +32,10 @@ export interface SignupOtpResult {
 }
 
 export interface PasswordResetResult {
+  serverTime?: string | null;
+  codeExpiresAt?: string | null;
+  challengeExpiresAt?: string | null;
+  resendsRemaining?: number | null;
   code: string;
   message: string;
   challengeId: string | null;
@@ -34,17 +43,26 @@ export interface PasswordResetResult {
   retryAfterSeconds: number | null;
 }
 
-function parseText(record: Record<string, unknown>, key: string): string | null {
+function parseText(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
   const val = record[key];
   return typeof val === 'string' && val.trim() ? val.trim() : null;
 }
 
-function parseNumber(record: Record<string, unknown>, key: string): number | null {
+function parseNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | null {
   const val = record[key];
   return typeof val === 'number' && Number.isFinite(val) ? val : null;
 }
 
-export function buildLoginBody(input: LoginInput): { emailOrPhone: string; password: string } {
+export function buildLoginBody(input: LoginInput): {
+  emailOrPhone: string;
+  password: string;
+} {
   return {
     emailOrPhone: input.emailOrPhone.trim(),
     password: input.password,
@@ -72,12 +90,19 @@ export async function fetchCurrentUser(token: string): Promise<SessionUser> {
   const response = await apiRequest('/api/auth/me', { token });
   const parsed = parseSessionUser(response.body);
   if (!parsed.ok) {
-    throw new ApiError({ status: response.status, code: 'MALFORMED_RESPONSE', message: parsed.message });
+    throw new ApiError({
+      status: response.status,
+      code: 'MALFORMED_RESPONSE',
+      message: parsed.message,
+    });
   }
   return parsed.value;
 }
 
-export async function updateProfile(token: string, name: string): Promise<SessionUser> {
+export async function updateProfile(
+  token: string,
+  name: string,
+): Promise<SessionUser> {
   const response = await apiRequest('/api/auth/profile', {
     method: 'PUT',
     token,
@@ -94,7 +119,9 @@ export async function updateProfile(token: string, name: string): Promise<Sessio
   return parsed.value;
 }
 
-export async function sendSignupOtp(input: SignupOtpSendInput): Promise<SignupOtpResult> {
+export async function sendSignupOtp(
+  input: SignupOtpSendInput,
+): Promise<SignupOtpResult> {
   const built = buildSignupOtpSend(input);
   const response = await apiRequest(built.path, {
     method: 'POST',
@@ -112,7 +139,9 @@ export async function sendSignupOtp(input: SignupOtpSendInput): Promise<SignupOt
   };
 }
 
-export async function verifySignup(input: SignupVerifyInput): Promise<SessionUser> {
+export async function verifySignup(
+  input: SignupVerifyInput,
+): Promise<SessionUser> {
   const built = buildSignupVerify(input);
   const response = await apiRequest(built.path, {
     method: 'POST',
@@ -131,7 +160,10 @@ export async function verifySignup(input: SignupVerifyInput): Promise<SessionUse
   return parsed.user;
 }
 
-export async function sendPasswordResetOtp(email: string, idempotencyKey?: string): Promise<PasswordResetResult> {
+export async function sendPasswordResetOtp(
+  email: string,
+  idempotencyKey?: string,
+): Promise<PasswordResetResult> {
   const built = buildPasswordResetSend({ email, idempotencyKey });
   const response = await apiRequest(built.path, {
     method: 'POST',
@@ -141,10 +173,16 @@ export async function sendPasswordResetOtp(email: string, idempotencyKey?: strin
   const body = isRecord(response.body) ? response.body : {};
   return {
     code: parseText(body, 'code') ?? 'RESET_OTP_SENT',
-    message: parseText(body, 'message') ?? 'If an account matches that email, a reset code was sent.',
+    message:
+      parseText(body, 'message') ??
+      'If an account matches that email, a reset code was sent.',
     challengeId: parseText(body, 'challengeId'),
     nextResendAt: parseText(body, 'nextResendAt'),
     retryAfterSeconds: parseNumber(body, 'retryAfterSeconds'),
+    serverTime: parseText(body, 'serverTime'),
+    codeExpiresAt: parseText(body, 'codeExpiresAt'),
+    challengeExpiresAt: parseText(body, 'challengeExpiresAt'),
+    resendsRemaining: parseNumber(body, 'resendsRemaining'),
   };
 }
 
@@ -153,7 +191,11 @@ export async function resendPasswordResetOtp(
   challengeId: string,
   idempotencyKey?: string,
 ): Promise<PasswordResetResult> {
-  const built = buildPasswordResetResend({ email, challengeId, idempotencyKey });
+  const built = buildPasswordResetResend({
+    email,
+    challengeId,
+    idempotencyKey,
+  });
   const response = await apiRequest(built.path, {
     method: 'POST',
     headers: built.headers,
@@ -166,14 +208,31 @@ export async function resendPasswordResetOtp(
     challengeId: parseText(body, 'challengeId') ?? challengeId,
     nextResendAt: parseText(body, 'nextResendAt'),
     retryAfterSeconds: parseNumber(body, 'retryAfterSeconds'),
+    serverTime: parseText(body, 'serverTime'),
+    codeExpiresAt: parseText(body, 'codeExpiresAt'),
+    challengeExpiresAt: parseText(body, 'challengeExpiresAt'),
+    resendsRemaining: parseNumber(body, 'resendsRemaining'),
   };
 }
 
-export async function completePasswordReset(input: PasswordResetCompleteInput): Promise<void> {
+export async function completePasswordReset(
+  input: PasswordResetCompleteInput,
+): Promise<void> {
   const built = buildPasswordResetComplete(input);
   await apiRequest(built.path, {
     method: 'POST',
     headers: built.headers,
     body: built.body,
+  });
+}
+
+export async function deleteAccount(
+  token: string,
+  password: string,
+): Promise<void> {
+  await apiRequest('/api/auth/me', {
+    method: 'DELETE',
+    token,
+    body: { password },
   });
 }

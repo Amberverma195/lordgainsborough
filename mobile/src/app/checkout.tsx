@@ -1,9 +1,17 @@
+import { toAccountNamespace } from '../auth/accountNamespace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { fetchStoreSettings } from '../api/catalog';
 import { createOrder } from '../api/orders';
@@ -13,8 +21,18 @@ import { writeTrackingToken } from '../auth/secureSession';
 import { useCart } from '../cart/CartContext';
 import { formatMoney } from '../cart/money';
 import { rememberConfirmedOrder } from '../checkout/confirmationCache';
-import { checkoutFingerprint, clearCheckoutIdempotencyKey, createSubmitGuard, getOrCreateCheckoutIdempotencyKey } from '../checkout/idempotency';
-import { isUncertainSubmission, shouldClearIdempotencyKey, UNCERTAIN_ORDER_MESSAGE, validateCheckout } from '../checkout/validate';
+import {
+  checkoutFingerprint,
+  clearCheckoutIdempotencyKey,
+  createSubmitGuard,
+  getOrCreateCheckoutIdempotencyKey,
+} from '../checkout/idempotency';
+import {
+  isUncertainSubmission,
+  shouldClearIdempotencyKey,
+  UNCERTAIN_ORDER_MESSAGE,
+  validateCheckout,
+} from '../checkout/validate';
 import { AppHeader } from '../components/AppHeader';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
@@ -34,46 +52,55 @@ const storage = {
 
 export default function CheckoutScreen() {
   const { user, status } = useAuth();
-  const { lines, pickupDate, pickupTime, setPickup, clear, estimate } = useCart();
-  const settings = useQuery({ queryKey: ['settings'], queryFn: ({ signal }) => fetchStoreSettings(signal) });
+  const { lines, pickupDate, pickupTime, setPickup, clear, estimate } =
+    useCart();
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: ({ signal }) => fetchStoreSettings(signal),
+  });
   const [instructions, setInstructions] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [uncertainSubmission, setUncertainSubmission] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [recoveredFor, setRecoveredFor] = useState('');
+  const pendingKey = 'lgb.checkout.pending.' + toAccountNamespace(user?.email);
+  const recoveryReady = recoveredFor === pendingKey;
+  useEffect(() => {
+    let live = true;
+    void AsyncStorage.getItem(pendingKey)
+      .then((value) => {
+        if (live) {
+          setUncertainSubmission(!!value);
+          setRecoveredFor(pendingKey);
+        }
+      })
+      .catch(() => {
+        if (live) {
+          setUncertainSubmission(true);
+          setRecoveredFor(pendingKey);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [pendingKey]);
+  const currentToken = useRef(user?.token);
+  useEffect(() => {
+    currentToken.current = user?.token;
+  }, [user?.token]);
   const guard = useRef(createSubmitGuard()).current;
   const taxRate = settings.data?.taxRate;
   const totals = estimate(taxRate ?? 0);
 
-  const prevLinesRef = useRef(lines);
-  useEffect(() => {
-    if (prevLinesRef.current !== lines) {
-      prevLinesRef.current = lines;
-      if (uncertainSubmission) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setUncertainSubmission(false);
-        setError(null);
-      }
-    }
-  }, [lines, uncertainSubmission]);
-
   const handleInstructionsChange = (text: string) => {
     setInstructions(text);
-    if (uncertainSubmission) {
-      setUncertainSubmission(false);
-      setError(null);
-    }
   };
-
   const handlePickupChange = (date: string, time: string) => {
     setPickup(date, time);
-    if (uncertainSubmission) {
-      setUncertainSubmission(false);
-      setError(null);
-    }
   };
 
   const placeOrder = async () => {
-    if (!guard.begin()) {
+    if (!recoveryReady || uncertainSubmission || !guard.begin()) {
       return;
     }
     setSubmitting(true);
@@ -81,7 +108,9 @@ export default function CheckoutScreen() {
     let confirmed = false;
     try {
       if (!settings.data || taxRate === undefined) {
-        setError('Restaurant settings could not be loaded, so tax cannot be shown yet.');
+        setError(
+          'Restaurant settings could not be loaded, so tax cannot be shown yet.',
+        );
         return;
       }
       const problem = validateCheckout({
@@ -112,6 +141,7 @@ export default function CheckoutScreen() {
         () => Crypto.randomUUID(),
         user.email,
       );
+      await AsyncStorage.setItem(pendingKey, 'pending');
       const created = await createOrder(user.token, {
         customerName: user.name,
         customerEmail: user.email,
@@ -126,10 +156,17 @@ export default function CheckoutScreen() {
         tax: totals.tax,
         total: totals.total,
       });
+      if (currentToken.current !== user.token) return;
+      // Retain a receipt marker until the customer checks orders. Cart clearing is asynchronous.
+      await AsyncStorage.setItem(pendingKey, 'confirmed:' + created.order.id);
       rememberConfirmedOrder(created.order);
       if (created.trackingToken) {
         try {
-          await writeTrackingToken(created.order.id, created.trackingToken, user.email);
+          await writeTrackingToken(
+            created.order.id,
+            created.trackingToken,
+            user.email,
+          );
         } catch {
           // The order is already confirmed. A missing local recovery token can be replaced by the account session.
         }
@@ -139,7 +176,10 @@ export default function CheckoutScreen() {
       confirmed = true;
       router.replace(`/order/${created.order.id}?confirmed=1`);
     } catch (requestError) {
-      if (requestError instanceof ApiError && shouldClearIdempotencyKey(requestError.code)) {
+      if (
+        requestError instanceof ApiError &&
+        shouldClearIdempotencyKey(requestError.code)
+      ) {
         await clearCheckoutIdempotencyKey(storage, user?.email);
       }
       if (isUncertainSubmission(requestError)) {
@@ -147,9 +187,11 @@ export default function CheckoutScreen() {
         setError(UNCERTAIN_ORDER_MESSAGE);
       } else {
         setUncertainSubmission(false);
-        setError(requestError instanceof ApiError
-          ? requestError.message
-          : 'We could not confirm the order. Please try again.');
+        setError(
+          requestError instanceof ApiError
+            ? requestError.message
+            : 'We could not confirm the order. Please try again.',
+        );
       }
     } finally {
       if (!confirmed) {
@@ -163,39 +205,76 @@ export default function CheckoutScreen() {
     return (
       <Screen>
         <AppHeader title="Checkout" showBack showCart={false} />
-        <Text style={styles.copy}>Your cart is empty, so there is nothing to send to the kitchen.</Text>
-        <Button label="Return to menu" onPress={() => router.replace('/(tabs)/menu')} />
+        <Text style={styles.copy}>
+          Your cart is empty, so there is nothing to send to the kitchen.
+        </Text>
+        <Button
+          label="Return to menu"
+          onPress={() => router.replace('/(tabs)/menu')}
+        />
       </Screen>
     );
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <Screen scroll>
-        <AppHeader title="Checkout" showBack cartCount={lines.reduce((sum, line) => sum + line.quantity, 0)} />
-        {settings.isLoading ? <LoadingState label="Loading restaurant settings" /> : null}
+        <AppHeader
+          title="Checkout"
+          showBack
+          cartCount={lines.reduce((sum, line) => sum + line.quantity, 0)}
+        />
+        {settings.isLoading ? (
+          <LoadingState label="Loading restaurant settings" />
+        ) : null}
         {settings.isError ? (
-          <ErrorState title="Settings unavailable" message="Pickup tax and availability could not be loaded." onRetry={() => void settings.refetch()} />
+          <ErrorState
+            title="Settings unavailable"
+            message="Pickup tax and availability could not be loaded."
+            onRetry={() => void settings.refetch()}
+          />
         ) : null}
         <Card>
           <Text style={styles.heading}>Review</Text>
           {lines.map((line) => (
             <View key={line.menuItemId} style={styles.line}>
-              <Text style={styles.copy}>{line.quantity} × {line.name}</Text>
-              <Text style={styles.copy}>{formatMoney(line.unitPrice * line.quantity)}</Text>
+              <Text style={styles.copy}>
+                {line.quantity} × {line.name}
+              </Text>
+              <Text style={styles.copy}>
+                {formatMoney(line.unitPrice * line.quantity)}
+              </Text>
             </View>
           ))}
           <View style={styles.line}>
-            <Text style={styles.copy}>Estimated tax{taxRate !== undefined ? ` (${(taxRate * 100).toFixed(1)}%)` : ''}</Text>
-            <Price amount={taxRate === undefined ? 0 : totals.tax} muted={taxRate === undefined} />
+            <Text style={styles.copy}>
+              Estimated tax
+              {taxRate !== undefined ? ` (${(taxRate * 100).toFixed(1)}%)` : ''}
+            </Text>
+            <Price
+              amount={taxRate === undefined ? 0 : totals.tax}
+              muted={taxRate === undefined}
+            />
           </View>
           <View style={styles.line}>
             <Text style={styles.totalLabel}>Estimated total</Text>
-            <Price amount={taxRate === undefined ? totals.subtotal : totals.total} />
+            <Price
+              amount={taxRate === undefined ? totals.subtotal : totals.total}
+            />
           </View>
-          <Text style={styles.note}>The restaurant recalculates prices, tax, and the total when the order is accepted.</Text>
+          <Text style={styles.note}>
+            The restaurant recalculates prices, tax, and the total when the
+            order is accepted.
+          </Text>
         </Card>
-        <PickupPicker date={pickupDate} time={pickupTime} onChange={handlePickupChange} />
+        <PickupPicker
+          date={pickupDate}
+          time={pickupTime}
+          onChange={handlePickupChange}
+        />
         <Text style={styles.label}>Special instructions</Text>
         <TextInput
           value={instructions}
@@ -211,12 +290,20 @@ export default function CheckoutScreen() {
           <Text style={styles.note}>{restaurantFacts.paymentNote}</Text>
         </Card>
         {settings.data && !settings.data.pickupOrdersEnabled ? (
-          <Text style={styles.error}>Pickup orders are currently paused. Please check back later.</Text>
+          <Text style={styles.error}>
+            Pickup orders are currently paused. Please check back later.
+          </Text>
         ) : null}
-        {user?.pickupDisabled ? <Text style={styles.error}>Pickup disabled due to recent no-show history</Text> : null}
+        {user?.pickupDisabled ? (
+          <Text style={styles.error}>
+            Pickup disabled due to recent no-show history
+          </Text>
+        ) : null}
         {uncertainSubmission ? (
           <View style={styles.uncertainCard}>
-            <Text style={styles.uncertainTitle}>Submission Status Uncertain</Text>
+            <Text style={styles.uncertainTitle}>
+              Submission Status Uncertain
+            </Text>
             <Text style={styles.uncertainCopy}>{UNCERTAIN_ORDER_MESSAGE}</Text>
             <View style={styles.uncertainActions}>
               <Button
@@ -238,12 +325,20 @@ export default function CheckoutScreen() {
           <>
             {error ? <Text style={styles.error}>{error}</Text> : null}
             {status !== 'signedIn' ? (
-              <Button label="Sign in to order" onPress={() => router.push('/auth/login')} />
+              <Button
+                label="Sign in to order"
+                onPress={() => router.push('/auth/login')}
+              />
             ) : (
               <Button
                 label="Place pickup order"
                 loading={submitting}
-                disabled={!settings.data || !settings.data.pickupOrdersEnabled || user?.pickupDisabled}
+                disabled={
+                  !recoveryReady ||
+                  !settings.data ||
+                  !settings.data.pickupOrdersEnabled ||
+                  user?.pickupDisabled
+                }
                 onPress={() => void placeOrder()}
               />
             )}

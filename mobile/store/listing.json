@@ -1,0 +1,12 @@
+{
+  "name": "Lord Gainsborough",
+  "shortDescription": "Explore the menu, order pickup and request a table at Lord Gainsborough.",
+  "description": "Discover the Lord Gainsborough menu, manage your account and place pickup orders. Choose a pickup time, follow your order status, and pay at the restaurant. Request a table and wait for the restaurant to confirm availability. Sign in to view your orders, update your profile or permanently delete your account.",
+  "supportEmail": "dine@lordgainsborough.com",
+  "privacyPath": "/privacy",
+  "termsPath": "/terms",
+  "accountDeletionPath": "/delete-account",
+  "category": "Food & Drink",
+  "payment": "At pickup only",
+  "reviewStatus": "Draft - operator approval and real device screenshots required"
+}

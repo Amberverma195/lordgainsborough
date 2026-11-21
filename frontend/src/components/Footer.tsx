@@ -62,6 +62,7 @@ const Footer = () => {
         <div className={styles.bottomSection}>
           <p>&copy; {new Date().getFullYear()} Lord Gainsborough Restaurant. All rights reserved.</p>
           <div className={styles.legal}>
+            <Link href="/delete-account">Delete account</Link>
             <Link href="/privacy">Privacy Policy</Link>
             <Link href="/terms">Terms of Service</Link>
           </div>

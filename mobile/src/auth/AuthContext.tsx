@@ -1,5 +1,13 @@
+import { accountWillChange } from './lifecycle';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 import { fetchCurrentUser, login } from '../api/auth';
 import { onUnauthorized } from '../api/client';
@@ -11,7 +19,12 @@ import {
   clearCheckoutIdempotencyKey,
 } from '../checkout/idempotency';
 import { queryClient } from '../query/client';
-import { clearAccountTrackingTokens, clearSessionToken, readSessionToken, writeSessionToken } from './secureSession';
+import {
+  clearAccountTrackingTokens,
+  clearSessionToken,
+  readSessionToken,
+  writeSessionToken,
+} from './secureSession';
 import { shouldClearStoredSession } from './session';
 
 export type AuthStatus = 'loading' | 'signedIn' | 'signedOut' | 'unreachable';
@@ -33,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
 
   const clearLocalSession = useCallback(async () => {
+    accountWillChange();
     const priorEmail = user?.email;
     await clearSessionToken();
     clearAllConfirmedOrders();
@@ -108,18 +122,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [clearLocalSession]);
 
-  useEffect(() => onUnauthorized(() => {
-    void clearLocalSession();
-  }), [clearLocalSession]);
+  useEffect(
+    () =>
+      onUnauthorized(() => {
+        void clearLocalSession();
+      }),
+    [clearLocalSession],
+  );
 
-  const signIn = useCallback(async (emailOrPhone: string, password: string) => {
-    try {
+  const signIn = useCallback(
+    async (emailOrPhone: string, password: string) => {
+      try {
+        const priorEmail = user?.email;
+        const session = await login({ emailOrPhone, password });
+        clearAllConfirmedOrders();
+        queryClient.clear();
+        try {
+          if (
+            priorEmail &&
+            priorEmail.trim().toLowerCase() !==
+              session.email.trim().toLowerCase()
+          ) {
+            await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
+            await clearAccountTrackingTokens(priorEmail);
+          }
+          await clearAllCheckoutIdempotencyKeys(AsyncStorage);
+          await clearAccountTrackingTokens(null);
+        } catch {
+          // Ignore storage cleanup failures
+        }
+        accountWillChange();
+        await writeSessionToken(session.token);
+        setUser(session);
+        setStatus('signedIn');
+        return session;
+      } catch (error) {
+        if (error instanceof ApiError) {
+          throw error;
+        }
+        throw new ApiError({
+          status: 0,
+          code: 'NETWORK_ERROR',
+          message:
+            'We could not reach the restaurant. Check your connection and try again.',
+        });
+      }
+    },
+    [user],
+  );
+
+  const establishSession = useCallback(
+    async (session: SessionUser) => {
       const priorEmail = user?.email;
-      const session = await login({ emailOrPhone, password });
       clearAllConfirmedOrders();
       queryClient.clear();
       try {
-        if (priorEmail && priorEmail.trim().toLowerCase() !== session.email.trim().toLowerCase()) {
+        if (
+          priorEmail &&
+          priorEmail.trim().toLowerCase() !== session.email.trim().toLowerCase()
+        ) {
           await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
           await clearAccountTrackingTokens(priorEmail);
         }
@@ -128,40 +189,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // Ignore storage cleanup failures
       }
+      accountWillChange();
       await writeSessionToken(session.token);
       setUser(session);
       setStatus('signedIn');
-      return session;
-    } catch (error) {
-      if (error instanceof ApiError) {
-        throw error;
-      }
-      throw new ApiError({
-        status: 0,
-        code: 'NETWORK_ERROR',
-        message: 'We could not reach the restaurant. Check your connection and try again.',
-      });
-    }
-  }, [user]);
-
-  const establishSession = useCallback(async (session: SessionUser) => {
-    const priorEmail = user?.email;
-    clearAllConfirmedOrders();
-    queryClient.clear();
-    try {
-      if (priorEmail && priorEmail.trim().toLowerCase() !== session.email.trim().toLowerCase()) {
-        await clearCheckoutIdempotencyKey(AsyncStorage, priorEmail);
-        await clearAccountTrackingTokens(priorEmail);
-      }
-      await clearAllCheckoutIdempotencyKeys(AsyncStorage);
-      await clearAccountTrackingTokens(null);
-    } catch {
-      // Ignore storage cleanup failures
-    }
-    await writeSessionToken(session.token);
-    setUser(session);
-    setStatus('signedIn');
-  }, [user]);
+    },
+    [user],
+  );
 
   const updateUser = useCallback(async (updatedUser: SessionUser) => {
     if (updatedUser.token) {
@@ -176,7 +210,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [clearLocalSession]);
 
   const value = useMemo(
-    () => ({ status, user, signIn, establishSession, updateUser, signOut, refresh }),
+    () => ({
+      status,
+      user,
+      signIn,
+      establishSession,
+      updateUser,
+      signOut,
+      refresh,
+    }),
     [status, user, signIn, establishSession, updateUser, signOut, refresh],
   );
 

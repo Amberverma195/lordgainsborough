@@ -11,12 +11,18 @@ export const CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.idempotencyKey';
 export const CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.fingerprint';
 export const LEGACY_CHECKOUT_IDEMPOTENCY_KEY = CHECKOUT_IDEMPOTENCY_KEY;
 export const LEGACY_CHECKOUT_FINGERPRINT_KEY = CHECKOUT_FINGERPRINT_KEY;
-export const LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.guest.idempotencyKey.v1';
-export const LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.guest.fingerprint.v1';
-export const GUEST_CHECKOUT_IDEMPOTENCY_KEY = 'lgb.checkout.guest.idempotencyKey.v2';
-export const GUEST_CHECKOUT_FINGERPRINT_KEY = 'lgb.checkout.guest.fingerprint.v2';
+export const LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY =
+  'lgb.checkout.guest.idempotencyKey.v1';
+export const LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY =
+  'lgb.checkout.guest.fingerprint.v1';
+export const GUEST_CHECKOUT_IDEMPOTENCY_KEY =
+  'lgb.checkout.guest.idempotencyKey.v2';
+export const GUEST_CHECKOUT_FINGERPRINT_KEY =
+  'lgb.checkout.guest.fingerprint.v2';
 
-export function getCheckoutIdempotencyStorageKey(accountEmail?: string | null): string {
+export function getCheckoutIdempotencyStorageKey(
+  accountEmail?: string | null,
+): string {
   const namespace = toAccountNamespace(accountEmail);
   if (namespace === 'guest') {
     return GUEST_CHECKOUT_IDEMPOTENCY_KEY;
@@ -24,7 +30,9 @@ export function getCheckoutIdempotencyStorageKey(accountEmail?: string | null): 
   return `lgb.checkout.u.${namespace}.idempotencyKey.v2`;
 }
 
-export function getCheckoutFingerprintStorageKey(accountEmail?: string | null): string {
+export function getCheckoutFingerprintStorageKey(
+  accountEmail?: string | null,
+): string {
   const namespace = toAccountNamespace(accountEmail);
   if (namespace === 'guest') {
     return GUEST_CHECKOUT_FINGERPRINT_KEY;
@@ -32,19 +40,29 @@ export function getCheckoutFingerprintStorageKey(accountEmail?: string | null): 
   return `lgb.checkout.u.${namespace}.fingerprint.v2`;
 }
 
-export function getLegacyV1CheckoutIdempotencyStorageKey(accountEmail?: string | null): string {
+export function getLegacyV1CheckoutIdempotencyStorageKey(
+  accountEmail?: string | null,
+): string {
   if (!accountEmail || !accountEmail.trim()) {
     return LEGACY_GUEST_CHECKOUT_IDEMPOTENCY_KEY;
   }
-  const normalized = accountEmail.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  const normalized = accountEmail
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '_');
   return `lgb.checkout.u.${normalized}.idempotencyKey.v1`;
 }
 
-export function getLegacyV1CheckoutFingerprintStorageKey(accountEmail?: string | null): string {
+export function getLegacyV1CheckoutFingerprintStorageKey(
+  accountEmail?: string | null,
+): string {
   if (!accountEmail || !accountEmail.trim()) {
     return LEGACY_GUEST_CHECKOUT_FINGERPRINT_KEY;
   }
-  const normalized = accountEmail.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  const normalized = accountEmail
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '_');
   return `lgb.checkout.u.${normalized}.fingerprint.v1`;
 }
 
@@ -64,7 +82,9 @@ export function checkoutFingerprint(input: FingerprintInput): string {
   return `${lines}::${input.pickupDate.trim()}::${input.pickupTime.trim()}::${instructions}`;
 }
 
-export function createIdempotencyKey(randomUUID: () => string = () => crypto.randomUUID()): string {
+export function createIdempotencyKey(
+  randomUUID: () => string = () => crypto.randomUUID(),
+): string {
   const key = randomUUID();
   return key.length <= 128 ? key : key.slice(0, 128);
 }
@@ -77,8 +97,10 @@ export async function getOrCreateCheckoutIdempotencyKey(
 ): Promise<string> {
   const idempotencyKeyName = getCheckoutIdempotencyStorageKey(accountEmail);
   const fingerprintKeyName = getCheckoutFingerprintStorageKey(accountEmail);
-  const legacyV1IdempotencyKey = getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
-  const legacyV1FingerprintKey = getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
+  const legacyV1IdempotencyKey =
+    getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
+  const legacyV1FingerprintKey =
+    getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
 
   // Clean up legacy global and v1 keys if present to prevent cross-account leakage
   try {
@@ -111,8 +133,10 @@ export async function clearCheckoutIdempotencyKey(
 ): Promise<void> {
   const idempotencyKeyName = getCheckoutIdempotencyStorageKey(accountEmail);
   const fingerprintKeyName = getCheckoutFingerprintStorageKey(accountEmail);
-  const legacyV1IdempotencyKey = getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
-  const legacyV1FingerprintKey = getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
+  const legacyV1IdempotencyKey =
+    getLegacyV1CheckoutIdempotencyStorageKey(accountEmail);
+  const legacyV1FingerprintKey =
+    getLegacyV1CheckoutFingerprintStorageKey(accountEmail);
   await Promise.all([
     store.removeItem(idempotencyKeyName),
     store.removeItem(fingerprintKeyName),
@@ -123,11 +147,17 @@ export async function clearCheckoutIdempotencyKey(
   ]);
 }
 
-export async function clearAllCheckoutIdempotencyKeys(store: KeyValueStore): Promise<void> {
+export async function clearAllCheckoutIdempotencyKeys(
+  store: KeyValueStore,
+): Promise<void> {
   if (typeof store.getAllKeys === 'function') {
     try {
       const allKeys = await store.getAllKeys();
-      const checkoutKeys = allKeys.filter((k) => k.startsWith('lgb.checkout.'));
+      const checkoutKeys = allKeys.filter(
+        (k) =>
+          k.startsWith('lgb.checkout.') &&
+          !k.startsWith('lgb.checkout.pending.'),
+      );
       await Promise.all(checkoutKeys.map((k) => store.removeItem(k)));
       return;
     } catch {
@@ -160,7 +190,9 @@ export function createSubmitGuard(): { begin: () => boolean; end: () => void } {
   };
 }
 
-export function memoryStore(seed: Record<string, string> = {}): KeyValueStore & {
+export function memoryStore(
+  seed: Record<string, string> = {},
+): KeyValueStore & {
   snapshot: () => Record<string, string>;
   getAllKeys: () => Promise<string[]>;
 } {

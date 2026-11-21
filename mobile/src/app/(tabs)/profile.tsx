@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 
+import { getLegalDocumentUrl } from '../../api/legal';
 import { useAuth } from '../../auth/AuthContext';
 import { AppHeader } from '../../components/AppHeader';
 import { Button } from '../../components/Button';
@@ -16,7 +17,9 @@ export default function ProfileScreen() {
   return (
     <Screen scroll>
       <AppHeader title="Profile" eyebrow="Account" />
-      {status === 'loading' ? <LoadingState label="Restoring your session" /> : null}
+      {status === 'loading' ? (
+        <LoadingState label="Restoring your session" />
+      ) : null}
       {status === 'unreachable' ? (
         <ErrorState
           title="Session unavailable"
@@ -26,9 +29,15 @@ export default function ProfileScreen() {
       ) : null}
       {status === 'signedOut' ? (
         <View style={styles.gap}>
-          <Text style={styles.copy}>Sign in or create an account with Lord Gainsborough.</Text>
+          <Text style={styles.copy}>
+            Sign in or create an account with Lord Gainsborough.
+          </Text>
           <Button label="Sign in" onPress={() => router.push('/auth/login')} />
-          <Button label="Create account" variant="secondary" onPress={() => router.push('/auth/signup')} />
+          <Button
+            label="Create account"
+            variant="secondary"
+            onPress={() => router.push('/auth/signup')}
+          />
         </View>
       ) : null}
       {user ? (
@@ -37,21 +46,67 @@ export default function ProfileScreen() {
             <Text style={styles.name}>{user.name}</Text>
             <Text style={styles.copy}>{user.email}</Text>
             {user.phone ? <Text style={styles.copy}>{user.phone}</Text> : null}
-            <Text style={styles.meta}>{roleLabel(user.role)}{user.memberSince ? ` · Member since ${user.memberSince}` : ''}</Text>
+            <Text style={styles.meta}>
+              {roleLabel(user.role)}
+              {user.memberSince ? ` · Member since ${user.memberSince}` : ''}
+            </Text>
             {user.pickupDisabled ? (
-              <Text style={styles.warning}>Pickup ordering is disabled on this account because of recent no-show history.</Text>
+              <Text style={styles.warning}>
+                Pickup ordering is disabled on this account because of recent
+                no-show history.
+              </Text>
             ) : null}
           </Card>
           {user.role === 'ADMIN' || user.role === 'STAFF' ? (
             <Text style={styles.note}>
-              The administrator dashboard and kitchen display stay on the website. This app is the customer pickup experience.
+              The administrator dashboard and kitchen display stay on the
+              website. This app is the customer pickup experience.
             </Text>
           ) : null}
-          <Button label="Edit profile" variant="secondary" onPress={() => router.push('/profile/edit')} />
-          <Button label="View orders" variant="secondary" onPress={() => router.push('/(tabs)/orders')} />
-          <Button label="Sign out" variant="ghost" onPress={() => void signOut()} />
+          <Button
+            label="Edit profile"
+            variant="secondary"
+            onPress={() => router.push('/profile/edit')}
+          />
+          <Button
+            label="View orders"
+            variant="secondary"
+            onPress={() => router.push('/(tabs)/orders')}
+          />
+          <Button
+            label="Delete account"
+            variant="ghost"
+            onPress={() => router.push('/profile/delete')}
+          />
+          <Button
+            label="Sign out"
+            variant="ghost"
+            onPress={() => void signOut()}
+          />
         </View>
       ) : null}
+      <Button
+        label="Terms of Service"
+        variant="ghost"
+        onPress={() => void Linking.openURL(getLegalDocumentUrl('/terms'))}
+      />
+      <Button
+        label="Privacy Policy"
+        variant="ghost"
+        onPress={() => void Linking.openURL(getLegalDocumentUrl('/privacy'))}
+      />
+      <Button
+        label="Support"
+        variant="ghost"
+        onPress={() => void Linking.openURL('mailto:dine@lordgainsborough.com')}
+      />
+      <Button
+        label="Account deletion information"
+        variant="ghost"
+        onPress={() =>
+          void Linking.openURL(getLegalDocumentUrl('/delete-account'))
+        }
+      />
     </Screen>
   );
 }

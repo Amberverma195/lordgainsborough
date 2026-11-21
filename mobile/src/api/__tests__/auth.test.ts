@@ -1,5 +1,6 @@
 import {
   completePasswordReset,
+  deleteAccount,
   fetchCurrentUser,
   login,
   resendPasswordResetOtp,
@@ -190,7 +191,10 @@ describe('auth API', () => {
         },
       });
 
-      const res = await sendPasswordResetOtp('user@example.com', 'idem-reset-1');
+      const res = await sendPasswordResetOtp(
+        'user@example.com',
+        'idem-reset-1',
+      );
       expect(mockApiRequest).toHaveBeenCalledWith(
         '/api/auth/forgot-password/send-otp',
         expect.objectContaining({
@@ -212,7 +216,11 @@ describe('auth API', () => {
         },
       });
 
-      const res = await resendPasswordResetOtp('user@example.com', 'reset-chal-1', 'idem-resend-1');
+      const res = await resendPasswordResetOtp(
+        'user@example.com',
+        'reset-chal-1',
+        'idem-resend-1',
+      );
       expect(mockApiRequest).toHaveBeenCalledWith(
         '/api/auth/forgot-password/resend-otp',
         expect.objectContaining({
@@ -257,5 +265,15 @@ describe('auth API', () => {
         }),
       );
     });
+  });
+});
+
+it('deletes the authenticated account using current-password confirmation', async () => {
+  mockApiRequest.mockResolvedValueOnce({ status: 204, body: null });
+  await deleteAccount('bearer-jwt', 'CurrentPassword1!');
+  expect(mockApiRequest).toHaveBeenCalledWith('/api/auth/me', {
+    method: 'DELETE',
+    token: 'bearer-jwt',
+    body: { password: 'CurrentPassword1!' },
   });
 });

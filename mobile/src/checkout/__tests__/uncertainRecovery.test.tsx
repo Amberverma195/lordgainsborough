@@ -1,12 +1,20 @@
+import { toAccountNamespace } from '../../auth/accountNamespace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import { router } from 'expo-router';
 import React from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
-  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
 
 jest.mock('@expo/vector-icons/Ionicons', () => 'Ionicons');
@@ -113,7 +121,13 @@ describe('Checkout uncertain order submission recovery', () => {
       setQuantity: jest.fn(),
       remove: jest.fn(),
       clear: jest.fn(),
-      estimate: () => ({ subtotal: 22.0, tax: 2.86, total: 24.86, lineCount: 1, itemCount: 1 }),
+      estimate: () => ({
+        subtotal: 22.0,
+        tax: 2.86,
+        total: 24.86,
+        lineCount: 1,
+        itemCount: 1,
+      }),
     });
   });
 
@@ -135,15 +149,19 @@ describe('Checkout uncertain order submission recovery', () => {
         <QueryClientProvider client={queryClient}>
           <CheckoutScreen />
         </QueryClientProvider>
-      </SafeAreaProvider>
+      </SafeAreaProvider>,
     );
 
   it('displays recovery options on uncertain 500 server error and navigates to orders on request', async () => {
     mockCreateOrder.mockRejectedValueOnce(
-      new ApiError({ status: 500, code: 'INTERNAL_ERROR', message: 'Internal Server Error' })
+      new ApiError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Internal Server Error',
+      }),
     );
 
-    renderScreen();
+    await renderScreen();
 
     await waitFor(() => {
       expect(screen.queryByText('Loading restaurant settings')).toBeNull();
@@ -183,10 +201,14 @@ describe('Checkout uncertain order submission recovery', () => {
 
   it('displays recovery options on network drop (status 0)', async () => {
     mockCreateOrder.mockRejectedValueOnce(
-      new ApiError({ status: 0, code: 'NETWORK_ERROR', message: 'Network offline' })
+      new ApiError({
+        status: 0,
+        code: 'NETWORK_ERROR',
+        message: 'Network offline',
+      }),
     );
 
-    renderScreen();
+    await renderScreen();
 
     await waitFor(() => {
       expect(screen.queryByText('Loading restaurant settings')).toBeNull();
@@ -204,10 +226,14 @@ describe('Checkout uncertain order submission recovery', () => {
 
   it('shows standard error without blocking recovery card on definitive client error (e.g. 400)', async () => {
     mockCreateOrder.mockRejectedValueOnce(
-      new ApiError({ status: 400, code: 'INVALID_PICKUP_TIME', message: 'Selected pickup time is outside operating hours' })
+      new ApiError({
+        status: 400,
+        code: 'INVALID_PICKUP_TIME',
+        message: 'Selected pickup time is outside operating hours',
+      }),
     );
 
-    renderScreen();
+    await renderScreen();
 
     await waitFor(() => {
       expect(screen.queryByText('Loading restaurant settings')).toBeNull();
@@ -219,7 +245,9 @@ describe('Checkout uncertain order submission recovery', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Selected pickup time is outside operating hours')).toBeTruthy();
+      expect(
+        screen.getByText('Selected pickup time is outside operating hours'),
+      ).toBeTruthy();
     });
 
     expect(screen.queryByText('Submission Status Uncertain')).toBeNull();
@@ -227,12 +255,16 @@ describe('Checkout uncertain order submission recovery', () => {
     expect(screen.getByText('Place pickup order')).toBeTruthy();
   });
 
-  it('resets uncertain submission state when the user edits instructions', async () => {
+  it('keeps uncertain submission blocked when the user edits instructions', async () => {
     mockCreateOrder.mockRejectedValueOnce(
-      new ApiError({ status: 504, code: 'GATEWAY_TIMEOUT', message: 'Gateway Timeout' })
+      new ApiError({
+        status: 504,
+        code: 'GATEWAY_TIMEOUT',
+        message: 'Gateway Timeout',
+      }),
     );
 
-    renderScreen();
+    await renderScreen();
 
     await waitFor(() => {
       expect(screen.queryByText('Loading restaurant settings')).toBeNull();
@@ -253,8 +285,20 @@ describe('Checkout uncertain order submission recovery', () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText('Submission Status Uncertain')).toBeNull();
-      expect(screen.getByText('Place pickup order')).toBeTruthy();
+      expect(screen.getByText('Submission Status Uncertain')).toBeTruthy();
+      expect(screen.queryByText('Place pickup order')).toBeNull();
     });
+  });
+  it('restores the uncertainty block after application restart', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    await AsyncStorage.setItem(
+      'lgb.checkout.pending.' + toAccountNamespace(user.email),
+      'pending',
+    );
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText('Submission Status Uncertain')).toBeTruthy(),
+    );
+    expect(mockCreateOrder).not.toHaveBeenCalled();
   });
 });

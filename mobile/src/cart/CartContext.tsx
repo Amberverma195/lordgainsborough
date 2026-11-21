@@ -1,11 +1,25 @@
+import { onAccountChange } from '../auth/lifecycle';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { fetchServerCart, saveServerCart, ServerCartItem } from '../api/orders';
 import { MenuItem } from '../api/parse';
 import { useAuth } from '../auth/AuthContext';
-import { describePickupIssue, isPickupDateValid, isPickupTimeValid } from '../checkout/pickup';
+import {
+  describePickupIssue,
+  isPickupDateValid,
+  isPickupTimeValid,
+} from '../checkout/pickup';
 import {
   addToCart,
   mergeCarts,
@@ -39,14 +53,21 @@ interface CartContextValue {
   reconcile: (catalog: MenuItem[]) => void;
   setPickup: (date: string, time: string) => void;
   dismissNotice: () => void;
-  estimate: (taxRate: number) => { subtotal: number; tax: number; total: number };
+  estimate: (taxRate: number) => {
+    subtotal: number;
+    tax: number;
+    total: number;
+  };
 }
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 function fromServer(items: ServerCartItem[]): CartLine[] {
   return items
-    .filter((item) => item.menuItemId && item.name && item.quantity > 0 && item.price >= 0)
+    .filter(
+      (item) =>
+        item.menuItemId && item.name && item.quantity > 0 && item.price >= 0,
+    )
     .map((item) => ({
       menuItemId: item.menuItemId,
       name: item.name,
@@ -73,7 +94,10 @@ function toServer(lines: CartLine[]): ServerCartItem[] {
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const { user, status } = useAuth();
-  const accountKey = status === 'signedIn' && user?.email ? user.email.trim().toLowerCase() : null;
+  const accountKey =
+    status === 'signedIn' && user?.email
+      ? user.email.trim().toLowerCase()
+      : null;
   const authToken = status === 'signedIn' && user?.token ? user.token : null;
 
   const [lines, setLines] = useState<CartLine[]>([]);
@@ -90,6 +114,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   useLayoutEffect(() => {
     linesRef.current = lines;
   }, [lines]);
+
+  useEffect(
+    () =>
+      onAccountChange(() => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        syncedTokenRef.current = null;
+        linesRef.current = [];
+        setReady(false);
+        setLines([]);
+        setPickupDate('');
+        setPickupTime('');
+      }),
+    [],
+  );
 
   // Purge unisolated legacy device keys
   useEffect(() => {
@@ -138,7 +177,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         let initialPickupTime = '';
         if (pickupRaw) {
           try {
-            const saved = JSON.parse(pickupRaw) as { date?: string; time?: string };
+            const saved = JSON.parse(pickupRaw) as {
+              date?: string;
+              time?: string;
+            };
             const date = typeof saved.date === 'string' ? saved.date : '';
             const time = typeof saved.time === 'string' ? saved.time : '';
             if (date && !describePickupIssue(date, time || 'asap')) {
@@ -160,7 +202,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             }
             const remoteLines = fromServer(remote);
             // Reconcile server cart with local lines saved specifically for this account
-            const resolved = localLines.length > 0 ? mergeCarts(localLines, remoteLines) : remoteLines;
+            const resolved =
+              localLines.length > 0
+                ? mergeCarts(localLines, remoteLines)
+                : remoteLines;
             linesRef.current = resolved;
             setLines(resolved);
             setPickupDate(initialPickupDate);
@@ -220,7 +265,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const pickupKey = getPickupStorageKey(currentAccountRef.current);
-    void AsyncStorage.setItem(pickupKey, JSON.stringify({ date: pickupDate, time: pickupTime }));
+    void AsyncStorage.setItem(
+      pickupKey,
+      JSON.stringify({ date: pickupDate, time: pickupTime }),
+    );
   }, [pickupDate, pickupTime, ready]);
 
   // Re-verify saved pickup date and time when the app resumes
@@ -228,19 +276,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (!ready) {
       return;
     }
-    const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
-      if (status === 'active') {
-        const now = new Date();
-        if (pickupDate && !isPickupDateValid(pickupDate, now)) {
-          setPickupDate('');
-          setPickupTime('');
-          setNotice('Your saved pickup date has passed. Please choose a new date.');
-        } else if (pickupDate && pickupTime && !isPickupTimeValid(pickupDate, pickupTime, now)) {
-          setPickupTime('');
-          setNotice('Your saved pickup time is no longer available. Please choose a new time.');
+    const subscription = AppState.addEventListener(
+      'change',
+      (status: AppStateStatus) => {
+        if (status === 'active') {
+          const now = new Date();
+          if (pickupDate && !isPickupDateValid(pickupDate, now)) {
+            setPickupDate('');
+            setPickupTime('');
+            setNotice(
+              'Your saved pickup date has passed. Please choose a new date.',
+            );
+          } else if (
+            pickupDate &&
+            pickupTime &&
+            !isPickupTimeValid(pickupDate, pickupTime, now)
+          ) {
+            setPickupTime('');
+            setNotice(
+              'Your saved pickup time is no longer available. Please choose a new time.',
+            );
+          }
         }
-      }
-    });
+      },
+    );
 
     return () => subscription.remove();
   }, [pickupDate, pickupTime, ready]);
@@ -255,7 +314,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void saveServerCart(authToken, toServer(linesRef.current)).catch(() => undefined);
+      void saveServerCart(authToken, toServer(linesRef.current)).catch(
+        () => undefined,
+      );
     }, 800);
 
     return () => {
@@ -330,34 +391,37 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setNotice(null);
   }, []);
 
-  const value = useMemo<CartContextValue>(() => ({
-    ready,
-    lines,
-    count: lines.reduce((sum, line) => sum + line.quantity, 0),
-    notice,
-    pickupDate,
-    pickupTime,
-    addItem,
-    updateQuantity,
-    removeItem,
-    clear,
-    reconcile,
-    setPickup,
-    dismissNotice: () => setNotice(null),
-    estimate: (taxRate: number) => estimateTotals(lines, taxRate),
-  }), [
-    ready,
-    lines,
-    notice,
-    pickupDate,
-    pickupTime,
-    addItem,
-    updateQuantity,
-    removeItem,
-    clear,
-    reconcile,
-    setPickup,
-  ]);
+  const value = useMemo<CartContextValue>(
+    () => ({
+      ready,
+      lines,
+      count: lines.reduce((sum, line) => sum + line.quantity, 0),
+      notice,
+      pickupDate,
+      pickupTime,
+      addItem,
+      updateQuantity,
+      removeItem,
+      clear,
+      reconcile,
+      setPickup,
+      dismissNotice: () => setNotice(null),
+      estimate: (taxRate: number) => estimateTotals(lines, taxRate),
+    }),
+    [
+      ready,
+      lines,
+      notice,
+      pickupDate,
+      pickupTime,
+      addItem,
+      updateQuantity,
+      removeItem,
+      clear,
+      reconcile,
+      setPickup,
+    ],
+  );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
