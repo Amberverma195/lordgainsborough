@@ -8,7 +8,36 @@ import {
 } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiRequest } from '../../api/client';
-import Reserve, { RESERVATION_REFERENCE_KEY } from '../../app/reserve';
+import Reserve from '../../app/reserve';
+import { reservationKeys } from '../../reservations/choices';
+const RESERVATION_REFERENCE_KEY = reservationKeys(null).reference;
+let mockAccount: { email: string } | null = null;
+jest.mock('../../auth/AuthContext', () => ({
+  useAuth: () => ({ user: mockAccount }),
+}));
+jest.mock('../../components/ReservationPicker', () => ({
+  ReservationPicker: ({ date, time, partySize, onChange }: any) => {
+    const { TextInput } = require('react-native');
+    return (
+      <>
+        <TextInput
+          accessibilityLabel="Date YYYY-MM-DD"
+          value={date}
+          onChangeText={(value: string) =>
+            onChange({ date: value, time, partySize })
+          }
+        />
+        <TextInput
+          accessibilityLabel="Time HH:mm (24-hour)"
+          value={time}
+          onChangeText={(value: string) =>
+            onChange({ date, time: value, partySize })
+          }
+        />
+      </>
+    );
+  },
+}));
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(),
   setItemAsync: jest.fn(),
@@ -23,6 +52,7 @@ jest.mock('../../components/Screen', () => ({
 }));
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockAccount = null;
   (SecureStore.getItemAsync as jest.Mock).mockReset();
   (SecureStore.setItemAsync as jest.Mock).mockReset();
   await AsyncStorage.clear();
@@ -64,10 +94,12 @@ it('sends a pending request once and retains an interruption marker', async () =
     JSON.stringify({ id: 'request-123', status: 'PENDING' }),
   );
   expect(apiRequest).toHaveBeenCalledTimes(1);
-  expect(await AsyncStorage.getItem('lgb.reservation.pending.v1')).toBe('sent');
+  expect(await AsyncStorage.getItem(reservationKeys(null).pending)).toBe(
+    'sent',
+  );
 });
 it('blocks another submission after an interrupted request', async () => {
-  await AsyncStorage.setItem('lgb.reservation.pending.v1', 'uncertain');
+  await AsyncStorage.setItem(reservationKeys(null).pending, 'uncertain');
   await render(<Reserve />);
   await waitFor(() =>
     expect(screen.getByText(/Call to check your previous/)).toBeTruthy(),
@@ -77,7 +109,7 @@ it('blocks another submission after an interrupted request', async () => {
 });
 
 it('restores the reference securely without implying live booking confirmation', async () => {
-  await AsyncStorage.setItem('lgb.reservation.pending.v1', 'sent');
+  await AsyncStorage.setItem(reservationKeys(null).pending, 'sent');
   (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(
     JSON.stringify({ id: 'restored-123', status: 'PENDING' }),
   );
@@ -128,7 +160,7 @@ it.each(['storage failure', 'malformed response'])(
     await fireEvent.press(screen.getByText('Submit reservation request'));
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(screen.queryByText('Submit reservation request')).toBeNull();
-    expect(await AsyncStorage.getItem('lgb.reservation.pending.v1')).toBe(
+    expect(await AsyncStorage.getItem(reservationKeys(null).pending)).toBe(
       'uncertain',
     );
     if (mode === 'storage failure')
@@ -140,3 +172,14 @@ it.each(['storage failure', 'malformed response'])(
     expect(apiRequest).toHaveBeenCalledTimes(1);
   },
 );
+
+it('clears contact drafts when switching account scopes', async()=>{
+ mockAccount={email:'first@example.com'};
+ const view=await render(<Reserve/>);
+ await waitFor(()=>expect(screen.getByLabelText('Guest name')).toBeTruthy());
+ await fireEvent.changeText(screen.getByLabelText('Guest name'),'First customer');
+ mockAccount={email:'second@example.com'};
+ await view.rerender(<Reserve/>);
+ await waitFor(()=>expect(screen.getByLabelText('Guest name').props.value).toBe(''));
+ expect(SecureStore.getItemAsync).toHaveBeenCalledWith(reservationKeys('second@example.com').reference);
+});

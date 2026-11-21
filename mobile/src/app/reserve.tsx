@@ -1,3 +1,10 @@
+import { ReservationPicker } from '../components/ReservationPicker';
+import { useAuth } from '../auth/AuthContext';
+import {
+  reservationKeys,
+  reservationDates,
+  reservationTimes,
+} from '../reservations/choices';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
@@ -19,8 +26,7 @@ const labels = {
   partySize: 'Party size (1-10)',
   specialRequests: 'Special requests',
 };
-const KEY = 'lgb.reservation.pending.v1';
-export const RESERVATION_REFERENCE_KEY = 'lgb.reservation.reference.v1';
+
 function requestReference(body: unknown): string {
   if (
     !body ||
@@ -35,6 +41,15 @@ function requestReference(body: unknown): string {
   return body.id;
 }
 export default function ReserveScreen() {
+  const { user } = useAuth();
+  const keys = reservationKeys(user?.email);
+  const KEY = keys.pending;
+  const RESERVATION_REFERENCE_KEY = keys.reference;
+  const [loadedFor, setLoadedFor] = useState('');
+  const currentScope = useRef(KEY);
+  useEffect(() => {
+    currentScope.current = KEY;
+  }, [KEY]);
   const [form, setForm] = useState({
     name: '',
     email: '',
@@ -57,6 +72,9 @@ export default function ReserveScreen() {
       .then(([marker, saved]) => {
         const id = saved ? requestReference(JSON.parse(saved)) : null;
         if (!live) return;
+        setForm({name:'',email:'',phone:'',date:'',time:'',partySize:'2',specialRequests:''});
+        setError('');
+        setLoadedFor(KEY);
         setReference(id);
         setState(marker === 'sent' ? 'sent' : marker ? 'uncertain' : 'ready');
         if (marker === 'sent' && !id)
@@ -66,6 +84,8 @@ export default function ReserveScreen() {
       })
       .catch(() => {
         if (live) {
+          setLoadedFor(KEY);
+          setReference(null);
           setState('uncertain');
           setError(
             'Saved request details could not be read. Call the restaurant before submitting again.',
@@ -75,15 +95,15 @@ export default function ReserveScreen() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [KEY, RESERVATION_REFERENCE_KEY]);
   async function submit() {
-    if (guard.current || state !== 'ready') return;
+    if (guard.current || state !== 'ready' || loadedFor !== KEY) return;
     if (
       !form.name.trim() ||
       !isValidEmail(form.email) ||
       !isValidPhone(form.phone) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(form.date) ||
-      !/^\d{2}:(00|30)$/.test(form.time) ||
+      !reservationDates().includes(form.date) ||
+      !reservationTimes(form.date).includes(form.time) ||
       !Number.isInteger(Number(form.partySize)) ||
       Number(form.partySize) < 1 ||
       Number(form.partySize) > 10
@@ -110,14 +130,17 @@ export default function ReserveScreen() {
       });
       const id = requestReference(response.body);
       accepted = true;
-      setReference(id);
-      setState('sent');
+      if (currentScope.current === KEY) {
+        setReference(id);
+        setState('sent');
+      }
       await SecureStore.setItemAsync(
         RESERVATION_REFERENCE_KEY,
         JSON.stringify({ id, status: 'PENDING' }),
       );
       await AsyncStorage.setItem(KEY, 'sent');
     } catch (failure) {
+      if (currentScope.current !== KEY) return;
       if (accepted) {
         setError(
           'Your request was received, but its reference could not be saved. Copy the reference shown here and call the restaurant before submitting again.',
@@ -146,6 +169,12 @@ export default function ReserveScreen() {
       guard.current = false;
     }
   }
+  if (loadedFor !== KEY)
+    return (
+      <Screen>
+        <Text>Loading reservation requests...</Text>
+      </Screen>
+    );
   return (
     <Screen scroll>
       <AppHeader title="Book a Table" eyebrow="Reservations" showBack />
@@ -160,37 +189,38 @@ export default function ReserveScreen() {
       ))}
       {state === 'ready' || state === 'sending' ? (
         <>
-          {(Object.keys(form) as (keyof typeof form)[]).map((key) => (
-            <TextInput
-              key={key}
-              accessibilityLabel={labels[key]}
-              keyboardType={
-                key === 'email'
-                  ? 'email-address'
-                  : key === 'phone'
-                    ? 'phone-pad'
-                    : key === 'partySize'
-                      ? 'number-pad'
+          {(['name', 'email', 'phone', 'specialRequests'] as const).map(
+            (key) => (
+              <TextInput
+                key={key}
+                accessibilityLabel={labels[key]}
+                keyboardType={
+                  key === 'email'
+                    ? 'email-address'
+                    : key === 'phone'
+                      ? 'phone-pad'
                       : 'default'
-              }
-              multiline={key === 'specialRequests'}
-              placeholder={
-                key === 'date'
-                  ? 'Date YYYY-MM-DD'
-                  : key === 'time'
-                    ? 'Time HH:mm (24-hour)'
-                    : key
-              }
-              placeholderTextColor={colors.textMuted}
-              value={form[key]}
-              editable={state === 'ready'}
-              maxLength={key === 'specialRequests' ? 1000 : 255}
-              onChangeText={(value) =>
-                setForm((old) => ({ ...old, [key]: value }))
-              }
-              style={{ color: colors.text, minHeight: 52 }}
-            />
-          ))}
+                }
+                multiline={key === 'specialRequests'}
+                placeholder={labels[key]}
+                placeholderTextColor={colors.textMuted}
+                value={form[key]}
+                editable={state === 'ready'}
+                maxLength={key === 'specialRequests' ? 1000 : 255}
+                onChangeText={(value) =>
+                  setForm((old) => ({ ...old, [key]: value }))
+                }
+                style={{ color: colors.text, minHeight: 52 }}
+              />
+            ),
+          )}
+          <ReservationPicker
+            date={form.date}
+            time={form.time}
+            partySize={form.partySize}
+            disabled={state !== 'ready'}
+            onChange={(value) => setForm((old) => ({ ...old, ...value }))}
+          />
           <Button
             label="Submit reservation request"
             loading={state === 'sending'}

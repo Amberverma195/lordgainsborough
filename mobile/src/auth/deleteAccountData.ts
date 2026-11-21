@@ -1,6 +1,17 @@
+import { reservationKeys } from '../reservations/choices';
 import { toAccountNamespace } from './accountNamespace';
-import { getCartStorageKey, getPickupStorageKey, getLegacyV1CartStorageKey, getLegacyV1PickupStorageKey } from '../cart/storage';
-import { getCheckoutIdempotencyStorageKey, getCheckoutFingerprintStorageKey, getLegacyV1CheckoutIdempotencyStorageKey, getLegacyV1CheckoutFingerprintStorageKey } from '../checkout/idempotency';
+import {
+  getCartStorageKey,
+  getPickupStorageKey,
+  getLegacyV1CartStorageKey,
+  getLegacyV1PickupStorageKey,
+} from '../cart/storage';
+import {
+  getCheckoutIdempotencyStorageKey,
+  getCheckoutFingerprintStorageKey,
+  getLegacyV1CheckoutIdempotencyStorageKey,
+  getLegacyV1CheckoutFingerprintStorageKey,
+} from '../checkout/idempotency';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { clearAllConfirmedOrders } from '../checkout/confirmationCache';
@@ -13,13 +24,17 @@ import {
   getLegacyV1TrackingStorageKey,
 } from './secureSession';
 
-export async function clearDeletedAccountData(email: string, detach: () => void = () => {}) {
+export async function clearDeletedAccountData(
+  email: string,
+  detach: () => void = () => {},
+) {
   detach();
   const cancel = queryClient.cancelQueries();
   queryClient.clear();
   clearAllConfirmedOrders();
   const jobs: Promise<unknown>[] = [
     cancel,
+    SecureStore.deleteItemAsync(reservationKeys(email).reference),
     SecureStore.deleteItemAsync(SESSION_TOKEN_KEY),
   ];
   for (const account of [email]) {
@@ -50,10 +65,15 @@ export async function clearDeletedAccountData(email: string, detach: () => void 
   jobs.push(
     (async () => {
       await AsyncStorage.multiRemove([
-        getCartStorageKey(email), getPickupStorageKey(email),
-        getLegacyV1CartStorageKey(email), getLegacyV1PickupStorageKey(email),
-        getCheckoutIdempotencyStorageKey(email), getCheckoutFingerprintStorageKey(email),
-        getLegacyV1CheckoutIdempotencyStorageKey(email), getLegacyV1CheckoutFingerprintStorageKey(email),
+        reservationKeys(email).pending,
+        getCartStorageKey(email),
+        getPickupStorageKey(email),
+        getLegacyV1CartStorageKey(email),
+        getLegacyV1PickupStorageKey(email),
+        getCheckoutIdempotencyStorageKey(email),
+        getCheckoutFingerprintStorageKey(email),
+        getLegacyV1CheckoutIdempotencyStorageKey(email),
+        getLegacyV1CheckoutFingerprintStorageKey(email),
         'lgb.checkout.pending.' + toAccountNamespace(email),
       ]);
     })(),
