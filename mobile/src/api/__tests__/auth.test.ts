@@ -1,6 +1,7 @@
 import {
   completePasswordReset,
   deleteAccount,
+  logout,
   fetchCurrentUser,
   login,
   resendPasswordResetOtp,
@@ -276,4 +277,26 @@ it('deletes the authenticated account using current-password confirmation', asyn
     token: 'bearer-jwt',
     body: { password: 'CurrentPassword1!' },
   });
+});
+
+it('revokes this device session through the authenticated logout endpoint', async () => {
+  mockApiRequest.mockResolvedValueOnce({ status: 204, body: null });
+  await logout('device-token');
+  expect(mockApiRequest).toHaveBeenCalledWith('/api/auth/logout', {
+    method: 'POST',
+    token: 'device-token',
+    notifyUnauthorized: false,
+  });
+});
+it('treats an already revoked or expired session as signed out', async () => {
+  mockApiRequest.mockRejectedValueOnce(
+    new ApiError({ status: 401, code: 'UNAUTHORIZED', message: 'Expired' }),
+  );
+  await expect(logout('expired')).resolves.toBeUndefined();
+});
+it('does not claim successful server sign-out after a network failure', async () => {
+  mockApiRequest.mockRejectedValueOnce(
+    new ApiError({ status: 0, code: 'NETWORK_ERROR', message: 'Offline' }),
+  );
+  await expect(logout('device-token')).rejects.toThrow('Offline');
 });

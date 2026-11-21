@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 
@@ -14,6 +15,22 @@ import { colors, space, type } from '../../theme/tokens';
 export default function ProfileScreen() {
   const { status, user, signOut, refresh } = useAuth();
 
+  const [signingOut, setSigningOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  async function logoutHere() {
+    if (signingOut) return;
+    setSigningOut(true);
+    setLogoutError('');
+    try {
+      await signOut();
+    } catch {
+      setLogoutError(
+        'Server sign-out could not be confirmed. Check your connection and try again.',
+      );
+    } finally {
+      setSigningOut(false);
+    }
+  }
   return (
     <Screen scroll>
       <AppHeader title="Profile" eyebrow="Account" />
@@ -81,9 +98,15 @@ export default function ProfileScreen() {
           <Button
             label="Sign out"
             variant="ghost"
-            onPress={() => void signOut()}
+            loading={signingOut}
+            onPress={() => void logoutHere()}
           />
         </View>
+      ) : null}
+      {logoutError ? (
+        <Text accessibilityRole="alert" style={{ color: colors.danger }}>
+          {logoutError}
+        </Text>
       ) : null}
       <Button
         label="Terms of Service"

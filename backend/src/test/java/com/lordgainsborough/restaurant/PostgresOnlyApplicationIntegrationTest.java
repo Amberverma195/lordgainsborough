@@ -792,4 +792,25 @@ class PostgresOnlyApplicationIntegrationTest {
             assertThat(jdbc.queryForObject("SELECT count(*) FROM customer_orders",Integer.class)).isEqualTo(1);
         } finally { jdbc.execute("DROP TRIGGER reject_order ON customer_orders");jdbc.execute("DROP FUNCTION reject_order()"); }
     }
+
+    @Test void logoutRevokesOnlyPresentedSessionAcrossStoreInstances() throws Exception {
+        var member=account("logout-member","logout@example.com","5195551189","MEMBER");
+        String first=token(member), second=token(member);
+        assertThat(first).isNotEqualTo(second);
+        mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+first)).andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+first)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+second)).andExpect(status().isOk());
+        mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+first)).andExpect(status().isUnauthorized());
+        var independent=new SessionRevocationStore(jdbc.getDataSource());
+        assertThat(independent.isRevoked(first)).isTrue();
+        assertThat(independent.isRevoked(second)).isFalse();
+        jdbc.update("INSERT INTO revoked_account_sessions (token_hash,expires_at) VALUES (?,CURRENT_TIMESTAMP - INTERVAL '1 second')", "0".repeat(64));
+        independent.cleanupExpired();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM revoked_account_sessions WHERE token_hash=?",Integer.class,"0".repeat(64))).isZero();
+        assertThat(independent.isRevoked(first)).isTrue();
+    }
+    @Test void logoutRejectsAnonymousAndSocketCredentials() throws Exception {
+        mvc.perform(post("/api/auth/logout")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+jwt.generateOrderSocketTicket("any-order"))).andExpect(status().isUnauthorized());
+    }
 }

@@ -52,7 +52,7 @@ Failures:
 
 `GET /api/auth/me` with `Authorization: Bearer` returns the same account fields. A missing, invalid, or expired token is HTTP 401 with a plain string body such as `Expired or invalid token.`
 
-JWT lifetime defaults to 86400000 ms (24 hours). There is no refresh-token endpoint. Password reset increments the account token version and invalidates older JWTs. Sign-out deletes the device token only; the website logout route clears an HttpOnly cookie and is not a backend endpoint.
+JWT lifetime defaults to 86400000 ms (24 hours). There is no refresh-token endpoint. Password reset increments the account token version and invalidates older JWTs. Mobile sign-out calls `POST /api/auth/logout` with the current Bearer JWT. HTTP 204 confirms durable current-session revocation; HTTP 401 means it is already invalid. Local cleanup follows that acknowledgment. Network/server errors retain the local session for retry. Other device JWTs remain valid; new tokens carry unique IDs. The website cookie logout route is separate.
 
 `pickupDisabled` is true when `noShowCount` is at least 3.
 

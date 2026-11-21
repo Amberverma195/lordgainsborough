@@ -236,3 +236,15 @@ export async function deleteAccount(
     body: { password },
   });
 }
+
+export async function logout(token: string): Promise<void> {
+  try {
+    await apiRequest('/api/auth/logout', {
+      method: 'POST',
+      token,
+      notifyUnauthorized: false,
+    });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401)) throw error;
+  }
+}

@@ -67,11 +67,12 @@ export function getLegacyV1TrackingIndexStorageKey(
   return `lgb.track.idx.u.${safeEmail}.v1`;
 }
 
-export async function readSessionToken(): Promise<string | null> {
+export async function readSessionToken(strict = false): Promise<string | null> {
   try {
     const token = await SecureStore.getItemAsync(SESSION_TOKEN_KEY);
     return token && token.trim() ? token.trim() : null;
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return null;
   }
 }

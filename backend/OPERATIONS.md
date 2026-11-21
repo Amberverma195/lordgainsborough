@@ -222,3 +222,9 @@ The suite verifies that:
 - Public endpoints (`/api/welcome`, `/api/menu`, `/api/categories`, `/api/settings`, `/api/reviews`) return HTTP 200.
 - Protected endpoints (`/api/cart`, `/api/auth/profile`, `/api/orders`, `/api/kds/orders`) require authorization and return HTTP 401 without throwing 5xx errors.
 - Non-existent endpoints return HTTP 404 without internal server errors.
+
+## Current-device account session revocation
+
+Migration V11 creates revoked_account_sessions. POST /api/auth/logout authenticates and revokes only the presented JWT. All account JWT validation paths consult this shared PostgreSQL digest denylist; a store failure is an error, not proof that a token is already invalid. Raw JWTs are never stored. New JWTs include random unique IDs; old byte-identical JWTs issued before this change share revocation scope. Revocations expire with the JWT and a scheduled sweep deletes up to 5000 expired digests per minute.
+
+Deploy this backend before the mobile logout change. Other devices remain signed in. Password reset/account deletion still invalidate all account access. In-flight authorized operations, separate tracking credentials and existing Socket.IO room grants are not retroactively revoked by this bearer-token endpoint. Existing clients should disconnect their own sockets on logout. No sign-out-all-devices endpoint is introduced.

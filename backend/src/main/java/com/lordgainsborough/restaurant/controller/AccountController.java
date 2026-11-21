@@ -28,6 +28,16 @@ public class AccountController {
         this.users = users; this.jwt = jwt; this.limiter = limiter; this.ips = ips; this.realtime = realtime;
     }
 
+    /** Revoke this bearer session only; other device sessions remain valid. */
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) return invalidSession();
+        String token = authorization.substring(7);
+        if (users.authenticate(token, jwt).isEmpty()) return invalidSession();
+        jwt.revokeSession(token);
+        return ResponseEntity.noContent().build();
+    }
+
     @DeleteMapping("/me")
     public ResponseEntity<?> deleteAccount(
             @RequestHeader(value = "Authorization", required = false) String authorization,

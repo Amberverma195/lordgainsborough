@@ -13,6 +13,7 @@ export interface ApiRequestOptions {
   token?: string | null;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  notifyUnauthorized?: boolean;
 }
 
 type UnauthorizedListener = () => void;
@@ -35,7 +36,10 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiRequest(path: string, options: ApiRequestOptions = {}): Promise<ApiResponse> {
+export async function apiRequest(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<ApiResponse> {
   const origin = resolveApiOrigins().api;
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -53,7 +57,8 @@ export async function apiRequest(path: string, options: ApiRequestOptions = {}):
     response = await fetch(`${origin}${path}`, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body:
+        options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: options.signal,
     });
   } catch {
@@ -63,7 +68,11 @@ export async function apiRequest(path: string, options: ApiRequestOptions = {}):
   const body = await readBody(response);
   const retryAfterHeader = response.headers.get('Retry-After');
   if (!response.ok) {
-    if (options.token && response.status === 401) {
+    if (
+      options.token &&
+      response.status === 401 &&
+      options.notifyUnauthorized !== false
+    ) {
       unauthorizedListeners.forEach((listener) => listener());
     }
     throw toApiError(response.status, body, retryAfterHeader);

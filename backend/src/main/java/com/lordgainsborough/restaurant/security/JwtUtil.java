@@ -19,6 +19,20 @@ public class JwtUtil {
     @Value("${jwt.expiration}")
     private long expirationTime;
 
+    private SessionRevocationStore revocations;
+    public JwtUtil() {} // Standalone cryptographic tests and legacy manually constructed fixtures.
+    @org.springframework.beans.factory.annotation.Autowired
+    public JwtUtil(SessionRevocationStore revocations) { this.revocations = java.util.Objects.requireNonNull(revocations); }
+
+    public void revokeSession(String token) {
+        Claims parsed = claims(token);
+        if (parsed.get("purpose") != null) throw new IllegalArgumentException("Not an account session");
+        if (revocations == null) throw new IllegalStateException("Session revocation storage unavailable");
+        revocations.revoke(token, parsed.getExpiration().toInstant());
+    }
+
+    private boolean revoked(String token) { return revocations != null && revocations.isRevoked(token); }
+
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
@@ -29,6 +43,7 @@ public class JwtUtil {
 
     public String generateToken(String userId, String email, long tokenVersion) {
         return Jwts.builder()
+                .id(java.util.UUID.randomUUID().toString())
                 .subject(email)
                 .claim("userId", userId)
                 .claim("tokenVersion", tokenVersion)
@@ -53,10 +68,11 @@ public class JwtUtil {
 
     public boolean validateToken(String token) {
         try {
-            return claims(token).get("purpose") == null;
+            if (claims(token).get("purpose") != null) return false;
         } catch (Exception e) {
             return false;
         }
+        return !revoked(token);
     }
 
     public boolean validateTokenForUser(String token, User user) {
@@ -67,17 +83,19 @@ public class JwtUtil {
     }
 
     public boolean validateTokenForIdentity(String token, String userId, long currentTokenVersion) {
+        boolean matches;
         try {
             Claims claims = claims(token);
             String tokenUserId = claims.get("userId", String.class);
             Object versionClaim = claims.get("tokenVersion");
             long tokenVersion = versionClaim instanceof Number number ? number.longValue() : 0L;
-            return claims.get("purpose") == null && userId != null
+            matches = claims.get("purpose") == null && userId != null
                     && userId.equals(tokenUserId)
                     && currentTokenVersion == tokenVersion;
         } catch (Exception e) {
             return false;
         }
+        return matches && !revoked(token);
     }
 
     /** A short-lived, read-only room credential; deliberately invalid as an account JWT. */

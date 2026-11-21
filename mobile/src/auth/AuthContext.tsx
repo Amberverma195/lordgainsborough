@@ -1,3 +1,4 @@
+import { revokeAndClearSession } from './signOut';
 import { clearDeletedAccountData } from './deleteAccountData';
 import { accountWillChange } from './lifecycle';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -208,7 +209,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await clearLocalSession();
+    await revokeAndClearSession(clearLocalSession);
   }, [clearLocalSession]);
 
   const finishAccountDeletion = useCallback(async (email: string) => {
@@ -230,7 +231,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refresh,
       finishAccountDeletion,
     }),
-    [status, user, signIn, establishSession, updateUser, signOut, refresh, finishAccountDeletion],
+    [
+      status,
+      user,
+      signIn,
+      establishSession,
+      updateUser,
+      signOut,
+      refresh,
+      finishAccountDeletion,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
