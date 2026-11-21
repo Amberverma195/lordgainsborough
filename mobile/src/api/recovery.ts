@@ -4,6 +4,9 @@
  * inventing new endpoints or bypassing captcha, idempotency, or attempt tokens.
  */
 
+export const CURRENT_TERMS_VERSION = 'terms-v1.0';
+export const CURRENT_PRIVACY_VERSION = 'privacy-v1.1';
+
 export interface SignupOtpSendInput {
   email: string;
   phone: string;

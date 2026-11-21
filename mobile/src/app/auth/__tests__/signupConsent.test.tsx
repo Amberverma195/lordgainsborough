@@ -186,7 +186,7 @@ describe('SignupScreen Legal Consent & Document Access', () => {
         expect.objectContaining({
           termsAccepted: true,
           termsVersion: 'terms-v1.0',
-          privacyVersion: 'privacy-v1.0',
+          privacyVersion: 'privacy-v1.1',
         }),
       );
     });

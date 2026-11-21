@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "lastAudited": "2026-11-20",
+  "policies": [
+    {
+      "id": "terms-v1.0",
+      "type": "TERMS",
+      "version": "terms-v1.0",
+      "title": "Terms of Service",
+      "status": "CURRENT",
+      "effectiveDate": "2026-11-20",
+      "sourcePath": "frontend/src/app/terms/page.tsx",
+      "archivePath": "docs/legal/archive/terms-v1.0.tsx",
+      "contentSha256": "5738fec4fe38394d00b786446e084f3369838ff13a150dc4fb783fb712673c7b",
+      "notes": "Initial Terms of Service release covering online ordering, reservation policies, dispute resolution, and account governance."
+    },
+    {
+      "id": "privacy-v1.0",
+      "type": "PRIVACY",
+      "version": "privacy-v1.0",
+      "title": "Privacy Policy",
+      "status": "SUPERSEDED",
+      "effectiveDate": "2026-11-20",
+      "supersededDate": "2026-11-20",
+      "supersededBy": "privacy-v1.1",
+      "sourcePath": null,
+      "archivePath": "docs/legal/archive/privacy-v1.0.tsx",
+      "contentSha256": "5334d8935908ca78d84f80436f363909f039f1b01a47a1f96bba835a657c6945",
+      "notes": "Initial release at commit 436d600 containing preliminary JWT/localStorage references. Preserved for auditability for any account registered prior to audit."
+    },
+    {
+      "id": "privacy-v1.1",
+      "type": "PRIVACY",
+      "version": "privacy-v1.1",
+      "title": "Privacy Policy",
+      "status": "CURRENT",
+      "effectiveDate": "2026-11-20",
+      "sourcePath": "frontend/src/app/privacy/page.tsx",
+      "archivePath": "docs/legal/archive/privacy-v1.1.tsx",
+      "contentSha256": "fd2a4f17f70ce0604c1dc1099febf191850e423921c5b85815fc2037782e4f23",
+      "notes": "Audited release correcting disclosures to reflect HttpOnly session cookies, BCrypt password hashing (strength 12), and cloud infrastructure hosting."
+    }
+  ]
+}

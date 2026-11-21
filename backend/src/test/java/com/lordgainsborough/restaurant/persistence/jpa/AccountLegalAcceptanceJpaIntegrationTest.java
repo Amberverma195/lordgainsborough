@@ -451,7 +451,7 @@ public class AccountLegalAcceptanceJpaIntegrationTest {
                 "hashed-pw",
                 null,
                 "terms-v1.0",
-                "privacy-v1.0",
+                "privacy-v1.1",
                 now
         );
         challengeStore.tryInsert(challenge);
@@ -472,7 +472,7 @@ public class AccountLegalAcceptanceJpaIntegrationTest {
         List<JpaAccountLegalAcceptance> acceptances = legalAcceptanceRepository.findByUserId(created.getId());
         assertThat(acceptances).hasSize(1);
         assertThat(acceptances.get(0).getTermsVersion()).isEqualTo("terms-v1.0");
-        assertThat(acceptances.get(0).getPrivacyVersion()).isEqualTo("privacy-v1.0");
+        assertThat(acceptances.get(0).getPrivacyVersion()).isEqualTo("privacy-v1.1");
         assertThat(acceptances.get(0).getAcceptanceSource()).isEqualTo("signup");
         assertThat(acceptances.get(0).getAcceptedAt()).isNotNull();
     }

@@ -102,7 +102,7 @@ export default function SignupScreen() {
         attemptToken,
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
 
       setChallengeId(result.challengeId);
@@ -142,7 +142,7 @@ export default function SignupScreen() {
         attemptToken,
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
 
       await establishSession(sessionUser);
@@ -178,7 +178,7 @@ export default function SignupScreen() {
         restart: false,
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
       setChallengeId(result.challengeId);
       if (result.attemptToken) {

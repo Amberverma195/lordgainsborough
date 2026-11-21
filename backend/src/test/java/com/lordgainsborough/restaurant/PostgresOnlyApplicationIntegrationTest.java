@@ -125,7 +125,7 @@ class PostgresOnlyApplicationIntegrationTest {
     String signupCode(String address,String phone,String name,String password) throws Exception {
         var node = send("/api/auth/signup/send-otp",Map.of("email",address,"phone",phone,
                 "name",name,"password",password,
-                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"),202);
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.1"),202);
         if (node.hasNonNull("attemptToken")) {
             lastAttemptToken = node.get("attemptToken").asText();
         }
@@ -136,7 +136,7 @@ class PostgresOnlyApplicationIntegrationTest {
     @Test void signupStatusRequiresAttemptTokenAndNeverLeaksUnownedChallengeMetadata() throws Exception {
         var pending=send("/api/auth/signup/send-otp",Map.of("email","status-owner@example.com","phone","5195551191",
                 "name","Status Owner","password","CorrectPassword1!",
-                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"),202);
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.1"),202);
         String id=pending.get("challengeId").asText(), token=pending.get("attemptToken").asText();
         assertThat(token).isNotBlank();
         var anonymous=response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com"),404);
@@ -587,7 +587,7 @@ class PostgresOnlyApplicationIntegrationTest {
         String code=signupCode("new@example.com","5195551111","New Member","CorrectPassword1!");
         var signupPayload = new HashMap<String, Object>(Map.of(
                 "email"," NEW@example.com ","name"," New Member ","phone","5195551111","password","CorrectPassword1!","otp",code,"role","ADMIN",
-                "tokenVersion",55,"termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"));
+                "tokenVersion",55,"termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.1"));
         signupPayload.put("attemptToken", lastAttemptToken);
         var created=send("/api/auth/signup",signupPayload,201);
         assertThat(created.toString()).doesNotContain("password","tokenVersion");
@@ -602,14 +602,27 @@ class PostgresOnlyApplicationIntegrationTest {
     @Test void wrongOtpDoesNotCreateAccountAndDuplicatePhoneDoesNotConsumeAnotherChallenge() throws Exception {
         String code=signupCode("new@example.com","5195551111","New","CorrectPassword1!");
         send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp","not-a-code",
-                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0",
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.1",
                 "attemptToken", lastAttemptToken),400);
         assertThat(users.count()).isZero();
         account("existing","existing@example.com","5195551111","MEMBER");
         send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp",code,
-                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0",
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.1",
                 "attemptToken", lastAttemptToken),409);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM signup_otp_challenges",Integer.class)).isEqualTo(1);
+    }
+    @Test void signupRejectsSupersededPrivacyPolicyVersion() throws Exception {
+        var resp = send("/api/auth/signup/send-otp", Map.of(
+                "email", "superseded-user@example.com",
+                "phone", "5195551199",
+                "name", "Old Version User",
+                "password", "CorrectPassword1!",
+                "termsAccepted", true,
+                "termsVersion", "terms-v1.0",
+                "privacyVersion", "privacy-v1.0"
+        ), 400);
+        assertThat(resp.get("code").asText()).isEqualTo("OTP_INVALID");
+        assertThat(resp.get("message").asText()).contains("A newer version of the Privacy Policy is available");
     }
     @Test void unknownAccountAndWrongPasswordReturnSamePublicFailure() throws Exception {
         account("member","known@example.com","5195551111","MEMBER");

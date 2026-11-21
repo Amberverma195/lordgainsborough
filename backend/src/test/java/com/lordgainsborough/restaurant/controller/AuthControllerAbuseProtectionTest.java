@@ -231,7 +231,7 @@ class AuthControllerAbuseProtectionTest {
         request.setPassword("Secret@123");
         request.setTermsAccepted(true);
         request.setTermsVersion("terms-v1.0");
-        request.setPrivacyVersion("privacy-v1.0");
+        request.setPrivacyVersion("privacy-v1.1");
         return request;
     }
 

@@ -20,19 +20,21 @@ All legal disclosures and policy versions in this document accurately reflect th
 
 The three tiers of the Lord Gainsborough application share unified, synchronized policy version identifiers:
 
-| Component | Terms Version | Privacy Version | Effective Date | Source File |
-| :--- | :--- | :--- | :--- | :--- |
-| **Backend** | `terms-v1.0` | `privacy-v1.0` | 2026-11-20 | `LegalPolicyService.java` |
-| **Frontend** | `terms-v1.0` | `privacy-v1.0` | 2026-11-20 | `signup/page.tsx`, `terms/page.tsx`, `privacy/page.tsx` |
-| **Mobile** | `terms-v1.0` | `privacy-v1.0` | 2026-11-20 | `auth/signup.tsx`, `api/recovery.ts` |
-| **Database** | `terms-v1.0` | `privacy-v1.0` | 2026-11-20 | `account_legal_acceptances` table |
+| Component | Terms Version | Privacy Version | Status | Effective Date | Source / Implementation |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Backend** | `terms-v1.0` | `privacy-v1.1` | CURRENT | 2026-11-20 | `LegalPolicyService.java` (`CURRENT_PRIVACY_VERSION = "privacy-v1.1"`) |
+| **Backend** | — | `privacy-v1.0` | SUPERSEDED | 2026-11-20 | `LegalPolicyService.java` (`PREVIOUS_PRIVACY_VERSION = "privacy-v1.0"`) |
+| **Frontend** | `terms-v1.0` | `privacy-v1.1` | CURRENT | 2026-11-20 | `legalConsent.ts`, `signup/page.tsx`, `terms/page.tsx`, `privacy/page.tsx` |
+| **Mobile** | `terms-v1.0` | `privacy-v1.1` | CURRENT | 2026-11-20 | `auth/signup.tsx`, `api/recovery.ts` |
+| **Database** | `terms-v1.0` | `privacy-v1.0`, `privacy-v1.1` | HISTORICAL + ACTIVE | 2026-11-20 | `account_legal_acceptances` table |
 
 ### 2.2 Version Rejection & Enforcement Controls
 
 1. **Initial Signup Dispatch (`/api/auth/signup/send-otp`):**  
-   The backend `AuthController.java` verifies that incoming requests contain versions recognized by `LegalPolicyService`. If an outdated version is submitted, the backend rejects the request immediately with HTTP 400 (`SignupOtpCode.OTP_INVALID`) and an explicit error message prompting the user to review the newer policy version.
+   The backend `AuthController.java` verifies that incoming requests contain versions recognized by `LegalPolicyService`. If an outdated version (such as `privacy-v1.0`) is submitted for a new signup, the backend rejects the request immediately with HTTP 400 (`SignupOtpCode.OTP_INVALID`) and an explicit error message prompting the user to review the newer policy version:
+   `"A newer version of the Privacy Policy is available. Please review and acknowledge the current version."`
 2. **Staged Registration Completion (`/api/auth/signup`):**  
-   During OTP completion, `AuthController.java` checks whether the policy version staged in `pending_terms_version` and `pending_privacy_version` is still current. If legal policies were updated between the time the user requested the OTP and completed verification, registration is halted to prevent acceptance of superseded documents.
+   During OTP completion, `AuthController.java` and `PostgresUserAuthStore.java` check whether the policy version staged in `pending_terms_version` and `pending_privacy_version` is still current. If legal policies were updated between the time the user requested the OTP and completed verification, registration is halted (`Legal policy version has been superseded`) to prevent acceptance of superseded documents.
 3. **Database Uniqueness Constraint:**  
    `account_legal_acceptances` contains a composite unique constraint:
    ```sql
@@ -41,22 +43,23 @@ The three tiers of the Lord Gainsborough application share unified, synchronized
    ```
    This prevents duplicate records for identical versions while ensuring that any new version accepted by an existing user creates an immutable, timestamped row.
 
-### 2.3 Policy Content Immutability & Content Archival
+### 2.3 Policy Content Immutability, Content Archival & Automated CI Enforcement
 
-To guarantee that policy text cannot be silently modified under an existing version identifier, content hashes are recorded for the published text:
+To guarantee that policy text cannot be silently modified under an existing version identifier, content hashes are recorded for all published texts in an authoritative machine-readable registry (`docs/legal/policy-registry.json` and `backend/src/main/resources/legal/policy-registry.json`):
 
-- **Terms of Service (`terms-v1.0`):**
-  - Path: `frontend/src/app/terms/page.tsx`
-  - Canonical Effective Date: November 20, 2026
-  - Content SHA-256: `5738FEC4FE38394D00B786446E084F3369838FF13A150DC4FB783FB712673C7B`
+| Policy Identifier | Type | Status | Archive File | Normalized LF SHA-256 Hash | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `terms-v1.0` | TERMS | CURRENT | `docs/legal/archive/terms-v1.0.tsx` | `5738fec4fe38394d00b786446e084f3369838ff13a150dc4fb783fb712673c7b` | Initial Terms of Service release. |
+| `privacy-v1.0` | PRIVACY | SUPERSEDED | `docs/legal/archive/privacy-v1.0.tsx` | `5334d8935908ca78d84f80436f363909f039f1b01a47a1f96bba835a657c6945` | Commit `436d600` release with generic JWT/localStorage references. Preserved for auditability of prior customer consents. |
+| `privacy-v1.1` | PRIVACY | CURRENT | `docs/legal/archive/privacy-v1.1.tsx` | `fd2a4f17f70ce0604c1dc1099febf191850e423921c5b85815fc2037782e4f23` | Audited release correcting disclosures to reflect HttpOnly session cookies, BCrypt (strength 12), and cloud hosting. |
 
-- **Privacy Policy (`privacy-v1.0`):**
-  - Path: `frontend/src/app/privacy/page.tsx`
-  - Canonical Effective Date: November 20, 2026
-  - Content SHA-256: `D143F86FF8C9F3FAE9A020323BE00E13BB5644D6CFC0C93517B7E3AC12942169`
-
-*Recommendation for Future Versions:*  
-When bumping legal policies (e.g., to `terms-v1.1`), the build pipeline should verify that document text changes accompany a version bump in `LegalPolicyService`, frontend constants, and mobile constants.
+#### Automated CI Integrity Verification:
+- **Frontend CI Test (`frontend/src/lib/legalPolicyIntegrity.test.ts`):**  
+  Reads active source files (`terms/page.tsx`, `privacy/page.tsx`) and archive copies (`docs/legal/archive/*.tsx`), normalizes line endings (`\r\n` -> `\n`), computes SHA-256 hashes, and compares against `docs/legal/policy-registry.json`. If a developer modifies document text without bumping the version identifier, creating an archive copy, and updating the registry, the test fails with an explicit `IMMUTABILITY VIOLATION` error.
+- **Backend CI Test (`backend/src/test/java/com/lordgainsborough/restaurant/service/LegalPolicyIntegrityTest.java`):**  
+  Verifies that `LegalPolicyService` constants, current versions, and content hashes strictly match the classpath resource `/legal/policy-registry.json`.
+- **Historical Auditability Invariant:**  
+  Customer records created under `privacy-v1.0` are never retroactively re-labeled or claimed to have accepted revised wording. Their acceptance record points unequivocally to the archived `privacy-v1.0` document hash. All new signups strictly accept `privacy-v1.1`.
 
 ---
 

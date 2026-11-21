@@ -89,7 +89,7 @@ test.describe('Legal Consent & Document Access Flow', () => {
     await privacyTab.waitForLoadState('domcontentloaded');
     await expect(privacyTab).toHaveURL(/\/privacy$/);
     await expect(privacyTab.getByRole('heading', { name: 'Privacy Policy' })).toBeVisible();
-    await expect(privacyTab.getByText(/Version:\s*privacy-v1\.0/i)).toBeVisible();
+    await expect(privacyTab.getByText(/Version:\s*privacy-v1\.1/i)).toBeVisible();
 
     // Close the document tab and return focus to the signup tab
     await privacyTab.close();

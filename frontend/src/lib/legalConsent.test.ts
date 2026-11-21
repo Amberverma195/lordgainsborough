@@ -9,7 +9,7 @@ import {
 describe('Lord Gainsborough Legal Consent & Policy Integrity', () => {
   it('has stable and correct version identifiers', () => {
     expect(CURRENT_TERMS_VERSION).toBe('terms-v1.0');
-    expect(CURRENT_PRIVACY_VERSION).toBe('privacy-v1.0');
+    expect(CURRENT_PRIVACY_VERSION).toBe('privacy-v1.1');
   });
 
   it('mandates precise consent wording with unchecked default', () => {
@@ -24,7 +24,7 @@ describe('Lord Gainsborough Legal Consent & Policy Integrity', () => {
     const payload = buildLegalPayload(true);
     expect(payload.agreedToTerms).toBe(true);
     expect(payload.termsVersion).toBe('terms-v1.0');
-    expect(payload.privacyVersion).toBe('privacy-v1.0');
+    expect(payload.privacyVersion).toBe('privacy-v1.1');
   });
 
   it('throws an error if legal agreement is missing upon submission', () => {

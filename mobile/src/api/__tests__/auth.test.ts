@@ -79,7 +79,7 @@ describe('auth API', () => {
         idempotencyKey: 'idem-signup-1',
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
 
       expect(mockApiRequest).toHaveBeenCalledWith(
@@ -96,7 +96,7 @@ describe('auth API', () => {
             password: 'Password1!',
             termsAccepted: true,
             termsVersion: 'terms-v1.0',
-            privacyVersion: 'privacy-v1.0',
+            privacyVersion: 'privacy-v1.1',
           }),
         }),
       );
@@ -131,7 +131,7 @@ describe('auth API', () => {
         attemptToken: 'att-456',
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
 
       expect(mockApiRequest).toHaveBeenCalledWith(
@@ -146,7 +146,7 @@ describe('auth API', () => {
             challengeId: 'chal-123',
             termsAccepted: true,
             termsVersion: 'terms-v1.0',
-            privacyVersion: 'privacy-v1.0',
+            privacyVersion: 'privacy-v1.1',
           }),
         }),
       );
@@ -172,7 +172,7 @@ describe('auth API', () => {
           otp: '000000',
           termsAccepted: true,
           termsVersion: 'terms-v1.0',
-          privacyVersion: 'privacy-v1.0',
+          privacyVersion: 'privacy-v1.1',
         }),
       ).rejects.toThrow(ApiError);
     });

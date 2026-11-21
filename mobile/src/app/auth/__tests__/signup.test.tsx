@@ -225,7 +225,7 @@ describe('SignupScreen', () => {
         attemptToken: null,
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
       expect(screen.getByText('Verify email')).toBeTruthy();
       expect(screen.getByLabelText('6-digit verification code')).toBeTruthy();
@@ -303,7 +303,7 @@ describe('SignupScreen', () => {
         attemptToken: 'attempt-xyz-789',
         termsAccepted: true,
         termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        privacyVersion: 'privacy-v1.1',
       });
       expect(mockEstablishSession).toHaveBeenCalledWith(mockSessionUser);
       expect(router.back).toHaveBeenCalled();

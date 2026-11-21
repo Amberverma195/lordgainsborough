@@ -17,10 +17,10 @@ export default function PrivacyPolicyPage() {
           <h1 className={styles.title}>Privacy Policy</h1>
           <div className={styles.metaRow}>
             <span className={styles.versionBadge}>
-              <Lock size={14} /> Version: privacy-v1.0
+              <Lock size={14} /> Version: privacy-v1.1
             </span>
             <span>Effective Date: November 20, 2026</span>
-            <span>Last Updated: November 20, 2026</span>
+            <span>Last Updated: November 20, 2026 (Revision v1.1)</span>
           </div>
         </header>
 
@@ -58,7 +58,7 @@ export default function PrivacyPolicyPage() {
               <strong>Table Reservation Records:</strong> Guest name, contact telephone number, reservation date and time, party size, and special seating requests.
             </li>
             <li>
-              <strong>Legal Consent Evidence:</strong> Append-only records of your agreement to the Terms of Service and acknowledgement of this Privacy Policy, including your internal account identifier, policy version identifiers (e.g. <code>terms-v1.0</code>, <code>privacy-v1.0</code>), authoritative server timestamp, and acceptance source (e.g. <code>signup</code>).
+              <strong>Legal Consent Evidence:</strong> Append-only records of your agreement to the Terms of Service and acknowledgement of this Privacy Policy, including your internal account identifier, policy version identifiers (e.g. <code>terms-v1.0</code>, <code>privacy-v1.1</code>), authoritative server timestamp, and acceptance source (e.g. <code>signup</code>).
             </li>
             <li>
               <strong>Technical & Abuse Prevention Data:</strong> Truncated/hashed client IP addresses for rate limiting and fraud protection against denial-of-service and credential stuffing attacks. Raw IP addresses are used transiently during the request lifecycle and are not stored in customer consent records.
@@ -154,6 +154,14 @@ export default function PrivacyPolicyPage() {
             <p>Email: <a href="mailto:privacy@lordgainsborough.com">privacy@lordgainsborough.com</a></p>
             <p>Phone: <a href="tel:+15194732362">+1 (519)-473-2362</a></p>
           </div>
+        </section>
+
+        <section className={styles.section}>
+          <h2>10. Document Revision History</h2>
+          <ul>
+            <li><strong>privacy-v1.0 (November 20, 2026):</strong> Initial release at commit 436d600 with generic JWT/localStorage references. Preserved for customers who consented under this version.</li>
+            <li><strong>privacy-v1.1 (November 20, 2026):</strong> Current version. Corrected disclosures to accurately reflect HttpOnly session cookies, BCrypt password hashing (strength 12), and verified cloud infrastructure hosting.</li>
+          </ul>
         </section>
 
         <nav className={styles.footerNav} aria-label="Legal document navigation">

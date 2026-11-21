@@ -4,7 +4,7 @@
  */
 
 export const CURRENT_TERMS_VERSION = 'terms-v1.0';
-export const CURRENT_PRIVACY_VERSION = 'privacy-v1.0';
+export const CURRENT_PRIVACY_VERSION = 'privacy-v1.1';
 export const REQUIRED_CONSENT_TEXT =
   'I agree to the Terms of Service and acknowledge that I have read the Privacy Policy.';
 

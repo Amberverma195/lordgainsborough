@@ -2,7 +2,6 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   savePendingSignupCredentials,
   loadPendingSignupCredentials,
-  clearPendingSignupCredentials,
   PendingSignupCredentials,
   PENDING_SIGNUP_KEY,
 } from './signupOtp';
@@ -43,7 +42,7 @@ describe('Legal Consent & Browser Storage Boundary Tests', () => {
 
   it('maintains synchronized version identifiers between legal consent and policy documents', () => {
     expect(CURRENT_TERMS_VERSION).toBe('terms-v1.0');
-    expect(CURRENT_PRIVACY_VERSION).toBe('privacy-v1.0');
+    expect(CURRENT_PRIVACY_VERSION).toBe('privacy-v1.1');
   });
 
   it('mandates that legal consent links use secure new-tab opening properties', () => {
@@ -130,6 +129,6 @@ describe('Legal Consent & Browser Storage Boundary Tests', () => {
     const valid = buildLegalPayload(true);
     expect(valid.agreedToTerms).toBe(true);
     expect(valid.termsVersion).toBe('terms-v1.0');
-    expect(valid.privacyVersion).toBe('privacy-v1.0');
+    expect(valid.privacyVersion).toBe('privacy-v1.1');
   });
 });

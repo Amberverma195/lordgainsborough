@@ -615,7 +615,7 @@ class AuthControllerSignupOtpResponseTest {
         request.setPassword("Secret@123");
         request.setTermsAccepted(true);
         request.setTermsVersion("terms-v1.0");
-        request.setPrivacyVersion("privacy-v1.0");
+        request.setPrivacyVersion("privacy-v1.1");
         return request;
     }
 
@@ -696,7 +696,7 @@ class AuthControllerSignupOtpResponseTest {
         active.setPendingPhoneNormalized("5551234567");
         active.setPendingPasswordHash("hash");
         active.setPendingTermsVersion("terms-v0.1"); // Superseded
-        active.setPendingPrivacyVersion("privacy-v1.0");
+        active.setPendingPrivacyVersion("privacy-v1.1");
 
         when(signupOtpChallengeService.findActiveChallenge(email)).thenReturn(Optional.of(active));
 

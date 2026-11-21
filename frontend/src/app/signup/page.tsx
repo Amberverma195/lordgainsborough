@@ -47,6 +47,7 @@ import {
   toCrossTabPayload,
 } from '@/lib/signupOtpCrossTab';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
+import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from '@/lib/legalConsent';
 
 type SignupStep = 'signup-form' | 'signup-verify';
 
@@ -345,8 +346,8 @@ export default function SignupPage() {
         attemptToken: existingToken,
         restart: Boolean(existingToken),
         termsAccepted: true,
-        termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.0',
+        termsVersion: CURRENT_TERMS_VERSION,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
       };
 
       const headers: Record<string, string> = {
@@ -560,8 +561,8 @@ export default function SignupPage() {
           challengeId: challenge?.challengeId,
           attemptToken: challenge?.attemptToken,
           termsAccepted: true,
-          termsVersion: 'terms-v1.0',
-          privacyVersion: 'privacy-v1.0',
+          termsVersion: CURRENT_TERMS_VERSION,
+          privacyVersion: CURRENT_PRIVACY_VERSION,
         }),
       });
 

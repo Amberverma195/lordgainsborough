@@ -12,13 +12,13 @@ describe('account recovery request builders', () => {
       captchaToken: 'captcha-token',
       termsAccepted: true,
       termsVersion: 'terms-v1.0',
-      privacyVersion: 'privacy-v1.0',
+      privacyVersion: 'privacy-v1.1',
     });
     expect(request.path).toBe('/api/auth/signup/send-otp');
     expect(request.body.email).toBe('guest@example.com');
     expect(request.body.termsAccepted).toBe(true);
     expect(request.body.termsVersion).toBe('terms-v1.0');
-    expect(request.body.privacyVersion).toBe('privacy-v1.0');
+    expect(request.body.privacyVersion).toBe('privacy-v1.1');
     expect(request.headers).toEqual({
       'Idempotency-Key': 'idem-1',
       'X-Captcha-Token': 'captcha-token',
@@ -34,7 +34,7 @@ describe('account recovery request builders', () => {
       password: 'Secret1!',
       termsAccepted: false,
       termsVersion: 'terms-v1.0',
-      privacyVersion: 'privacy-v1.0',
+      privacyVersion: 'privacy-v1.1',
     });
     expect(sendRequest.body.termsAccepted).toBe(false);
 
@@ -45,7 +45,7 @@ describe('account recovery request builders', () => {
       name: 'User',
       password: 'Secret1!',
       termsVersion: 'terms-v1.0',
-      privacyVersion: 'privacy-v1.0',
+      privacyVersion: 'privacy-v1.1',
     } as any;
     expect(buildSignupOtpSend(untypedInput).body.termsAccepted).toBe(false);
 
@@ -57,7 +57,7 @@ describe('account recovery request builders', () => {
       password: 'Secret1!',
       termsAccepted: false,
       termsVersion: 'terms-v1.0',
-      privacyVersion: 'privacy-v1.0',
+      privacyVersion: 'privacy-v1.1',
     });
     expect(verifyRequest.body.termsAccepted).toBe(false);
 
@@ -68,7 +68,7 @@ describe('account recovery request builders', () => {
       phone: '5195550100',
       password: 'Secret1!',
       termsVersion: 'terms-v1.0',
-      privacyVersion: 'privacy-v1.0',
+      privacyVersion: 'privacy-v1.1',
     } as any;
     expect(buildSignupVerify(untypedVerifyInput).body.termsAccepted).toBe(false);
   });
