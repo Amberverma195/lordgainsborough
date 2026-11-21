@@ -77,6 +77,9 @@ describe('auth API', () => {
         phone: '5195550199',
         password: 'Password1!',
         idempotencyKey: 'idem-signup-1',
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
 
       expect(mockApiRequest).toHaveBeenCalledWith(
@@ -91,6 +94,9 @@ describe('auth API', () => {
             email: 'jane@example.com',
             phone: '5195550199',
             password: 'Password1!',
+            termsAccepted: true,
+            termsVersion: 'terms-v1.0',
+            privacyVersion: 'privacy-v1.0',
           }),
         }),
       );
@@ -123,6 +129,9 @@ describe('auth API', () => {
         otp: '123456',
         challengeId: 'chal-123',
         attemptToken: 'att-456',
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
 
       expect(mockApiRequest).toHaveBeenCalledWith(
@@ -135,6 +144,9 @@ describe('auth API', () => {
           body: expect.objectContaining({
             otp: '123456',
             challengeId: 'chal-123',
+            termsAccepted: true,
+            termsVersion: 'terms-v1.0',
+            privacyVersion: 'privacy-v1.0',
           }),
         }),
       );
@@ -158,6 +170,9 @@ describe('auth API', () => {
           phone: '5195550199',
           password: 'Password1!',
           otp: '000000',
+          termsAccepted: true,
+          termsVersion: 'terms-v1.0',
+          privacyVersion: 'privacy-v1.0',
         }),
       ).rejects.toThrow(ApiError);
     });

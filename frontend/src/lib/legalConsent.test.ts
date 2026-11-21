@@ -1,25 +1,10 @@
 import { describe, expect, it } from 'vitest';
-
-export const CURRENT_TERMS_VERSION = 'terms-v1.0';
-export const CURRENT_PRIVACY_VERSION = 'privacy-v1.0';
-export const REQUIRED_CONSENT_TEXT = 'I agree to the Terms of Service and acknowledge that I have read the Privacy Policy.';
-
-export interface LegalConsentState {
-  agreedToTerms: boolean;
-  termsVersion: string;
-  privacyVersion: string;
-}
-
-export function buildLegalPayload(agreedToTerms: boolean): LegalConsentState {
-  if (!agreedToTerms) {
-    throw new Error('Terms of Service and Privacy Policy acceptance is required.');
-  }
-  return {
-    agreedToTerms: true,
-    termsVersion: CURRENT_TERMS_VERSION,
-    privacyVersion: CURRENT_PRIVACY_VERSION,
-  };
-}
+import {
+  CURRENT_TERMS_VERSION,
+  CURRENT_PRIVACY_VERSION,
+  REQUIRED_CONSENT_TEXT,
+  buildLegalPayload,
+} from './legalConsent';
 
 describe('Lord Gainsborough Legal Consent & Policy Integrity', () => {
   it('has stable and correct version identifiers', () => {

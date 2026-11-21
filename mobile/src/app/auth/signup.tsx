@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -11,6 +12,13 @@ import { AppHeader } from '../../components/AppHeader';
 import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
 import { colors, radius, space, type } from '../../theme/tokens';
+
+const DEFAULT_LEGAL_ORIGIN = 'https://lordgainsboroughrestaurant.ca';
+
+export function getLegalDocumentUrl(path: '/terms' | '/privacy'): string {
+  const base = process.env.EXPO_PUBLIC_LEGAL_URL || process.env.EXPO_PUBLIC_FRONTEND_URL || DEFAULT_LEGAL_ORIGIN;
+  return `${base.replace(/\/$/, '')}${path}`;
+}
 
 export default function SignupScreen() {
   const { establishSession } = useAuth();
@@ -42,6 +50,15 @@ export default function SignupScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, [cooldown]);
+
+  const handleOpenDocument = async (path: '/terms' | '/privacy') => {
+    try {
+      const url = getLegalDocumentUrl(path);
+      await Linking.openURL(url);
+    } catch {
+      // In case device or test environment cannot open URL
+    }
+  };
 
   const handleSendOtp = async () => {
     setError(null);
@@ -270,24 +287,62 @@ export default function SignupScreen() {
               style={styles.input}
             />
 
-            <Pressable
-              accessibilityRole="checkbox"
-              accessibilityLabel="Terms and Privacy Policy agreement"
-              accessibilityState={{ checked: termsAccepted }}
-              onPress={() => {
-                setTermsAccepted((prev) => !prev);
-                setError(null);
-              }}
-              style={styles.termsRow}
-            >
-              <View style={[styles.checkbox, termsAccepted && styles.checkboxChecked]}>
+            <View style={styles.termsRow}>
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityLabel="Terms and Privacy Policy agreement"
+                accessibilityState={{ checked: termsAccepted }}
+                onPress={() => {
+                  setTermsAccepted((prev) => !prev);
+                  setError(null);
+                }}
+                style={[styles.checkbox, termsAccepted && styles.checkboxChecked]}
+              >
                 {termsAccepted ? <Text style={styles.checkmark}>✓</Text> : null}
-              </View>
+              </Pressable>
               <Text style={styles.termsText}>
-                I agree to the <Text style={styles.termsLink}>Terms of Service</Text> and acknowledge that I have read the{' '}
-                <Text style={styles.termsLink}>Privacy Policy</Text>.
+                <Text
+                  onPress={() => {
+                    setTermsAccepted((prev) => !prev);
+                    setError(null);
+                  }}
+                >
+                  I agree to the{' '}
+                </Text>
+                <Text
+                  accessibilityRole="link"
+                  accessibilityLabel="Terms of Service"
+                  style={styles.termsLink}
+                  onPress={() => void handleOpenDocument('/terms')}
+                >
+                  Terms of Service
+                </Text>
+                <Text
+                  onPress={() => {
+                    setTermsAccepted((prev) => !prev);
+                    setError(null);
+                  }}
+                >
+                  {' '}and acknowledge that I have read the{' '}
+                </Text>
+                <Text
+                  accessibilityRole="link"
+                  accessibilityLabel="Privacy Policy"
+                  style={styles.termsLink}
+                  onPress={() => void handleOpenDocument('/privacy')}
+                >
+                  Privacy Policy
+                </Text>
+                <Text
+                  onPress={() => {
+                    setTermsAccepted((prev) => !prev);
+                    setError(null);
+                  }}
+                >
+                  .
+                </Text>
               </Text>
-            </Pressable>
+            </View>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 

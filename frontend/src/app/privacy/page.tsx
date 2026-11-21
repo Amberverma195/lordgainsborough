@@ -49,7 +49,7 @@ export default function PrivacyPolicyPage() {
               <strong>Account & Profile Data:</strong> Full name, email address, and 10-digit telephone number (stored in both raw formatted and normalized digits for accurate account retrieval).
             </li>
             <li>
-              <strong>Authentication Information:</strong> Passwords are cryptographically salted and hashed using modern algorithms (BCrypt/Argon2) before database insertion. Plaintext passwords are never persisted in the database, stored in browser storage, or recorded in server logs. One-time password (OTP) verification codes are hashed with BCrypt and expire after 10 minutes.
+              <strong>Authentication Information:</strong> Passwords are cryptographically salted and hashed using BCrypt (strength 12) before database insertion. Plaintext passwords are never persisted in the database, stored in browser storage, or recorded in server logs. One-time password (OTP) verification codes are hashed with BCrypt and expire after 10 minutes.
             </li>
             <li>
               <strong>Order & Transaction Records:</strong> Menu selections, customized preparation instructions, order status progression, order timestamps, subtotal, tax, total cost, and payment receipt reference tokens.
@@ -72,7 +72,7 @@ export default function PrivacyPolicyPage() {
             We use your personal information strictly for legitimate restaurant operations:
           </p>
           <ul>
-            <li>To verify your identity and authenticate account logins using secure JSON Web Tokens (JWT).</li>
+            <li>To verify your identity and authenticate account logins using secure HttpOnly session cookies.</li>
             <li>To process, prepare, and notify you regarding the status of your takeout pickup orders.</li>
             <li>To reserve and manage your table seating in our dining room.</li>
             <li>To send critical, non-marketing operational communications, such as email verification OTPs and order status updates.</li>
@@ -87,7 +87,7 @@ export default function PrivacyPolicyPage() {
             We practice strict data minimization regarding browser storage:
           </p>
           <ul>
-            <li><strong>Authentication Tokens:</strong> Secure JWT bearer tokens are stored in browser local storage solely to keep you authenticated during active sessions.</li>
+            <li><strong>Authentication Tokens:</strong> Secure, HttpOnly session cookies (prefixed with <code>__Host-</code> in production) maintain your authenticated session. These cookies are set by the server, cannot be read by client-side JavaScript, and are automatically sent with each request.</li>
             <li><strong>Shopping Cart:</strong> Non-sensitive pending cart selections are stored in component memory and local storage to prevent loss of your order before checkout.</li>
             <li><strong>Strict Invariant:</strong> Plaintext passwords, password confirmation fields, and one-time verification codes are never stored in <code>localStorage</code>, <code>sessionStorage</code>, cookies, or URL parameters. Passwords remain only in transient memory during form completion.</li>
             <li><strong>No Tracking Cookies:</strong> We do not deploy third-party advertising cookies, behavioral tracking beacons, or cross-site tracking scripts.</li>
@@ -101,14 +101,14 @@ export default function PrivacyPolicyPage() {
           </p>
           <ul>
             <li><strong>Transactional Email Delivery:</strong> We use <em>Resend</em> to deliver one-time verification passwords and account notifications. Resend processes recipient email addresses and delivery outcomes under strict data protection terms.</li>
-            <li><strong>Cloud Hosting & PostgreSQL Database:</strong> Our application servers and relational PostgreSQL databases are hosted in enterprise cloud environments with encrypted storage at rest and in transit.</li>
+            <li><strong>Cloud Hosting & PostgreSQL Database:</strong> Our application servers and relational PostgreSQL database are hosted by our cloud infrastructure provider with encrypted connections (TLS/SSL).</li>
           </ul>
         </section>
 
         <section className={styles.section}>
           <h2>6. Data Storage, Retention & Deletion</h2>
           <p>
-            Your information is stored in secured PostgreSQL databases located in Canadian and North American cloud data regions.
+            Your information is stored in a secured PostgreSQL database hosted by our cloud infrastructure provider.
           </p>
           <ul>
             <li><strong>Active Account Data:</strong> Retained for the duration of your active account membership to enable order history review and loyalty benefits.</li>
