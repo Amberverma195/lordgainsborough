@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import * as Linking from 'expo-linking';
 import React from 'react';
+import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 jest.mock('@expo/vector-icons/Ionicons', () => 'Ionicons');
@@ -41,7 +42,7 @@ jest.mock('../../../auth/AuthContext', () => ({
 }));
 
 import * as authApi from '../../../api/auth';
-import SignupScreen from '../signup';
+import SignupScreen, { getLegalDocumentUrl } from '../signup';
 
 const mockSendSignupOtp = authApi.sendSignupOtp as jest.Mock;
 
@@ -190,5 +191,93 @@ describe('SignupScreen Legal Consent & Document Access', () => {
         }),
       );
     });
+  });
+
+  it('displays user-facing error message when Terms of Service fails to open and preserves form inputs', async () => {
+    (Linking.openURL as jest.Mock).mockRejectedValueOnce(new Error('Browser not found'));
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Full name')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.changeText(screen.getByLabelText('Full name'), 'Arthur Pendelton');
+      fireEvent.changeText(screen.getByLabelText('Email address'), 'arthur@example.com');
+      fireEvent.changeText(screen.getByLabelText('Password'), 'ValidPass123!');
+    });
+
+    // Tap Terms of Service
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Terms of Service'));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Unable to open Terms of Service. Please check your browser or network settings.'),
+      ).toBeTruthy();
+    });
+
+    // All form values remain intact
+    expect(screen.getByDisplayValue('Arthur Pendelton')).toBeTruthy();
+    expect(screen.getByDisplayValue('arthur@example.com')).toBeTruthy();
+    expect(screen.getByDisplayValue('ValidPass123!')).toBeTruthy();
+  });
+
+  it('displays user-facing error message when Privacy Policy cannot be opened by device and preserves form inputs', async () => {
+    (Linking.canOpenURL as jest.Mock).mockResolvedValueOnce(false);
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Full name')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.changeText(screen.getByLabelText('Full name'), 'Beatrice Vance');
+      fireEvent.changeText(screen.getByLabelText('Email address'), 'beatrice@example.com');
+    });
+
+    // Tap Privacy Policy
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Privacy Policy'));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Unable to open Privacy Policy. Please check your browser or network settings.'),
+      ).toBeTruthy();
+    });
+
+    // Form inputs remain intact
+    expect(screen.getByDisplayValue('Beatrice Vance')).toBeTruthy();
+    expect(screen.getByDisplayValue('beatrice@example.com')).toBeTruthy();
+  });
+
+  it('resolves reachable production Vercel legal URLs and adapts loopback on Android', () => {
+    const originalEnv = { ...process.env };
+    try {
+      delete process.env.EXPO_PUBLIC_LEGAL_URL;
+      delete process.env.EXPO_PUBLIC_FRONTEND_URL;
+
+      expect(getLegalDocumentUrl('/terms')).toBe('https://lordgainsborough.vercel.app/terms');
+      expect(getLegalDocumentUrl('/privacy')).toBe('https://lordgainsborough.vercel.app/privacy');
+
+      // Custom override
+      process.env.EXPO_PUBLIC_LEGAL_URL = 'https://custom.example.com';
+      expect(getLegalDocumentUrl('/terms')).toBe('https://custom.example.com/terms');
+
+      // Android emulator loopback adaptation
+      const originalPlatform = Platform.OS;
+      try {
+        (Platform as any).OS = 'android';
+        delete process.env.EXPO_PUBLIC_LEGAL_URL;
+        process.env.EXPO_PUBLIC_FRONTEND_URL = 'http://localhost:3000';
+        expect(getLegalDocumentUrl('/terms')).toBe('http://10.0.2.2:3000/terms');
+      } finally {
+        (Platform as any).OS = originalPlatform;
+      }
+    } finally {
+      process.env = originalEnv;
+    }
   });
 });

@@ -61,6 +61,19 @@ To guarantee that policy text cannot be silently modified under an existing vers
 - **Historical Auditability Invariant:**  
   Customer records created under `privacy-v1.0` are never retroactively re-labeled or claimed to have accepted revised wording. Their acceptance record points unequivocally to the archived `privacy-v1.0` document hash. All new signups strictly accept `privacy-v1.1`.
 
+### 2.4 Mobile Legal Document Access & Failure Resilience
+
+1. **Reachable Production Origin:**  
+   The mobile application targets the live deployed Vercel frontend at `https://lordgainsborough.vercel.app` (configurable via `EXPO_PUBLIC_LEGAL_URL` or `EXPO_PUBLIC_FRONTEND_URL`). Verified via live HTTPS tests with Android and iOS User-Agents, returning HTTP 200 OK with valid trusted TLS certificates:
+   - `https://lordgainsborough.vercel.app/terms`
+   - `https://lordgainsborough.vercel.app/privacy`
+2. **User-Facing Error Presentation:**  
+   When document opening cannot proceed (e.g., unsupported URL scheme, missing system browser, or device policy lock), `handleOpenDocument()` sets a clear user-facing error message:  
+   `"Unable to open Terms of Service. Please check your browser or network settings."` / `"Unable to open Privacy Policy. Please check your browser or network settings."`  
+   Failures are no longer silently swallowed.
+3. **Form State Preservation:**  
+   Opening legal documents or encountering browser launch failures preserves 100% of the unsent registration fields (`name`, `phone`, `email`, `password`, `confirmPassword`). Verified in `signupConsent.test.tsx`.
+
 ---
 
 ## 3. Legal Acceptance Retention & Deletion Architecture (Item 5)

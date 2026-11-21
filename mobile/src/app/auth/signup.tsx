@@ -13,12 +13,15 @@ import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
 import { colors, radius, space, type } from '../../theme/tokens';
 
-const DEFAULT_LEGAL_ORIGIN = 'https://lordgainsboroughrestaurant.ca';
+import {
+  CURRENT_PRIVACY_VERSION,
+  CURRENT_TERMS_VERSION,
+  DEFAULT_LEGAL_ORIGIN,
+  getLegalDocumentUrl,
+  PRODUCTION_VERCEL_LEGAL_ORIGIN,
+} from '../../api/legal';
 
-export function getLegalDocumentUrl(path: '/terms' | '/privacy'): string {
-  const base = process.env.EXPO_PUBLIC_LEGAL_URL || process.env.EXPO_PUBLIC_FRONTEND_URL || DEFAULT_LEGAL_ORIGIN;
-  return `${base.replace(/\/$/, '')}${path}`;
-}
+export { DEFAULT_LEGAL_ORIGIN, getLegalDocumentUrl, PRODUCTION_VERCEL_LEGAL_ORIGIN };
 
 export default function SignupScreen() {
   const { establishSession } = useAuth();
@@ -52,11 +55,18 @@ export default function SignupScreen() {
   }, [cooldown]);
 
   const handleOpenDocument = async (path: '/terms' | '/privacy') => {
+    setError(null);
+    const documentName = path === '/terms' ? 'Terms of Service' : 'Privacy Policy';
+    const url = getLegalDocumentUrl(path);
     try {
-      const url = getLegalDocumentUrl(path);
+      const supported = await Linking.canOpenURL(url).catch(() => true);
+      if (!supported) {
+        setError(`Unable to open ${documentName}. Please check your browser or network settings.`);
+        return;
+      }
       await Linking.openURL(url);
     } catch {
-      // In case device or test environment cannot open URL
+      setError(`Unable to open ${documentName}. Please check your browser or network settings.`);
     }
   };
 
@@ -101,8 +111,8 @@ export default function SignupScreen() {
         idempotencyKey,
         attemptToken,
         termsAccepted: true,
-        termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.1',
+        termsVersion: CURRENT_TERMS_VERSION,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
       });
 
       setChallengeId(result.challengeId);
@@ -141,8 +151,8 @@ export default function SignupScreen() {
         challengeId,
         attemptToken,
         termsAccepted: true,
-        termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.1',
+        termsVersion: CURRENT_TERMS_VERSION,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
       });
 
       await establishSession(sessionUser);
@@ -177,8 +187,8 @@ export default function SignupScreen() {
         attemptToken,
         restart: false,
         termsAccepted: true,
-        termsVersion: 'terms-v1.0',
-        privacyVersion: 'privacy-v1.1',
+        termsVersion: CURRENT_TERMS_VERSION,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
       });
       setChallengeId(result.challengeId);
       if (result.attemptToken) {
