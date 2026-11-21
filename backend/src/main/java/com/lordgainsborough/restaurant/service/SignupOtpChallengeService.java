@@ -152,6 +152,22 @@ public class SignupOtpChallengeService {
             String pendingPhoneNormalized,
             String pendingPasswordHash,
             String candidateAttemptToken) {
+        return requestSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized,
+                pendingPasswordHash, candidateAttemptToken, LegalPolicyService.CURRENT_TERMS_VERSION,
+                LegalPolicyService.CURRENT_PRIVACY_VERSION, persistence.now());
+    }
+
+    public RequestOtpResult requestSignupOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String candidateAttemptToken,
+            String pendingTermsVersion,
+            String pendingPrivacyVersion,
+            Instant pendingLegalAcceptedAt) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
@@ -167,7 +183,8 @@ public class SignupOtpChallengeService {
             String attemptToken = (candidateAttemptToken != null && !candidateAttemptToken.isBlank())
                     ? candidateAttemptToken.trim()
                     : deriveAttemptToken(normalizedEmail, key);
-            return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, attemptToken)) {
+            return switch (sendInitialOtp(normalizedEmail, key, pendingName, pendingPhone, pendingPhoneNormalized,
+                    pendingPasswordHash, attemptToken, pendingTermsVersion, pendingPrivacyVersion, pendingLegalAcceptedAt)) {
                 case CREATED -> new RequestOtpResult.Sent(true, true, challengeViewForEmail(normalizedEmail), attemptToken);
                 case ALREADY_EXISTS -> resendOtp(normalizedEmail, key);
                 case SEND_FAILED -> new RequestOtpResult.Failed(challengeViewForEmail(normalizedEmail));
@@ -234,6 +251,22 @@ public class SignupOtpChallengeService {
             String pendingPhoneNormalized,
             String pendingPasswordHash,
             String attemptToken) {
+        return sendInitialOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized,
+                pendingPasswordHash, attemptToken, LegalPolicyService.CURRENT_TERMS_VERSION,
+                LegalPolicyService.CURRENT_PRIVACY_VERSION, persistence.now());
+    }
+
+    public InitialSendResult sendInitialOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String attemptToken,
+            String pendingTermsVersion,
+            String pendingPrivacyVersion,
+            Instant pendingLegalAcceptedAt) {
         String normalizedEmail = persistence.normalizeEmail(email);
         if (normalizedEmail.isBlank()) {
             throw new IllegalArgumentException("Email is required");
@@ -264,7 +297,7 @@ public class SignupOtpChallengeService {
         SignupOtpChallenge challenge = persistence.buildNewActiveChallenge(
                 normalizedEmail, otpDigest, challengeId, sendOperationId, key,
                 pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash,
-                attemptTokenHash);
+                attemptTokenHash, pendingTermsVersion, pendingPrivacyVersion, pendingLegalAcceptedAt);
 
         if (!persistence.tryInsertOrReplaceExpired(challenge)) {
             // Another request may have just created the challenge with this same key.
@@ -298,6 +331,22 @@ public class SignupOtpChallengeService {
             String pendingPhoneNormalized,
             String pendingPasswordHash,
             String existingAttemptToken) {
+        return restartSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized,
+                pendingPasswordHash, existingAttemptToken, LegalPolicyService.CURRENT_TERMS_VERSION,
+                LegalPolicyService.CURRENT_PRIVACY_VERSION, persistence.now());
+    }
+
+    public RequestOtpResult restartSignupOtp(
+            String email,
+            String idempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String existingAttemptToken,
+            String pendingTermsVersion,
+            String pendingPrivacyVersion,
+            Instant pendingLegalAcceptedAt) {
         String normalizedEmail = persistence.normalizeEmail(email);
         String emailKey = persistence.emailKeyFromNormalized(normalizedEmail);
         String key = normalizeIdempotencyKey(idempotencyKey);
@@ -305,7 +354,8 @@ public class SignupOtpChallengeService {
 
         Optional<SignupOtpChallenge> activeOpt = persistence.findActiveUnexpiredByEmail(normalizedEmail);
         if (activeOpt.isEmpty()) {
-            return requestSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash);
+            return requestSignupOtp(email, idempotencyKey, pendingName, pendingPhone, pendingPhoneNormalized,
+                    pendingPasswordHash, existingAttemptToken, pendingTermsVersion, pendingPrivacyVersion, pendingLegalAcceptedAt);
         }
 
         SignupOtpChallenge active = activeOpt.get();
@@ -326,7 +376,7 @@ public class SignupOtpChallengeService {
         SignupOtpChallenge fresh = persistence.buildNewActiveChallenge(
                 normalizedEmail, otpDigest, challengeId, sendOperationId, key,
                 pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash,
-                newAttemptTokenHash);
+                newAttemptTokenHash, pendingTermsVersion, pendingPrivacyVersion, pendingLegalAcceptedAt);
 
         Optional<SignupOtpChallenge> restarted = persistence.getStore().tryAtomicRestart(
                 emailKey, active.getAttemptTokenHash(), fresh, now);

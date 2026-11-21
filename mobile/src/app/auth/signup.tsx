@@ -22,6 +22,7 @@ export default function SignupScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   // Step 2: Verification
   const [otp, setOtp] = useState('');
@@ -67,6 +68,10 @@ export default function SignupScreen() {
       setError('Passwords do not match.');
       return;
     }
+    if (!termsAccepted) {
+      setError('Please agree to the Terms of Service and acknowledge the Privacy Policy to continue.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -78,6 +83,9 @@ export default function SignupScreen() {
         password,
         idempotencyKey,
         attemptToken,
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
 
       setChallengeId(result.challengeId);
@@ -115,6 +123,9 @@ export default function SignupScreen() {
         otp: cleanOtp,
         challengeId,
         attemptToken,
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
 
       await establishSession(sessionUser);
@@ -148,6 +159,9 @@ export default function SignupScreen() {
         idempotencyKey,
         attemptToken,
         restart: false,
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
       setChallengeId(result.challengeId);
       if (result.attemptToken) {
@@ -255,6 +269,25 @@ export default function SignupScreen() {
               placeholderTextColor={colors.textMuted}
               style={styles.input}
             />
+
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityLabel="Terms and Privacy Policy agreement"
+              accessibilityState={{ checked: termsAccepted }}
+              onPress={() => {
+                setTermsAccepted((prev) => !prev);
+                setError(null);
+              }}
+              style={styles.termsRow}
+            >
+              <View style={[styles.checkbox, termsAccepted && styles.checkboxChecked]}>
+                {termsAccepted ? <Text style={styles.checkmark}>✓</Text> : null}
+              </View>
+              <Text style={styles.termsText}>
+                I agree to the <Text style={styles.termsLink}>Terms of Service</Text> and acknowledge that I have read the{' '}
+                <Text style={styles.termsLink}>Privacy Policy</Text>.
+              </Text>
+            </Pressable>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -390,5 +423,44 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontFamily: type.body,
     fontSize: 14,
+  },
+  termsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    marginBottom: space.md,
+    marginTop: space.xs,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderWidth: 1.5,
+    borderColor: colors.goldBorder,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+    backgroundColor: 'transparent',
+  },
+  checkboxChecked: {
+    backgroundColor: colors.gold,
+    borderColor: colors.gold,
+  },
+  checkmark: {
+    color: colors.background,
+    fontSize: 14,
+    fontWeight: 'bold',
+    lineHeight: 16,
+  },
+  termsText: {
+    flex: 1,
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  termsLink: {
+    color: colors.gold,
+    fontFamily: type.bodyMedium,
   },
 });

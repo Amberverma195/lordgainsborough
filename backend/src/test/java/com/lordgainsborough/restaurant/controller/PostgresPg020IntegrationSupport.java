@@ -69,7 +69,7 @@ abstract class PostgresPg020IntegrationSupport {
         jdbcUrl="jdbc:postgresql://127.0.0.1:"+port+"/"+database+"?sslmode=disable";
         var v1=Flyway.configure().dataSource(jdbcUrl,"postgres","postgres").target("1").cleanDisabled(true).load(); v1.migrate();
         var v2=Flyway.configure().dataSource(jdbcUrl,"postgres","postgres").cleanDisabled(true).load();
-        assertThat(v2.migrate().migrationsExecuted).isEqualTo(1); v2.validate();
+        assertThat(v2.migrate().migrationsExecuted).isEqualTo(5); v2.validate();
         sockets=mock(SocketIOServer.class,RETURNS_DEEP_STUBS);  jwt=mock(JwtUtil.class);
 
         context=new AnnotationConfigApplicationContext();context.getEnvironment().setActiveProfiles("test");
@@ -108,6 +108,7 @@ abstract class PostgresPg020IntegrationSupport {
         context.getBean(JpaStoreSettingsRepository.class).saveAndFlush(new JpaStoreSettings());
         context.getBean(JpaMenuItemRepository.class).saveAndFlush(new JpaMenuItem("dish","Steak","",new BigDecimal("17.99"),"Mains",null));
         reset(sockets,jwt);
+        context.getBean(ReservationRateLimiter.class).clearForTests();
         var dbAdmin=new JpaUser(); dbAdmin.setId("fixture-admin"); dbAdmin.setEmail("fixture-admin@example.com"); dbAdmin.setName("Admin"); dbAdmin.setPassword("unused"); dbAdmin.setRole("ADMIN"); context.getBean(JpaUserRepository.class).saveAndFlush(dbAdmin);
         when(jwt.validateTokenForIdentity("admin-fixture","fixture-admin",0L)).thenReturn(true);
         var admin=new User();admin.setId("fixture-admin");admin.setEmail("fixture-admin@example.com");admin.setRole("ADMIN");
@@ -115,9 +116,19 @@ abstract class PostgresPg020IntegrationSupport {
         when(jwt.validateTokenForUser("admin-fixture",admin)).thenReturn(true);
     }
     OrderCreationResponse createOrder() {
+        var userRepo = context.getBean(JpaUserRepository.class);
+        if (!userRepo.existsById("guest-id")) {
+            var dbGuest=new JpaUser("guest-id", "Guest", "guest@example.com", "5195551212", "MEMBER");
+            dbGuest.setPassword("unused"); dbGuest.setPhoneNormalized("5195551212");
+            userRepo.saveAndFlush(dbGuest);
+        }
+        when(jwt.validateToken("guest-token")).thenReturn(true);
+        when(jwt.getEmailFromToken("guest-token")).thenReturn("guest@example.com");
+        when(jwt.getUserIdFromToken("guest-token")).thenReturn("guest-id");
+        when(jwt.validateTokenForIdentity("guest-token", "guest-id", 0L)).thenReturn(true);
         var order=new CustomerOrder();order.setCustomerName("Guest");order.setCustomerEmail("guest@example.com");order.setCustomerPhone("5195551212");
         var item=new CustomerOrder.OrderItem();item.setMenuItemId("dish");item.setQuantity(2);order.setItems(List.of(item));
-        var response=orderController.createOrder(order);assertThat(response.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)response.getBody();
+        var response=orderController.createOrder(null, "Bearer guest-token", null, order);assertThat(response.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)response.getBody();
     }
     OrderReview requestReview() {
         var review=new OrderReview();var item=new OrderReview.ReviewItem();item.setMenuItemId("dish");item.setItemName("client");item.setRating(4);item.setDescription(" good ");review.setItems(List.of(item));return review;

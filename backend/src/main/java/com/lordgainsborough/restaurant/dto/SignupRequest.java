@@ -8,6 +8,9 @@ public class SignupRequest {
     private String otp;
     private String challengeId;
     private String attemptToken;
+    private Boolean termsAccepted;
+    private String termsVersion;
+    private String privacyVersion;
 
     // Getters and Setters
     public String getName() { return name; }
@@ -30,4 +33,16 @@ public class SignupRequest {
 
     public String getAttemptToken() { return attemptToken; }
     public void setAttemptToken(String attemptToken) { this.attemptToken = attemptToken; }
+
+    public Boolean getTermsAccepted() { return termsAccepted; }
+    public void setTermsAccepted(Boolean termsAccepted) { this.termsAccepted = termsAccepted; }
+
+    public Boolean getAgreedToTerms() { return termsAccepted; }
+    public void setAgreedToTerms(Boolean agreedToTerms) { this.termsAccepted = agreedToTerms; }
+
+    public String getTermsVersion() { return termsVersion; }
+    public void setTermsVersion(String termsVersion) { this.termsVersion = termsVersion; }
+
+    public String getPrivacyVersion() { return privacyVersion; }
+    public void setPrivacyVersion(String privacyVersion) { this.privacyVersion = privacyVersion; }
 }

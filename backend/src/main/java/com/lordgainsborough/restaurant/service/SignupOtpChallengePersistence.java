@@ -242,6 +242,29 @@ public class SignupOtpChallengePersistence {
         return challenge;
     }
 
+    public SignupOtpChallenge buildNewActiveChallenge(
+            String email,
+            String otpDigest,
+            String challengeId,
+            String sendOperationId,
+            String clientIdempotencyKey,
+            String pendingName,
+            String pendingPhone,
+            String pendingPhoneNormalized,
+            String pendingPasswordHash,
+            String attemptTokenHash,
+            String pendingTermsVersion,
+            String pendingPrivacyVersion,
+            Instant pendingLegalAcceptedAt) {
+        SignupOtpChallenge challenge = buildNewActiveChallenge(
+                email, otpDigest, challengeId, sendOperationId, clientIdempotencyKey,
+                pendingName, pendingPhone, pendingPhoneNormalized, pendingPasswordHash, attemptTokenHash);
+        challenge.setPendingTermsVersion(pendingTermsVersion);
+        challenge.setPendingPrivacyVersion(pendingPrivacyVersion);
+        challenge.setPendingLegalAcceptedAt(pendingLegalAcceptedAt);
+        return challenge;
+    }
+
     public boolean updatePendingRegistration(
             String emailKey,
             String pendingName,

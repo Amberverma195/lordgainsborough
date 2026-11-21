@@ -120,6 +120,9 @@ class SignupOtpTimeoutFlowTest {
         request.setName("John Doe");
         request.setPhone("5551234567");
         request.setPassword("StrongPass123!");
+        request.setTermsAccepted(true);
+        request.setTermsVersion("terms-v1.0");
+        request.setPrivacyVersion("privacy-v1.0");
 
         ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(
                 "idem-123", null, null, request, httpRequest);

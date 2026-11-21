@@ -69,6 +69,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         challenge.setPendingPhoneNormalized(rs.getString("pending_phone_normalized"));
         challenge.setPendingPasswordHash(rs.getString("pending_password_hash"));
         challenge.setAttemptTokenHash(rs.getString("attempt_token_hash"));
+        challenge.setPendingTermsVersion(rs.getString("pending_terms_version"));
+        challenge.setPendingPrivacyVersion(rs.getString("pending_privacy_version"));
+        Timestamp pendingLegalAcceptedAt = rs.getTimestamp("pending_legal_accepted_at");
+        challenge.setPendingLegalAcceptedAt(pendingLegalAcceptedAt != null ? pendingLegalAcceptedAt.toInstant() : null);
         return challenge;
     };
 
@@ -78,7 +82,7 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
         challenge_expires_at, created_at, updated_at, send_operation_id,
         send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
         pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
-        attempt_token_hash
+        attempt_token_hash, pending_terms_version, pending_privacy_version, pending_legal_accepted_at
         """;
 
     public PostgresSignupOtpChallengeStore(
@@ -130,8 +134,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge_expires_at, created_at, updated_at, send_operation_id,
                     send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
                     pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
-                    attempt_token_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    attempt_token_hash, pending_terms_version, pending_privacy_version, pending_legal_accepted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO NOTHING
                 """;
             try {
@@ -157,7 +161,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                         challenge.getPendingPhone(),
                         challenge.getPendingPhoneNormalized(),
                         challenge.getPendingPasswordHash(),
-                        challenge.getAttemptTokenHash()
+                        challenge.getAttemptTokenHash(),
+                        challenge.getPendingTermsVersion(),
+                        challenge.getPendingPrivacyVersion(),
+                        toTimestamp(challenge.getPendingLegalAcceptedAt())
                 );
                 return rows == 1;
             } catch (DuplicateKeyException e) {
@@ -208,7 +215,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_phone = ?,
                     pending_phone_normalized = ?,
                     pending_password_hash = ?,
-                    attempt_token_hash = ?
+                    attempt_token_hash = ?,
+                    pending_terms_version = ?,
+                    pending_privacy_version = ?,
+                    pending_legal_accepted_at = ?
                 WHERE email_key = ?
                   AND challenge_expires_at <= ?
                 RETURNING 
@@ -234,6 +244,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     fresh.getPendingPhoneNormalized(),
                     fresh.getPendingPasswordHash(),
                     fresh.getAttemptTokenHash(),
+                    fresh.getPendingTermsVersion(),
+                    fresh.getPendingPrivacyVersion(),
+                    toTimestamp(fresh.getPendingLegalAcceptedAt()),
                     emailKey,
                     toTimestamp(now)
             );
@@ -257,8 +270,8 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge_expires_at, created_at, updated_at, send_operation_id,
                     send_status, send_lease_until, client_idempotency_key, last_send_was_initial,
                     pending_name, pending_phone, pending_phone_normalized, pending_password_hash,
-                    attempt_token_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    attempt_token_hash, pending_terms_version, pending_privacy_version, pending_legal_accepted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (email_key) DO UPDATE SET
                     normalized_email = EXCLUDED.normalized_email,
                     challenge_id = EXCLUDED.challenge_id,
@@ -279,7 +292,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_phone = EXCLUDED.pending_phone,
                     pending_phone_normalized = EXCLUDED.pending_phone_normalized,
                     pending_password_hash = EXCLUDED.pending_password_hash,
-                    attempt_token_hash = EXCLUDED.attempt_token_hash
+                    attempt_token_hash = EXCLUDED.attempt_token_hash,
+                    pending_terms_version = EXCLUDED.pending_terms_version,
+                    pending_privacy_version = EXCLUDED.pending_privacy_version,
+                    pending_legal_accepted_at = EXCLUDED.pending_legal_accepted_at
                 RETURNING 
                 """ + CHALLENGE_COLUMNS;
 
@@ -305,7 +321,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     challenge.getPendingPhone(),
                     challenge.getPendingPhoneNormalized(),
                     challenge.getPendingPasswordHash(),
-                    challenge.getAttemptTokenHash()
+                    challenge.getAttemptTokenHash(),
+                    challenge.getPendingTermsVersion(),
+                    challenge.getPendingPrivacyVersion(),
+                    toTimestamp(challenge.getPendingLegalAcceptedAt())
             );
             return results.get(0);
         });
@@ -675,7 +694,10 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     pending_phone = ?,
                     pending_phone_normalized = ?,
                     pending_password_hash = ?,
-                    attempt_token_hash = ?
+                    attempt_token_hash = ?,
+                    pending_terms_version = ?,
+                    pending_privacy_version = ?,
+                    pending_legal_accepted_at = ?
                 WHERE email_key = ?
                   AND status = 'ACTIVE'
                   AND challenge_expires_at > ?
@@ -707,6 +729,9 @@ public class PostgresSignupOtpChallengeStore implements SignupOtpChallengeStore 
                     fresh.getPendingPhoneNormalized(),
                     fresh.getPendingPasswordHash(),
                     fresh.getAttemptTokenHash(),
+                    fresh.getPendingTermsVersion(),
+                    fresh.getPendingPrivacyVersion(),
+                    toTimestamp(fresh.getPendingLegalAcceptedAt()),
                     emailKey,
                     toTimestamp(now),
                     SignupOtpChallengePersistence.MAX_FAILED_VERIFY_ATTEMPTS,

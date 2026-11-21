@@ -28,6 +28,7 @@ import com.lordgainsborough.restaurant.service.SignupAbuseLimiter;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengePersistence;
 import com.lordgainsborough.restaurant.service.SignupOtpChallengeService;
 import com.lordgainsborough.restaurant.service.SignupOtpObservability;
+import com.lordgainsborough.restaurant.service.LegalPolicyService;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.util.EmailValidator;
 import com.lordgainsborough.restaurant.util.PasswordValidator;
@@ -40,8 +41,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -68,13 +71,25 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final PasswordResetService passwordResetService;
     private final AuthSecurityObservability authSecurityObservability;
+    private final LegalPolicyService legalPolicyService;
+
+    public AuthController(EmailSenderService emailSenderService, UserAuthStore userAuthStore,
+            JwtUtil jwtUtil, OtpService otpService, SignupOtpChallengeService signupOtpChallengeService,
+            SignupAbuseLimiter signupAbuseLimiter, ClientIpResolver clientIpResolver,
+            SignupOtpObservability signupOtpObservability, LoginRateLimiter loginRateLimiter,
+            PasswordResetService passwordResetService, AuthSecurityObservability authSecurityObservability) {
+        this(emailSenderService, userAuthStore, jwtUtil, otpService, signupOtpChallengeService,
+                signupAbuseLimiter, clientIpResolver, signupOtpObservability, loginRateLimiter,
+                passwordResetService, authSecurityObservability, new LegalPolicyService());
+    }
 
     @Autowired
     public AuthController(EmailSenderService emailSenderService, UserAuthStore userAuthStore,
             JwtUtil jwtUtil, OtpService otpService, SignupOtpChallengeService signupOtpChallengeService,
             SignupAbuseLimiter signupAbuseLimiter, ClientIpResolver clientIpResolver,
             SignupOtpObservability signupOtpObservability, LoginRateLimiter loginRateLimiter,
-            PasswordResetService passwordResetService, AuthSecurityObservability authSecurityObservability) {
+            PasswordResetService passwordResetService, AuthSecurityObservability authSecurityObservability,
+            LegalPolicyService legalPolicyService) {
         this.emailSenderService = emailSenderService;
         this.userAuthStore = userAuthStore;
         this.jwtUtil = jwtUtil;
@@ -86,7 +101,10 @@ public class AuthController {
         this.loginRateLimiter = loginRateLimiter;
         this.passwordResetService = passwordResetService;
         this.authSecurityObservability = authSecurityObservability;
+        this.legalPolicyService = Objects.requireNonNull(legalPolicyService, "legalPolicyService is required");
     }
+
+    public LegalPolicyService getLegalPolicyService() { return legalPolicyService; }
 
     public UserAuthStore getUserAuthStore() { return userAuthStore; }
     public SignupOtpChallengeService getSignupOtpChallengeService() { return signupOtpChallengeService; }
@@ -192,13 +210,48 @@ public class AuthController {
             }
         }
 
+        if (Boolean.FALSE.equals(request.getTermsAccepted())) {
+            return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                    SignupOtpCode.OTP_INVALID,
+                    "You must agree to the Terms of Service and acknowledge the Privacy Policy to create an account."));
+        }
+
         UserAuthStore.Registration registration;
         if (isStaged) {
+            if (activeOpt.isPresent()) {
+                SignupOtpChallenge active = activeOpt.get();
+                if (active.getPendingTermsVersion() == null || active.getPendingPrivacyVersion() == null) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "Legal acceptance is missing for this registration attempt."));
+                }
+                if (!legalPolicyService.isCurrentTermsVersion(active.getPendingTermsVersion())
+                        || !legalPolicyService.isCurrentPrivacyVersion(active.getPendingPrivacyVersion())) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "The legal policies have been updated since your registration began. Please review and accept the current terms."));
+                }
+            }
             String challengeId = (request.getChallengeId() != null && !request.getChallengeId().isBlank())
                     ? request.getChallengeId()
                     : activeOpt.map(SignupOtpChallenge::getChallengeId).orElse(null);
             registration = userAuthStore.registerPending(email, request.getOtp().trim(), challengeId, rawAttemptToken, signupOtpChallengeService);
         } else if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            if (!Boolean.TRUE.equals(request.getTermsAccepted())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "You must agree to the Terms of Service and acknowledge the Privacy Policy to create an account."));
+            }
+            if (request.getTermsVersion() != null && !legalPolicyService.isCurrentTermsVersion(request.getTermsVersion())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "A newer version of the Terms of Service is available. Please review and accept the current version."));
+            }
+            if (request.getPrivacyVersion() != null && !legalPolicyService.isCurrentPrivacyVersion(request.getPrivacyVersion())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "A newer version of the Privacy Policy is available. Please review and acknowledge the current version."));
+            }
             String cleanPassword = PasswordValidator.sanitize(request.getPassword());
             if (request.getName() == null || request.getName().trim().isBlank()) {
                 return ResponseEntity.badRequest().body(SignupOtpResponse.of(
@@ -645,6 +698,34 @@ public class AuthController {
 
         boolean isInitialSend = signupOtpChallengeService.looksLikeInitialSend(email);
         if (isInitialSend) {
+            if (!Boolean.TRUE.equals(request.getTermsAccepted())) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "You must agree to the Terms of Service and acknowledge the Privacy Policy to create an account."));
+            }
+
+            String termsVersion = request.getTermsVersion();
+            if (termsVersion != null && !termsVersion.isBlank() && !legalPolicyService.isCurrentTermsVersion(termsVersion)) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "A newer version of the Terms of Service is available. Please review and accept the current version."));
+            }
+            if (termsVersion == null || termsVersion.isBlank()) {
+                termsVersion = legalPolicyService.getCurrentTermsVersion();
+            }
+
+            String privacyVersion = request.getPrivacyVersion();
+            if (privacyVersion != null && !privacyVersion.isBlank() && !legalPolicyService.isCurrentPrivacyVersion(privacyVersion)) {
+                return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                        SignupOtpCode.OTP_INVALID,
+                        "A newer version of the Privacy Policy is available. Please review and acknowledge the current version."));
+            }
+            if (privacyVersion == null || privacyVersion.isBlank()) {
+                privacyVersion = legalPolicyService.getCurrentPrivacyVersion();
+            }
+
+            Instant acceptedAt = Instant.now(Clock.systemUTC());
+
             boolean hasName = request.getName() != null && !request.getName().trim().isBlank();
             boolean hasPassword = request.getPassword() != null && !request.getPassword().isBlank();
 
@@ -770,6 +851,32 @@ public class AuthController {
                             SignupOtpCode.OTP_INVALID,
                             "Unable to complete signup with the provided details."));
                 }
+
+                if (request.getTermsAccepted() != null && !request.getTermsAccepted()) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "You must agree to the Terms of Service and acknowledge the Privacy Policy to create an account."));
+                }
+                String termsVersionToUse = request.getTermsVersion();
+                if (termsVersionToUse != null && !termsVersionToUse.isBlank() && !legalPolicyService.isCurrentTermsVersion(termsVersionToUse)) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "A newer version of the Terms of Service is available. Please review and accept the current version."));
+                }
+                if (termsVersionToUse == null || termsVersionToUse.isBlank()) {
+                    termsVersionToUse = active.getPendingTermsVersion() != null ? active.getPendingTermsVersion() : legalPolicyService.getCurrentTermsVersion();
+                }
+
+                String privacyVersionToUse = request.getPrivacyVersion();
+                if (privacyVersionToUse != null && !privacyVersionToUse.isBlank() && !legalPolicyService.isCurrentPrivacyVersion(privacyVersionToUse)) {
+                    return ResponseEntity.badRequest().body(SignupOtpResponse.of(
+                            SignupOtpCode.OTP_INVALID,
+                            "A newer version of the Privacy Policy is available. Please review and acknowledge the current version."));
+                }
+                if (privacyVersionToUse == null || privacyVersionToUse.isBlank()) {
+                    privacyVersionToUse = active.getPendingPrivacyVersion() != null ? active.getPendingPrivacyVersion() : legalPolicyService.getCurrentPrivacyVersion();
+                }
+                Instant acceptedAtToUse = active.getPendingLegalAcceptedAt() != null ? active.getPendingLegalAcceptedAt() : Instant.now(Clock.systemUTC());
 
                 String clientIp = resolveClientIp(httpRequest);
                 ResponseEntity<SignupOtpResponse> abuseDenied = mapAbuseDecision(

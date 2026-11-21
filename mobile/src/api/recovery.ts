@@ -13,6 +13,9 @@ export interface SignupOtpSendInput {
   restart?: boolean;
   idempotencyKey?: string | null;
   captchaToken?: string | null;
+  termsAccepted?: boolean;
+  termsVersion?: string;
+  privacyVersion?: string;
 }
 
 export interface SignupVerifyInput {
@@ -23,6 +26,9 @@ export interface SignupVerifyInput {
   password: string;
   challengeId?: string | null;
   attemptToken?: string | null;
+  termsAccepted?: boolean;
+  termsVersion?: string;
+  privacyVersion?: string;
 }
 
 export interface PasswordResetSendInput {
@@ -69,6 +75,9 @@ export function buildSignupOtpSend(input: SignupOtpSendInput): {
       password: input.password,
       ...(input.attemptToken ? { attemptToken: input.attemptToken } : {}),
       ...(input.restart ? { restart: true } : {}),
+      termsAccepted: input.termsAccepted ?? true,
+      termsVersion: input.termsVersion ?? 'terms-v1.0',
+      privacyVersion: input.privacyVersion ?? 'privacy-v1.0',
     },
   };
 }
@@ -91,6 +100,9 @@ export function buildSignupVerify(input: SignupVerifyInput): {
       password: input.password,
       ...(input.challengeId ? { challengeId: input.challengeId } : {}),
       ...(input.attemptToken ? { attemptToken: input.attemptToken } : {}),
+      termsAccepted: input.termsAccepted ?? true,
+      termsVersion: input.termsVersion ?? 'terms-v1.0',
+      privacyVersion: input.privacyVersion ?? 'privacy-v1.0',
     },
   };
 }

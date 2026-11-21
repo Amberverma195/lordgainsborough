@@ -77,6 +77,8 @@ class PostgresKdsControllerIntegrationTest {
         public Instant instant() { return now; }
     }
 
+    private String authHeader;
+    private JwtUtil jwtUtil;
     private OrderAccessService access;
     private MockMvc mvc;
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
@@ -120,7 +122,7 @@ class PostgresKdsControllerIntegrationTest {
         context.getEnvironment().setActiveProfiles("test");
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
                 "pg017", Map.of("app.orders.postgres.enabled", "true", "app.kds.postgres.enabled", "true")));
-        context.registerBean(JwtUtil.class, () -> mock(JwtUtil.class));
+        context.register(JwtUtil.class);
         context.registerBean(OrderRealtimeService.class, () -> new OrderRealtimeService(sockets,context.getBean(CustomerOrderPresentationService.class)));
         context.registerBean(Clock.class, () -> clock);
         context.registerBean(ClientIpResolver.class, () -> new ClientIpResolver(proxyProperties));
@@ -130,7 +132,9 @@ class PostgresKdsControllerIntegrationTest {
         context.register(JpaConfig.class, PostgresOrderPersistenceConfiguration.class, PostgresKdsPersistenceConfiguration.class,
                 OrderController.class, KdsController.class, CustomerNoShowService.class, CustomerOrderPresentationService.class, KdsAccessService.class);
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("jdbc", Map.of("test.jdbc-url",jdbcUrl,"jwt.expiration","86400000","jwt.secret","fixture-only-secret-at-least-32-bytes")));
-        context.refresh(); access=context.getBean(OrderAccessService.class);
+        context.refresh();
+        jwtUtil = context.getBean(JwtUtil.class);
+        access = context.getBean(OrderAccessService.class);
         store = context.getBean(PostgresCustomerOrderStore.class);
         controller = context.getBean(OrderController.class);
         orders = context.getBean(JpaCustomerOrderRepository.class);
@@ -163,6 +167,8 @@ class PostgresKdsControllerIntegrationTest {
         menu.saveAndFlush(new JpaMenuItem("dish","Steak","",new BigDecimal("17.99"),"Mains",null));
         var user = new JpaUser("owner","Owner","owner@example.com","5195551212","MEMBER");
         user.setPassword("unchanged-password-hash"); user.setTokenVersion(7); user.setPhoneNormalized("5195551212"); users.saveAndFlush(user);
+        String customerToken = jwtUtil.generateToken(user.getId(), user.getEmail(), user.getTokenVersion());
+        authHeader = "Bearer " + customerToken;
         reset(sockets);
     }
     private CustomerOrder request() {
@@ -172,7 +178,7 @@ class PostgresKdsControllerIntegrationTest {
         order.getItems().add(item); return order;
     }
     private OrderCreationResponse create() {
-        var response = controller.createOrder(request()); assertThat(response.getStatusCode().value()).isEqualTo(200);
+        var response = controller.createOrder(null, authHeader, null, request()); assertThat(response.getStatusCode().value()).isEqualTo(200);
         return (OrderCreationResponse)response.getBody();
     }
     private CustomerOrder transition(String id, String value) {
@@ -190,6 +196,19 @@ class PostgresKdsControllerIntegrationTest {
     }
     private void allow(String ips) {
         var row = settings.findById("default").orElseThrow(); row.setKdsAllowedIp(ips); settings.saveAndFlush(row);
+    }
+    private CustomerOrder saveDirectOrder(String email, String phone) {
+        var jpa = new JpaCustomerOrder();
+        jpa.setCustomerName("Guest");
+        jpa.setCustomerEmail(email);
+        jpa.setCustomerPhone(phone);
+        jpa.setStatus("NEW");
+        jpa.setPickupDate(java.time.LocalDate.now(clock.withZone(ZoneId.systemDefault())).toString());
+        jpa.setSubtotal(new BigDecimal("10.00"));
+        jpa.setTax(new BigDecimal("1.30"));
+        jpa.setTotal(new BigDecimal("11.30"));
+        jpa.addItem(new JpaOrderItem("dish", "Steak", 1, new BigDecimal("10.00"), new BigDecimal("10.00")));
+        return new CustomerOrderMapper().fromJpa(orders.saveAndFlush(jpa));
     }
 
     @Test void checkoutAndKdsShareRowsAndFullSafeJson() throws Exception {
@@ -262,7 +281,7 @@ class PostgresKdsControllerIntegrationTest {
             transition(ids.get(i),"NO_SHOW"); assertThat(counter()).isEqualTo(i+1);
             assertThat(noShows.isPickupDisabledForCustomer("OWNER@EXAMPLE.COM",null)).isEqualTo(i==2);
         }
-        assertThat(controller.createOrder(request()).getStatusCode().value()).isEqualTo(403);
+        assertThat(controller.createOrder(null, authHeader, null, request()).getStatusCode().value()).isEqualTo(403);
         LocalDateTime first=store.findById(ids.get(0)).orElseThrow().getNoShowAt();
         transition(ids.get(0),"READY"); assertThat(counter()).isEqualTo(2);
         assertThat(noShows.isPickupDisabledForCustomer("owner@example.com",null)).isFalse();
@@ -292,14 +311,14 @@ class PostgresKdsControllerIntegrationTest {
         assertThat(noShows.isPickupDisabledForCustomer("owner@example.com",null)).isTrue(); // preserved fail-closed cached-counter policy
         transition(id,"NO_SHOW"); assertThat(counter()).isEqualTo(1); transition(id,"READY"); assertThat(counter()).isZero();
         var guest=request(); guest.setCustomerEmail("guest@example.com"); guest.setCustomerPhone("5195559999");
-        var created=(OrderCreationResponse)controller.createOrder(guest).getBody(); transition(created.getOrder().getId(),"NO_SHOW");
+        var created=saveDirectOrder(guest.getCustomerEmail(), guest.getCustomerPhone()); transition(created.getId(),"NO_SHOW");
         assertThat(users.count()).isEqualTo(1); assertThat(counter()).isZero();
     }
     @Test void emailLookupWinsAndPhoneFallbackUsesExistingCanonicalCountPolicy() {
         var phoneUser=new JpaUser("phone-owner","Phone","","+1 (519) 555-0000","MEMBER"); phoneUser.setPhoneNormalized("5195550000"); users.saveAndFlush(phoneUser);
         assertThat(noShows.findCustomer("owner@example.com",phoneUser.getPhone()).orElseThrow().getId()).isEqualTo("owner");
         var request=request(); request.setCustomerEmail("unmatched@example.com"); request.setCustomerPhone(phoneUser.getPhone());
-        var created=(OrderCreationResponse)controller.createOrder(request).getBody(); transition(created.getOrder().getId(),"NO_SHOW");
+        var created=saveDirectOrder(request.getCustomerEmail(), request.getCustomerPhone()); transition(created.getId(),"NO_SHOW");
         assertThat(users.findById("phone-owner").orElseThrow().getNoShowCount()).isEqualTo(1);
         assertThat(counter()).isZero();
     }

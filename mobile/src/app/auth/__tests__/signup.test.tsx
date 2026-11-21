@@ -77,6 +77,7 @@ describe('SignupScreen', () => {
     email?: string;
     password?: string;
     confirmPassword?: string;
+    termsAccepted?: boolean;
   } = {}) => {
     const fields = {
       name: 'Alex Smith',
@@ -84,6 +85,7 @@ describe('SignupScreen', () => {
       email: 'alex@example.com',
       password: 'StrongPass1!',
       confirmPassword: 'StrongPass1!',
+      termsAccepted: true,
       ...overrides,
     };
 
@@ -102,6 +104,11 @@ describe('SignupScreen', () => {
     await act(async () => {
       fireEvent.changeText(screen.getByLabelText('Confirm password'), fields.confirmPassword);
     });
+    if (fields.termsAccepted) {
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Terms and Privacy Policy agreement'));
+      });
+    }
   };
 
   it('renders Step 1 fields and switches to Sign In when requested', async () => {
@@ -114,6 +121,7 @@ describe('SignupScreen', () => {
       expect(screen.getByLabelText('Email address')).toBeTruthy();
       expect(screen.getByLabelText('Password')).toBeTruthy();
       expect(screen.getByLabelText('Confirm password')).toBeTruthy();
+      expect(screen.getByLabelText('Terms and Privacy Policy agreement')).toBeTruthy();
       expect(screen.getByText('Continue')).toBeTruthy();
     });
 
@@ -121,6 +129,21 @@ describe('SignupScreen', () => {
       fireEvent.press(screen.getByText('Sign in'));
     });
     expect(router.push).toHaveBeenCalledWith('/auth/login');
+  });
+
+  it('validates terms and conditions acceptance is required', async () => {
+    renderScreen();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Full name')).toBeTruthy();
+    });
+    await fillForm({ termsAccepted: false });
+    await act(async () => {
+      fireEvent.press(screen.getByText('Continue'));
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Please agree to the Terms of Service and acknowledge the Privacy Policy to continue.')).toBeTruthy();
+    });
+    expect(mockSendSignupOtp).not.toHaveBeenCalled();
   });
 
   it('validates required fields and password mismatch', async () => {
@@ -200,6 +223,9 @@ describe('SignupScreen', () => {
         password: 'StrongPass1!',
         idempotencyKey: 'signup-uuid-1234',
         attemptToken: null,
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
       expect(screen.getByText('Verify email')).toBeTruthy();
       expect(screen.getByLabelText('6-digit verification code')).toBeTruthy();
@@ -275,6 +301,9 @@ describe('SignupScreen', () => {
         otp: '123456',
         challengeId: 'chal-abc-123',
         attemptToken: 'attempt-xyz-789',
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       });
       expect(mockEstablishSession).toHaveBeenCalledWith(mockSessionUser);
       expect(router.back).toHaveBeenCalled();

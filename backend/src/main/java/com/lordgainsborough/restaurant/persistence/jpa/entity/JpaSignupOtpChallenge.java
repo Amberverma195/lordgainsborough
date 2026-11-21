@@ -93,6 +93,15 @@ public class JpaSignupOtpChallenge {
     @Column(name = "pending_password_hash", length = 255)
     private String pendingPasswordHash;
 
+    @Column(name = "pending_terms_version", length = 50)
+    private String pendingTermsVersion;
+
+    @Column(name = "pending_privacy_version", length = 50)
+    private String pendingPrivacyVersion;
+
+    @Column(name = "pending_legal_accepted_at")
+    private Instant pendingLegalAcceptedAt;
+
     public JpaSignupOtpChallenge() {}
 
     public JpaSignupOtpChallenge(
@@ -234,6 +243,15 @@ public class JpaSignupOtpChallenge {
 
     public String getPendingPasswordHash() { return pendingPasswordHash; }
     public void setPendingPasswordHash(String pendingPasswordHash) { this.pendingPasswordHash = pendingPasswordHash; }
+
+    public String getPendingTermsVersion() { return pendingTermsVersion; }
+    public void setPendingTermsVersion(String pendingTermsVersion) { this.pendingTermsVersion = pendingTermsVersion; }
+
+    public String getPendingPrivacyVersion() { return pendingPrivacyVersion; }
+    public void setPendingPrivacyVersion(String pendingPrivacyVersion) { this.pendingPrivacyVersion = pendingPrivacyVersion; }
+
+    public Instant getPendingLegalAcceptedAt() { return pendingLegalAcceptedAt; }
+    public void setPendingLegalAcceptedAt(Instant pendingLegalAcceptedAt) { this.pendingLegalAcceptedAt = pendingLegalAcceptedAt; }
 
     @Override
     public boolean equals(Object o) {

@@ -49,6 +49,10 @@ public class SignupOtpChallenge {
     /** SHA-256 verifier hash of the unpredictable signup attempt secret. */
     private String attemptTokenHash;
 
+    private String pendingTermsVersion;
+    private String pendingPrivacyVersion;
+    private Instant pendingLegalAcceptedAt;
+
     public String getEmailKey() {
         return emailKey;
     }
@@ -223,6 +227,30 @@ public class SignupOtpChallenge {
 
     public void setAttemptTokenHash(String attemptTokenHash) {
         this.attemptTokenHash = attemptTokenHash;
+    }
+
+    public String getPendingTermsVersion() {
+        return pendingTermsVersion;
+    }
+
+    public void setPendingTermsVersion(String pendingTermsVersion) {
+        this.pendingTermsVersion = pendingTermsVersion;
+    }
+
+    public String getPendingPrivacyVersion() {
+        return pendingPrivacyVersion;
+    }
+
+    public void setPendingPrivacyVersion(String pendingPrivacyVersion) {
+        this.pendingPrivacyVersion = pendingPrivacyVersion;
+    }
+
+    public Instant getPendingLegalAcceptedAt() {
+        return pendingLegalAcceptedAt;
+    }
+
+    public void setPendingLegalAcceptedAt(Instant pendingLegalAcceptedAt) {
+        this.pendingLegalAcceptedAt = pendingLegalAcceptedAt;
     }
 
     /**

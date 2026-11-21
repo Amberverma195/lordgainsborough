@@ -69,7 +69,7 @@ class PostgresOnlyApplicationIntegrationTest {
         mvc=MockMvcBuilders.webAppContextSetup(web).build();
     }
     @BeforeEach void resetData() {
-        jdbc.execute("TRUNCATE users,customer_orders,carts,order_reviews,reservations,signup_otp_challenges,password_reset_otp_challenges,signup_abuse_limits,login_failure_states CASCADE");
+        jdbc.execute("TRUNCATE users,customer_orders,carts,order_reviews,reservations,signup_otp_challenges,password_reset_otp_challenges,signup_abuse_limits,login_failure_states,account_legal_acceptances CASCADE");
         context.getBean(JpaStoreSettingsRepository.class).saveAndFlush(new com.lordgainsborough.restaurant.persistence.jpa.entity.JpaStoreSettings());
         jdbc.update("UPDATE store_settings SET kds_allowed_ip='127.0.0.1', pickup_orders_enabled=true");
         reset(email);
@@ -118,15 +118,25 @@ class PostgresOnlyApplicationIntegrationTest {
         var result=orders.createOrder(null, "Bearer " + token(u), null, o);
         assertThat(result.getStatusCode().value()).isEqualTo(200);return (OrderCreationResponse)result.getBody();
     }
+    String lastAttemptToken;
     String signupCode(String address,String phone) throws Exception {
-        send("/api/auth/signup/send-otp",Map.of("email",address,"phone",phone),202);
+        return signupCode(address, phone, "Member", "CorrectPassword1!");
+    }
+    String signupCode(String address,String phone,String name,String password) throws Exception {
+        var node = send("/api/auth/signup/send-otp",Map.of("email",address,"phone",phone,
+                "name",name,"password",password,
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"),202);
+        if (node.hasNonNull("attemptToken")) {
+            lastAttemptToken = node.get("attemptToken").asText();
+        }
         var code=org.mockito.ArgumentCaptor.forClass(String.class);
         verify(email).sendOtpEmail(eq(address),code.capture(),anyString());return code.getValue();
     }
 
     @Test void signupStatusRequiresAttemptTokenAndNeverLeaksUnownedChallengeMetadata() throws Exception {
         var pending=send("/api/auth/signup/send-otp",Map.of("email","status-owner@example.com","phone","5195551191",
-                "name","Status Owner","password","CorrectPassword1!"),202);
+                "name","Status Owner","password","CorrectPassword1!",
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"),202);
         String id=pending.get("challengeId").asText(), token=pending.get("attemptToken").asText();
         assertThat(token).isNotBlank();
         var anonymous=response(get("/api/auth/signup/otp-status").param("email","status-owner@example.com"),404);
@@ -574,22 +584,31 @@ class PostgresOnlyApplicationIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM menu_items",Integer.class)).isEqualTo(119);
     }
     @Test void signupPersistsServerOwnedIdentityConsumesOtpAndLogsInByEmailAndPhone() throws Exception {
-        String code=signupCode("new@example.com","5195551111");
-        var created=send("/api/auth/signup",Map.of("email"," NEW@example.com ","name"," New Member ","phone","5195551111","password","CorrectPassword1!","otp",code,"role","ADMIN","tokenVersion",55),201);
+        String code=signupCode("new@example.com","5195551111","New Member","CorrectPassword1!");
+        var signupPayload = new HashMap<String, Object>(Map.of(
+                "email"," NEW@example.com ","name"," New Member ","phone","5195551111","password","CorrectPassword1!","otp",code,"role","ADMIN",
+                "tokenVersion",55,"termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0"));
+        signupPayload.put("attemptToken", lastAttemptToken);
+        var created=send("/api/auth/signup",signupPayload,201);
         assertThat(created.toString()).doesNotContain("password","tokenVersion");
         var stored=users.findByEmailIgnoreCase("new@example.com").orElseThrow();
         assertThat(stored.getRole()).isEqualTo("MEMBER");assertThat(stored.getTokenVersion()).isZero();
         assertThat(PasswordUtil.checkPassword("CorrectPassword1!",stored.getPassword())).isTrue();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM signup_otp_challenges",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM account_legal_acceptances",Integer.class)).isEqualTo(1);
         send("/api/auth/login",Map.of("email","NEW@example.com","password","CorrectPassword1!"),200);
         send("/api/auth/login",Map.of("emailOrPhone","5195551111","password","CorrectPassword1!"),200);
     }
     @Test void wrongOtpDoesNotCreateAccountAndDuplicatePhoneDoesNotConsumeAnotherChallenge() throws Exception {
-        String code=signupCode("new@example.com","5195551111");
-        send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp","not-a-code"),400);
+        String code=signupCode("new@example.com","5195551111","New","CorrectPassword1!");
+        send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp","not-a-code",
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0",
+                "attemptToken", lastAttemptToken),400);
         assertThat(users.count()).isZero();
         account("existing","existing@example.com","5195551111","MEMBER");
-        send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp",code),409);
+        send("/api/auth/signup",Map.of("email","new@example.com","name","New","phone","5195551111","password","CorrectPassword1!","otp",code,
+                "termsAccepted", true, "termsVersion", "terms-v1.0", "privacyVersion", "privacy-v1.0",
+                "attemptToken", lastAttemptToken),409);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM signup_otp_challenges",Integer.class)).isEqualTo(1);
     }
     @Test void unknownAccountAndWrongPasswordReturnSamePublicFailure() throws Exception {

@@ -20,10 +20,10 @@ import java.time.Clock;
 public class PostgresUserAuthPersistenceConfiguration {
     @Bean @Primary
     PostgresUserAuthStore postgresUserAuthStore(JpaUserRepository users, JpaCustomerOrderRepository orders,
-            JpaOrderReviewRepository reviews, @Qualifier("transactionManager") org.springframework.transaction.PlatformTransactionManager transactionManager, Clock clock) {
+            JpaOrderReviewRepository reviews, @Qualifier("transactionManager") org.springframework.transaction.PlatformTransactionManager transactionManager, Clock clock, LegalPolicyService legalPolicyService) {
         if (!(transactionManager instanceof JpaTransactionManager manager))
             throw PostgresIdentityCoherence.incompatible("authentication requires the actual JPA security transaction manager");
-        return new PostgresUserAuthStore(users, orders, reviews, manager, clock);
+        return new PostgresUserAuthStore(users, orders, reviews, manager, clock, legalPolicyService);
     }
     @Bean static BeanFactoryPostProcessor rejectUnmigratedIdentityConsumers() {
         return factory -> {

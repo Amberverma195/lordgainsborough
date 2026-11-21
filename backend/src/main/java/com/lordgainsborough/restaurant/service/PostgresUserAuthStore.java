@@ -14,6 +14,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -28,10 +29,17 @@ public class PostgresUserAuthStore implements UserAuthStore {
     private final TransactionTemplate reads;
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private final LegalPolicyService legalPolicyService;
 
     public PostgresUserAuthStore(JpaUserRepository users, JpaCustomerOrderRepository orders,
             JpaOrderReviewRepository reviews, JpaTransactionManager manager, Clock clock) {
+        this(users, orders, reviews, manager, clock, new LegalPolicyService());
+    }
+
+    public PostgresUserAuthStore(JpaUserRepository users, JpaCustomerOrderRepository orders,
+            JpaOrderReviewRepository reviews, JpaTransactionManager manager, Clock clock, LegalPolicyService legalPolicyService) {
         this.users = users; this.orders = orders; this.reviews = reviews; this.manager = manager; this.clock = clock.withZone(java.time.ZoneId.systemDefault());
+        this.legalPolicyService = Objects.requireNonNull(legalPolicyService, "legalPolicyService is required");
         jdbc = new JdbcTemplate(Objects.requireNonNull(manager.getDataSource()));
         writes = new TransactionTemplate(manager);
         writes.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -114,6 +122,25 @@ public class PostgresUserAuthStore implements UserAuthStore {
                 // Keep VERIFIED consumed; do not reset/reactivate it after an unsuccessful insert.
                 return new Registration(null, verification, true);
             }
+
+            String acceptanceId = UUID.randomUUID().toString();
+            int acceptanceInserted = jdbc.update("""
+                    INSERT INTO account_legal_acceptances (
+                        id, user_id, terms_version, privacy_version, accepted_at, acceptance_source, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'signup', ?)
+                    ON CONFLICT (user_id, terms_version, privacy_version, acceptance_source) DO NOTHING
+                    """,
+                    acceptanceId,
+                    created.getId(),
+                    legalPolicyService.getCurrentTermsVersion(),
+                    legalPolicyService.getCurrentPrivacyVersion(),
+                    Timestamp.from(clock.instant()),
+                    Timestamp.from(clock.instant())
+            );
+            if (acceptanceInserted == 0) {
+                throw new IllegalStateException("Failed to record legal acceptance for user " + created.getId());
+            }
+
             challenges.clear(created.getEmail());
             return new Registration(snapshot(created), verification, false);
         });
@@ -183,6 +210,39 @@ public class PostgresUserAuthStore implements UserAuthStore {
                     throw new IllegalStateException("Unexpected identity uniqueness conflict");
                 return new Registration(null, verification, true);
             }
+
+            String termsVersion = challenge.getPendingTermsVersion();
+            String privacyVersion = challenge.getPendingPrivacyVersion();
+            if (termsVersion == null || privacyVersion == null) {
+                throw new IllegalStateException("Legal acceptance record missing for signup");
+            }
+            if (!legalPolicyService.isCurrentTermsVersion(termsVersion)
+                    || !legalPolicyService.isCurrentPrivacyVersion(privacyVersion)) {
+                throw new IllegalStateException("Legal policy version has been superseded");
+            }
+
+            Instant acceptedAt = challenge.getPendingLegalAcceptedAt() != null
+                    ? challenge.getPendingLegalAcceptedAt()
+                    : clock.instant();
+
+            String acceptanceId = UUID.randomUUID().toString();
+            int acceptanceInserted = jdbc.update("""
+                    INSERT INTO account_legal_acceptances (
+                        id, user_id, terms_version, privacy_version, accepted_at, acceptance_source, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'signup', ?)
+                    ON CONFLICT (user_id, terms_version, privacy_version, acceptance_source) DO NOTHING
+                    """,
+                    acceptanceId,
+                    created.getId(),
+                    termsVersion,
+                    privacyVersion,
+                    Timestamp.from(acceptedAt),
+                    Timestamp.from(clock.instant())
+            );
+            if (acceptanceInserted == 0) {
+                throw new IllegalStateException("Failed to record legal acceptance for user " + created.getId());
+            }
+
             challenges.clear(cleanEmail);
             return new Registration(snapshot(created), verification, false);
         });

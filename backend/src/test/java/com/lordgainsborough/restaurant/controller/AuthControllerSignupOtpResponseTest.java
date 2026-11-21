@@ -4,6 +4,7 @@ import com.lordgainsborough.restaurant.dto.SendOtpRequest;
 import com.lordgainsborough.restaurant.dto.SignupOtpChallengeView;
 import com.lordgainsborough.restaurant.dto.SignupOtpCode;
 import com.lordgainsborough.restaurant.dto.SignupOtpResponse;
+import com.lordgainsborough.restaurant.dto.SignupRequest;
 import com.lordgainsborough.restaurant.model.User;
 import com.lordgainsborough.restaurant.service.UserAuthStore;
 import com.lordgainsborough.restaurant.security.JwtUtil;
@@ -109,6 +110,10 @@ class AuthControllerSignupOtpResponseTest {
         when(signupOtpChallengeService.requestSignupOtp(anyString(), org.mockito.ArgumentMatchers.nullable(String.class)))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
         when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+        when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+        when(signupOtpChallengeService.restartSignupOtp(anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
     }
 
@@ -608,6 +613,103 @@ class AuthControllerSignupOtpResponseTest {
         request.setPhone(phone);
         request.setName("John Doe");
         request.setPassword("Secret@123");
+        request.setTermsAccepted(true);
+        request.setTermsVersion("terms-v1.0");
+        request.setPrivacyVersion("privacy-v1.0");
         return request;
+    }
+
+    @Test
+    void sendSignupOtpRejectsMissingTermsAcceptance() {
+        SendOtpRequest request = signupOtpRequest("user@example.com", "5551234567");
+        request.setTermsAccepted(false);
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("You must agree to the Terms of Service and acknowledge the Privacy Policy to create an account.",
+                response.getBody().getMessage());
+    }
+
+    @Test
+    void sendSignupOtpRejectsSupersededTermsVersion() {
+        SendOtpRequest request = signupOtpRequest("user@example.com", "5551234567");
+        request.setTermsVersion("terms-v0.9");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("A newer version of the Terms of Service is available. Please review and accept the current version.",
+                response.getBody().getMessage());
+    }
+
+    @Test
+    void sendSignupOtpRejectsSupersededPrivacyVersion() {
+        SendOtpRequest request = signupOtpRequest("user@example.com", "5551234567");
+        request.setPrivacyVersion("privacy-v0.9");
+
+        ResponseEntity<SignupOtpResponse> response = controller.sendSignupOtp(null, null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals("A newer version of the Privacy Policy is available. Please review and acknowledge the current version.",
+                response.getBody().getMessage());
+    }
+
+    @Test
+    void signupRejectsMissingPendingTermsAcceptance() {
+        String email = "staged@example.com";
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setEmailKey("key-1");
+        active.setNormalizedEmail(email);
+        active.setChallengeId("ch-1");
+        active.setPendingName("Staged User");
+        active.setPendingPhoneNormalized("5551234567");
+        active.setPendingPasswordHash("hash");
+        // Pending terms not set
+
+        when(signupOtpChallengeService.findActiveChallenge(email)).thenReturn(Optional.of(active));
+
+        SignupRequest request = new SignupRequest();
+        request.setEmail(email);
+        request.setOtp("123456");
+        request.setChallengeId("ch-1");
+
+        ResponseEntity<?> response = controller.signup(null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody() instanceof SignupOtpResponse);
+        assertEquals("Legal acceptance is missing for this registration attempt.",
+                ((SignupOtpResponse) response.getBody()).getMessage());
+    }
+
+    @Test
+    void signupRejectsSupersededPendingTermsVersion() {
+        String email = "staged@example.com";
+        SignupOtpChallenge active = new SignupOtpChallenge();
+        active.setEmailKey("key-1");
+        active.setNormalizedEmail(email);
+        active.setChallengeId("ch-1");
+        active.setPendingName("Staged User");
+        active.setPendingPhoneNormalized("5551234567");
+        active.setPendingPasswordHash("hash");
+        active.setPendingTermsVersion("terms-v0.1"); // Superseded
+        active.setPendingPrivacyVersion("privacy-v1.0");
+
+        when(signupOtpChallengeService.findActiveChallenge(email)).thenReturn(Optional.of(active));
+
+        SignupRequest request = new SignupRequest();
+        request.setEmail(email);
+        request.setOtp("123456");
+        request.setChallengeId("ch-1");
+
+        ResponseEntity<?> response = controller.signup(null, request, httpRequest);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertTrue(response.getBody() instanceof SignupOtpResponse);
+        assertEquals("The legal policies have been updated since your registration began. Please review and accept the current terms.",
+                ((SignupOtpResponse) response.getBody()).getMessage());
     }
 }

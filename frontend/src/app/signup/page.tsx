@@ -313,7 +313,7 @@ export default function SignupPage() {
     }
 
     if (!agreedToTerms) {
-      newErrors.terms = 'Please agree to the Terms of Service and Privacy Policy to continue.';
+      newErrors.terms = 'Please agree to the Terms of Service and acknowledge the Privacy Policy to continue.';
       if (!firstInvalidRef) firstInvalidRef = termsRef;
     }
 
@@ -344,6 +344,9 @@ export default function SignupPage() {
         password: formData.password,
         attemptToken: existingToken,
         restart: Boolean(existingToken),
+        termsAccepted: true,
+        termsVersion: 'terms-v1.0',
+        privacyVersion: 'privacy-v1.0',
       };
 
       const headers: Record<string, string> = {
@@ -556,6 +559,9 @@ export default function SignupPage() {
           otp: code,
           challengeId: challenge?.challengeId,
           attemptToken: challenge?.attemptToken,
+          termsAccepted: true,
+          termsVersion: 'terms-v1.0',
+          privacyVersion: 'privacy-v1.0',
         }),
       });
 
@@ -942,8 +948,15 @@ export default function SignupPage() {
                       disabled={loading}
                     />
                     <span>
-                      I agree to the <Link href="/terms">Terms of Service</Link> and{' '}
-                      <Link href="/privacy">Privacy Policy</Link>
+                      I agree to the{' '}
+                      <Link href="/terms" target="_blank" rel="noopener noreferrer">
+                        Terms of Service
+                      </Link>{' '}
+                      and acknowledge that I have read the{' '}
+                      <Link href="/privacy" target="_blank" rel="noopener noreferrer">
+                        Privacy Policy
+                      </Link>
+                      .
                     </span>
                   </label>
                   {fieldErrors.terms && (

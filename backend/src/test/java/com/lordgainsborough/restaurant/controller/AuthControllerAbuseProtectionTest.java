@@ -136,6 +136,8 @@ class AuthControllerAbuseProtectionTest {
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
         when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
+        when(signupOtpChallengeService.requestSignupOtp(anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new SignupOtpChallengeService.RequestOtpResult.Sent(true, true, sampleView()));
     }
 
     @Test
@@ -227,6 +229,9 @@ class AuthControllerAbuseProtectionTest {
         request.setPhone(phone);
         request.setName("John Doe");
         request.setPassword("Secret@123");
+        request.setTermsAccepted(true);
+        request.setTermsVersion("terms-v1.0");
+        request.setPrivacyVersion("privacy-v1.0");
         return request;
     }
 
