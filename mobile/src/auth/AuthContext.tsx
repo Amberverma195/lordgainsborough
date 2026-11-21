@@ -1,3 +1,4 @@
+import { clearDeletedAccountData } from './deleteAccountData';
 import { accountWillChange } from './lifecycle';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
@@ -37,6 +38,7 @@ export interface AuthContextValue {
   updateUser: (updatedUser: SessionUser) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
+  finishAccountDeletion: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -209,6 +211,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await clearLocalSession();
   }, [clearLocalSession]);
 
+  const finishAccountDeletion = useCallback(async (email: string) => {
+    await clearDeletedAccountData(email, () => {
+      accountWillChange();
+      setUser(null);
+      setStatus('signedOut');
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       status,
@@ -218,8 +228,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       updateUser,
       signOut,
       refresh,
+      finishAccountDeletion,
     }),
-    [status, user, signIn, establishSession, updateUser, signOut, refresh],
+    [status, user, signIn, establishSession, updateUser, signOut, refresh, finishAccountDeletion],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

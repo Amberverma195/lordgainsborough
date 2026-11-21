@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react-native';
 import { deleteAccount } from '../../../api/auth';
 import { ApiError } from '../../../api/errors';
-import { clearDeletedAccountData } from '../../../auth/deleteAccountData';
+import { clearDeletedAccountData as mockClearDeletedAccountData } from '../../../auth/deleteAccountData';
 import DeleteAccountScreen from '../../../app/profile/delete';
 jest.mock('expo-router', () => ({ router: { replace: jest.fn() } }));
 jest.mock('../../../api/auth', () => ({ deleteAccount: jest.fn() }));
@@ -18,7 +18,7 @@ const mockSignOut = jest.fn();
 jest.mock('../../../auth/AuthContext', () => ({
   useAuth: () => ({
     user: { token: 'jwt', email: 'member@example.com' },
-    signOut: mockSignOut,
+    finishAccountDeletion: async (email: string) => { mockSignOut(); await mockClearDeletedAccountData(email); },
   }),
 }));
 jest.mock('../../../components/AppHeader', () => ({ AppHeader: () => null }));
@@ -37,10 +37,11 @@ it('requires a password and permanently deletes with JWT then clears private dev
   );
   await fireEvent.press(screen.getByText('Permanently delete my account'));
   await waitFor(() =>
-    expect(clearDeletedAccountData).toHaveBeenCalledWith('member@example.com'),
+    expect(mockClearDeletedAccountData).toHaveBeenCalledWith('member@example.com'),
   );
   expect(deleteAccount).toHaveBeenCalledWith('jwt', 'Secret1!');
-  expect(mockSignOut).toHaveBeenCalled();
+  expect(mockSignOut).toHaveBeenCalledTimes(1);
+  expect(mockClearDeletedAccountData).toHaveBeenCalledTimes(1);
 });
 it.each([
   [403, 'REQUEST_FAILED'],
@@ -58,5 +59,17 @@ it.each([
   );
   await fireEvent.press(screen.getByText('Permanently delete my account'));
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-  expect(clearDeletedAccountData).not.toHaveBeenCalled();
+  expect(mockClearDeletedAccountData).not.toHaveBeenCalled();
+});
+
+it('reports partial cleanup failure without repeating deletion or cleanup', async () => {
+ (deleteAccount as jest.Mock).mockResolvedValue(undefined);
+ (mockClearDeletedAccountData as jest.Mock).mockRejectedValueOnce(new Error('storage failed'));
+ await render(<DeleteAccountScreen />);
+ await fireEvent.changeText(screen.getByLabelText('Current password'), 'Secret1!');
+ await fireEvent.press(screen.getByText('Permanently delete my account'));
+ await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+ expect(deleteAccount).toHaveBeenCalledTimes(1);
+ expect(mockClearDeletedAccountData).toHaveBeenCalledTimes(1);
+ expect(mockSignOut).toHaveBeenCalledTimes(1);
 });

@@ -4,14 +4,13 @@ import { router } from 'expo-router';
 import { deleteAccount } from '../../api/auth';
 import { ApiError } from '../../api/errors';
 import { useAuth } from '../../auth/AuthContext';
-import { clearDeletedAccountData } from '../../auth/deleteAccountData';
 import { AppHeader } from '../../components/AppHeader';
 import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
 import { colors } from '../../theme/tokens';
 
 export default function DeleteAccountScreen() {
-  const { user, signOut } = useAuth();
+  const { user, finishAccountDeletion } = useAuth();
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -32,12 +31,7 @@ export default function DeleteAccountScreen() {
       deleted = true;
       setPassword('');
       if (current.current?.token !== account.token) return;
-      try {
-        await clearDeletedAccountData(account.email);
-      } finally {
-        await signOut();
-      }
-      await clearDeletedAccountData(account.email);
+      await finishAccountDeletion(account.email);
       router.replace('/(tabs)/profile');
     } catch (failure) {
       setPassword('');
