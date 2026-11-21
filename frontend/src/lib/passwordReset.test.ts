@@ -160,4 +160,44 @@ describe('password reset helpers', () => {
     expect(sessionStorage.getItem(PASSWORD_RESET_CHALLENGE_KEY)).toBeNull();
     expect(loadPasswordResetChallengeState()).toBeNull();
   });
+
+  it('immediately marks challenge expired when server responds with RESET_CHALLENGE_EXPIRED', () => {
+    const observedAt = Date.parse('2026-07-13T12:00:00.000Z');
+    // Initially active challenge expiring 30m in future
+    const activeState = applyPasswordResetResponse(null, 'member@example.com', {
+      challengeId: 'challenge-exp-test',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      challengeExpiresAt: '2026-07-13T12:30:00.000Z',
+      resendsRemaining: 3,
+    }, 0, observedAt);
+
+    expect(isPasswordResetChallengeExpired(activeState, observedAt)).toBe(false);
+
+    // Backend returns RESET_CHALLENGE_EXPIRED (e.g. 410 Gone)
+    const expiredState = applyPasswordResetResponse(activeState, 'member@example.com', {
+      code: 'RESET_CHALLENGE_EXPIRED',
+      message: 'This password-reset session has expired.',
+      serverTime: '2026-07-13T12:05:00.000Z',
+    }, 0, observedAt + 5 * 60 * 1000);
+
+    expect(expiredState).not.toBeNull();
+    // Must immediately evaluate to expired without waiting for original 30m countdown
+    expect(isPasswordResetChallengeExpired(expiredState, observedAt + 5 * 60 * 1000)).toBe(true);
+  });
+
+  it('handles RESET_CHALLENGE_REUSED response code and preserves challenge metadata', () => {
+    const observedAt = Date.parse('2026-07-13T12:00:00.000Z');
+    const state = applyPasswordResetResponse(null, 'member@example.com', {
+      code: 'RESET_CHALLENGE_REUSED',
+      message: 'If an account exists for that email, a reset code was already sent.',
+      challengeId: 'challenge-reused-1',
+      serverTime: '2026-07-13T12:00:00.000Z',
+      nextResendAt: '2026-07-13T12:00:30.000Z',
+      resendsRemaining: 5,
+    }, 0, observedAt);
+
+    expect(state).not.toBeNull();
+    expect(state?.challengeId).toBe('challenge-reused-1');
+    expect(state?.resendsRemaining).toBe(5);
+  });
 });

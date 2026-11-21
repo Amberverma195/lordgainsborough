@@ -444,4 +444,65 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       await db.end();
     }
   });
+
+  test('10: Backend RESET_CHALLENGE_EXPIRED response immediately offers Start New Reset without waiting for browser countdown', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByPlaceholder('Email or phone number').fill('expiry-ux@example.test');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Forgot password?' }).click();
+
+    // 1. Initial request gives a challenge that claims to expire in 30 minutes
+    await page.route('**/auth/forgot-password/send-otp', async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'RESET_CODE_SENT',
+          challengeId: 'c-long-expiry',
+          serverTime: new Date().toISOString(),
+          challengeExpiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          nextResendAt: new Date(Date.now() + 30 * 1000).toISOString(),
+          resendsRemaining: 5,
+        }),
+      });
+    });
+
+    await page.getByRole('button', { name: 'Send Reset Code' }).click();
+
+    // Verify reset-verify step is shown with "Reset Password" submit button
+    await expect(page.getByRole('button', { name: 'Reset Password' })).toBeVisible();
+
+    // Fill form
+    await page.getByPlaceholder('6-digit code').fill('123456');
+    await page.getByPlaceholder('Enter new password', { exact: true }).fill('NewSecurePassword123!');
+    await page.getByPlaceholder('Re-enter new password', { exact: true }).fill('NewSecurePassword123!');
+
+    // 2. Route reset submission to return 410 RESET_CHALLENGE_EXPIRED from backend
+    await page.route('**/auth/forgot-password/reset', async (route) => {
+      await route.fulfill({
+        status: 410,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 'RESET_CHALLENGE_EXPIRED',
+          message: 'This password-reset session has expired.',
+          serverTime: new Date().toISOString(),
+        }),
+      });
+    });
+
+    await page.getByRole('button', { name: 'Reset Password' }).click();
+
+    // Error is displayed
+    await expect(page.getByText('This password reset session has expired. Please start again.')).toBeVisible();
+
+    // Immediately "Start New Reset" button appears without waiting for browser's 30-minute countdown!
+    const startNewResetBtn = page.getByRole('button', { name: 'Start New Reset' }).first();
+    await expect(startNewResetBtn).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reset Password' })).toHaveCount(0);
+
+    // Clicking "Start New Reset" navigates back to reset-request step with clean form
+    await startNewResetBtn.click();
+    await expect(page.getByRole('heading', { name: 'Reset Password' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send Reset Code' })).toBeVisible();
+  });
 });

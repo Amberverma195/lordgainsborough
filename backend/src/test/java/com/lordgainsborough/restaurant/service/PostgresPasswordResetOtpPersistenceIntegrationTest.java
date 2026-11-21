@@ -69,9 +69,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -184,7 +190,6 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
 
     @BeforeAll
     void setUpDatabase() throws Exception {
-        testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
         boolean mandatory = Boolean.getBoolean("test.postgres.mandatory")
                 || "true".equalsIgnoreCase(System.getenv("CI_POSTGRES_MANDATORY"))
                 || "true".equalsIgnoreCase(System.getenv("CI"));
@@ -208,16 +213,19 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         clock = new MutableClock(FIXED_NOW);
         handleService = new PasswordResetPublicHandleService(hasher);
         emailSenderService = mock(EmailSenderService.class);
-        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString());
+        doNothing().when(emailSenderService).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
         observability = new AuthSecurityObservability(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         jwtUtil = new JwtUtil();
         ReflectionTestUtils.setField(jwtUtil, "secret", "password-reset-jwt-test-secret-that-is-at-least-32-bytes");
         ReflectionTestUtils.setField(jwtUtil, "expirationTime", 60_000L);
 
-        try (Connection conn = DriverManager.getConnection(
-                "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable", "postgres", "postgres")) {
-            postgresAvailable = true;
+        try {
+            testPort = com.lordgainsborough.restaurant.support.LocalPostgres.requirePort();
+            try (Connection conn = DriverManager.getConnection(
+                    "jdbc:postgresql://127.0.0.1:" + testPort + "/postgres?sslmode=disable", "postgres", "postgres")) {
+                postgresAvailable = true;
+            }
         } catch (Exception e) {
             postgresAvailable = false;
             store = mock(PostgresPasswordResetOtpChallengeStore.class);
@@ -1907,5 +1915,225 @@ public class PostgresPasswordResetOtpPersistenceIntegrationTest {
         } finally {
             properties.setEmailOperationsPerIp(1_000);
         }
+    }
+
+    @Test
+    @Order(54)
+    @DisplayName("54. Account enumeration prevention: Registered vs nonexistent email response sequences are externally indistinguishable")
+    void test54_accountEnumerationIndistinguishableEmail() {
+        requirePostgres();
+        String registeredEmail = "registered.member@example.com";
+        String registeredUserId = "usr-registered-1";
+        String nonexistentEmail = "nonexistent.user@example.com";
+
+        // Step 1: Initial request (both return 202 ACCEPTED with RESET_CODE_SENT, 5 resends remaining)
+        PasswordResetService.Result reg1 = service.requestInitial(
+                registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-step1");
+        PasswordResetService.Result non1 = service.requestInitial(
+                nonexistentEmail, null, null, "192.168.2.2", "idemp-step1");
+
+        assertEquals(HttpStatus.ACCEPTED, reg1.status());
+        assertEquals(HttpStatus.ACCEPTED, non1.status());
+        assertEquals("RESET_CODE_SENT", reg1.body().getCode());
+        assertEquals("RESET_CODE_SENT", non1.body().getCode());
+        assertEquals(reg1.body().getMessage(), non1.body().getMessage());
+        assertEquals(reg1.body().getResendsRemaining(), non1.body().getResendsRemaining());
+        assertNotNull(reg1.body().getChallengeId());
+        assertNotNull(non1.body().getChallengeId());
+
+        // Step 2: Idempotent replay with identical Idempotency-Key within challenge lifetime
+        // Both return 202 ACCEPTED with RESET_CHALLENGE_REUSED, same challenge handle, no new email
+        clock.advance(Duration.ofSeconds(5));
+        PasswordResetService.Result regReplay = service.requestInitial(
+                registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-step1");
+        PasswordResetService.Result nonReplay = service.requestInitial(
+                nonexistentEmail, null, null, "192.168.2.2", "idemp-step1");
+
+        assertEquals(HttpStatus.ACCEPTED, regReplay.status());
+        assertEquals(HttpStatus.ACCEPTED, nonReplay.status());
+        assertEquals("RESET_CHALLENGE_REUSED", regReplay.body().getCode());
+        assertEquals("RESET_CHALLENGE_REUSED", nonReplay.body().getCode());
+        assertEquals(regReplay.body().getMessage(), nonReplay.body().getMessage());
+        assertEquals(reg1.body().getChallengeId(), regReplay.body().getChallengeId());
+        assertEquals(non1.body().getChallengeId(), nonReplay.body().getChallengeId());
+
+        // Step 3: Request with NEW Idempotency-Key during 30s cooldown
+        // Both return 429 TOO_MANY_REQUESTS with RESET_CODE_RESEND_COOLDOWN and matching retryAfterSeconds (25s)
+        PasswordResetService.Result regCooldown = service.requestInitial(
+                registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-step3");
+        PasswordResetService.Result nonCooldown = service.requestInitial(
+                nonexistentEmail, null, null, "192.168.2.2", "idemp-step3");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, regCooldown.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, nonCooldown.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", regCooldown.body().getCode());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", nonCooldown.body().getCode());
+        assertEquals(regCooldown.body().getMessage(), nonCooldown.body().getMessage());
+        assertEquals(25L, regCooldown.retryAfterSeconds());
+        assertEquals(25L, nonCooldown.retryAfterSeconds());
+
+        // Step 4: Advance past cooldown (30s) -> requesting initial with new key delivers new code and returns 202
+        clock.advance(Duration.ofSeconds(30));
+        PasswordResetService.Result regResend = service.requestInitial(
+                registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-step4");
+        PasswordResetService.Result nonResend = service.requestInitial(
+                nonexistentEmail, null, null, "192.168.2.2", "idemp-step4");
+
+        assertEquals(HttpStatus.ACCEPTED, regResend.status());
+        assertEquals(HttpStatus.ACCEPTED, nonResend.status());
+        assertEquals("RESET_CODE_SENT", regResend.body().getCode());
+        assertEquals("RESET_CODE_SENT", nonResend.body().getCode());
+        assertEquals(4, regResend.body().getResendsRemaining());
+        assertEquals(4, nonResend.body().getResendsRemaining());
+
+        // Step 5: Advance past max resends (5 resends total)
+        for (int i = 2; i <= 5; i++) {
+            clock.advance(Duration.ofSeconds(35));
+            service.requestInitial(registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-step-" + i);
+            service.requestInitial(nonexistentEmail, null, null, "192.168.2.2", "idemp-step-" + i);
+        }
+
+        // Step 6: 6th resend attempt exceeds max resends -> both return 429 RESET_CODE_RESEND_LIMIT_REACHED
+        clock.advance(Duration.ofSeconds(35));
+        PasswordResetService.Result regExhausted = service.requestInitial(
+                registeredEmail, registeredUserId, registeredEmail, "192.168.2.1", "idemp-exhausted");
+        PasswordResetService.Result nonExhausted = service.requestInitial(
+                nonexistentEmail, null, null, "192.168.2.2", "idemp-exhausted");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, regExhausted.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, nonExhausted.status());
+        assertEquals("RESET_CODE_RESEND_LIMIT_REACHED", regExhausted.body().getCode());
+        assertEquals("RESET_CODE_RESEND_LIMIT_REACHED", nonExhausted.body().getCode());
+        assertEquals(regExhausted.body().getMessage(), nonExhausted.body().getMessage());
+        assertEquals(regExhausted.retryAfterSeconds(), nonExhausted.retryAfterSeconds());
+    }
+
+    @Test
+    @Order(55)
+    @DisplayName("55. Account enumeration prevention: Registered vs nonexistent phone number response sequences are externally indistinguishable")
+    void test55_accountEnumerationIndistinguishablePhone() {
+        requirePostgres();
+        String registeredPhone = "4165551234";
+        String registeredUserId = "usr-registered-phone-1";
+        String nonexistentPhone = "4165559999";
+
+        // Step 1: Initial request
+        PasswordResetService.Result reg1 = service.requestInitial(
+                registeredPhone, registeredUserId, "member.phone@example.com", "192.168.3.1", "phone-idemp-1");
+        PasswordResetService.Result non1 = service.requestInitial(
+                nonexistentPhone, null, null, "192.168.3.2", "phone-idemp-1");
+
+        assertEquals(HttpStatus.ACCEPTED, reg1.status());
+        assertEquals(HttpStatus.ACCEPTED, non1.status());
+        assertEquals("RESET_CODE_SENT", reg1.body().getCode());
+        assertEquals("RESET_CODE_SENT", non1.body().getCode());
+        assertEquals(reg1.body().getResendsRemaining(), non1.body().getResendsRemaining());
+
+        // Step 2: During cooldown -> 429
+        clock.advance(Duration.ofSeconds(10));
+        PasswordResetService.Result regCooldown = service.requestInitial(
+                registeredPhone, registeredUserId, "member.phone@example.com", "192.168.3.1", "phone-idemp-2");
+        PasswordResetService.Result nonCooldown = service.requestInitial(
+                nonexistentPhone, null, null, "192.168.3.2", "phone-idemp-2");
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, regCooldown.status());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, nonCooldown.status());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", regCooldown.body().getCode());
+        assertEquals("RESET_CODE_RESEND_COOLDOWN", nonCooldown.body().getCode());
+        assertEquals(20L, regCooldown.retryAfterSeconds());
+        assertEquals(20L, nonCooldown.retryAfterSeconds());
+
+        // Step 3: Identical replay -> 202 RESET_CHALLENGE_REUSED
+        PasswordResetService.Result regReplay = service.requestInitial(
+                registeredPhone, registeredUserId, "member.phone@example.com", "192.168.3.1", "phone-idemp-1");
+        PasswordResetService.Result nonReplay = service.requestInitial(
+                nonexistentPhone, null, null, "192.168.3.2", "phone-idemp-1");
+
+        assertEquals(HttpStatus.ACCEPTED, regReplay.status());
+        assertEquals(HttpStatus.ACCEPTED, nonReplay.status());
+        assertEquals("RESET_CHALLENGE_REUSED", regReplay.body().getCode());
+        assertEquals("RESET_CHALLENGE_REUSED", nonReplay.body().getCode());
+    }
+
+    @Test
+    @Order(56)
+    @DisplayName("56. Fake-clock: Remaining session lifetimes of 15m, 9m, 3m, and 30s enforce bounded OTP validity and server-side expiry")
+    void test56_fakeClockRemainingSessionLifetimesAndAccurateValidity() {
+        requirePostgres();
+        org.mockito.ArgumentCaptor<Duration> validityCaptor = org.mockito.ArgumentCaptor.forClass(Duration.class);
+        org.mockito.Mockito.reset(emailSenderService);
+
+        // Start fresh challenge at T=0 (challenge TTL = 30m)
+        PasswordResetService.Result init = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.4.1", "idemp-session-init");
+        assertEquals(HttpStatus.ACCEPTED, init.status());
+        String handle = init.body().getChallengeId();
+
+        // 1. Session lifetime remaining: 15 minutes (advance 15 minutes)
+        // 15m remaining > 10m code TTL -> code valid for 10 minutes
+        clock.advance(Duration.ofMinutes(15));
+        PasswordResetService.Result res15m = service.resend(
+                TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-15m");
+        assertEquals(HttpStatus.ACCEPTED, res15m.status());
+        assertEquals(Duration.ofMinutes(10), Duration.between(clock.instant(), res15m.body().getCodeExpiresAt()));
+        verify(emailSenderService, atLeastOnce()).sendPasswordResetCodeEmail(
+                eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
+        assertEquals("10 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
+
+        // 2. Session lifetime remaining: 9 minutes (advance 6 minutes, clock at 21m)
+        // 9m remaining < 10m code TTL -> code expires at parent challenge deadline (9m)
+        clock.advance(Duration.ofMinutes(6));
+        org.mockito.Mockito.reset(emailSenderService);
+        PasswordResetService.Result res9m = service.resend(
+                TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-9m");
+        assertEquals(HttpStatus.ACCEPTED, res9m.status());
+        assertEquals(Duration.ofMinutes(9), Duration.between(clock.instant(), res9m.body().getCodeExpiresAt()));
+        verify(emailSenderService).sendPasswordResetCodeEmail(
+                eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
+        assertEquals("9 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
+
+        // 3. Session lifetime remaining: 3 minutes (advance 6 minutes, clock at 27m)
+        // 3m remaining < 10m code TTL -> code expires at parent challenge deadline (3m)
+        clock.advance(Duration.ofMinutes(6));
+        org.mockito.Mockito.reset(emailSenderService);
+        PasswordResetService.Result res3m = service.resend(
+                TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-3m");
+        assertEquals(HttpStatus.ACCEPTED, res3m.status());
+        assertEquals(Duration.ofMinutes(3), Duration.between(clock.instant(), res3m.body().getCodeExpiresAt()));
+        verify(emailSenderService).sendPasswordResetCodeEmail(
+                eq(TEST_USER_EMAIL), anyString(), anyString(), validityCaptor.capture());
+        assertEquals("3 minutes", EmailSenderService.formatValidity(validityCaptor.getValue()));
+
+        // 4. Session lifetime remaining: 30 seconds (advance 2m 30s, clock at 29m 30s)
+        // 30s remaining < 1m min remaining challenge lifetime -> rejected with 410 RESET_CHALLENGE_EXPIRED
+        clock.advance(Duration.ofMinutes(2).plusSeconds(30));
+        PasswordResetService.Result res30s = service.resend(
+                TEST_USER_EMAIL, handle, "192.168.4.1", "idemp-resend-30s");
+        assertEquals(HttpStatus.GONE, res30s.status());
+        assertEquals("RESET_CHALLENGE_EXPIRED", res30s.body().getCode());
+    }
+
+    @Test
+    @Order(57)
+    @DisplayName("57. Misleading challenge reuse fix: RESET_CHALLENGE_REUSED recorded in telemetry and returned truthfully without false code dispatch")
+    void test57_misleadingChallengeReuseFix() {
+        requirePostgres();
+        org.mockito.Mockito.reset(emailSenderService);
+
+        // Initial request dispatches code
+        PasswordResetService.Result init = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.5.1", "idemp-truthful-init");
+        assertEquals(HttpStatus.ACCEPTED, init.status());
+        assertEquals("RESET_CODE_SENT", init.body().getCode());
+        verify(emailSenderService, times(1)).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
+
+        // Replay with identical idempotency key returns RESET_CHALLENGE_REUSED, dispatches NO email
+        org.mockito.Mockito.reset(emailSenderService);
+        PasswordResetService.Result replay = service.requestInitial(
+                TEST_USER_EMAIL, TEST_USER_ID, TEST_USER_EMAIL, "192.168.5.1", "idemp-truthful-init");
+        assertEquals(HttpStatus.ACCEPTED, replay.status());
+        assertEquals("RESET_CHALLENGE_REUSED", replay.body().getCode());
+        assertEquals("If an account exists for that email, a reset code was already sent.", replay.body().getMessage());
+        verify(emailSenderService, never()).sendPasswordResetCodeEmail(anyString(), anyString(), anyString(), any());
     }
 }

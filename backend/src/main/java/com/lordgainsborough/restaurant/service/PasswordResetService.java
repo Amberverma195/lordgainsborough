@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
 
 @Service
@@ -26,12 +28,68 @@ public class PasswordResetService {
 
     private static final String GENERIC_SEND_MESSAGE =
             "If an account exists for that email, a reset code has been sent.";
+    private static final String GENERIC_REUSED_MESSAGE =
+            "If an account exists for that email, a reset code was already sent.";
     private static final Pattern STRICT_CODE = Pattern.compile("\\d{6}");
     private static final Pattern LOWERCASE = Pattern.compile("[a-z]");
     private static final Pattern UPPERCASE = Pattern.compile("[A-Z]");
     private static final Pattern NUMBER = Pattern.compile("\\d");
     private static final Pattern SPECIAL =
             Pattern.compile("[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?`~]");
+
+    static final class ShadowChallenge {
+        private final String challengeId;
+        private final String emailKey;
+        private volatile String clientIdempotencyKey;
+        private volatile Instant nextResendAt;
+        private volatile Instant codeExpiresAt;
+        private final Instant challengeExpiresAt;
+        private volatile int resendCount;
+
+        ShadowChallenge(
+                String challengeId,
+                String emailKey,
+                String clientIdempotencyKey,
+                Instant nextResendAt,
+                Instant codeExpiresAt,
+                Instant challengeExpiresAt,
+                int resendCount) {
+            this.challengeId = challengeId;
+            this.emailKey = emailKey;
+            this.clientIdempotencyKey = clientIdempotencyKey;
+            this.nextResendAt = nextResendAt;
+            this.codeExpiresAt = codeExpiresAt;
+            this.challengeExpiresAt = challengeExpiresAt;
+            this.resendCount = resendCount;
+        }
+
+        public String getChallengeId() { return challengeId; }
+        public String getEmailKey() { return emailKey; }
+        public String getClientIdempotencyKey() { return clientIdempotencyKey; }
+        public void setClientIdempotencyKey(String clientIdempotencyKey) { this.clientIdempotencyKey = clientIdempotencyKey; }
+        public Instant getNextResendAt() { return nextResendAt; }
+        public void setNextResendAt(Instant nextResendAt) { this.nextResendAt = nextResendAt; }
+        public Instant getCodeExpiresAt() { return codeExpiresAt; }
+        public void setCodeExpiresAt(Instant codeExpiresAt) { this.codeExpiresAt = codeExpiresAt; }
+        public Instant getChallengeExpiresAt() { return challengeExpiresAt; }
+        public int getResendCount() { return resendCount; }
+        public void setResendCount(int resendCount) { this.resendCount = resendCount; }
+    }
+
+    private final ConcurrentMap<String, ShadowChallenge> shadowChallenges = new ConcurrentHashMap<>();
+
+    private Optional<ShadowChallenge> getActiveShadow(String emailKey, Instant now) {
+        ShadowChallenge shadow = shadowChallenges.get(emailKey);
+        if (shadow == null) {
+            return Optional.empty();
+        }
+        if (shadow.getChallengeExpiresAt() == null
+                || !shadow.getChallengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
+            shadowChallenges.remove(emailKey, shadow);
+            return Optional.empty();
+        }
+        return Optional.of(shadow);
+    }
 
     private final PasswordResetOtpChallengePersistence persistence;
     private final PasswordResetAbuseLimiter abuseLimiter;
@@ -96,20 +154,23 @@ public class PasswordResetService {
         }
 
         Optional<PasswordResetOtpChallenge> current = persistence.findByEmailKey(emailKey);
+        Optional<ShadowChallenge> shadow = getActiveShadow(emailKey, now);
         String normalizedIdempotency = normalizeIdempotencyKey(idempotencyKey);
 
+        // 1. Replay with identical idempotency key on active challenge
         if (userId != null && current.isPresent()
                 && normalizedIdempotency.equals(current.get().getClientIdempotencyKey())
                 && current.get().getStatus() != PasswordResetChallengeStatus.CONSUMED
                 && current.get().getChallengeExpiresAt() != null
                 && current.get().getChallengeExpiresAt().isAfter(now.plus(properties.getMinRemainingChallengeLifetime()))) {
-            observability.record(
-                    AuthSecurityObservability.Flow.PASSWORD_RESET,
-                    AuthSecurityObservability.Outcome.SUCCESS,
-                    AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
-            return accepted(current.get(), now);
+            return acceptedReused(current.get(), now);
+        }
+        if (userId == null && shadow.isPresent()
+                && normalizedIdempotency.equals(shadow.get().getClientIdempotencyKey())) {
+            return acceptedShadowReused(shadow.get(), now);
         }
 
+        // 2. Active challenge resend / cooldown / limit handling
         if (userId != null && current.isPresent()
                 && current.get().getStatus() == PasswordResetChallengeStatus.ACTIVE
                 && current.get().getChallengeExpiresAt() != null
@@ -136,6 +197,31 @@ public class PasswordResetService {
             }
         }
 
+        if (userId == null && shadow.isPresent()) {
+            ShadowChallenge active = shadow.get();
+            if (active.getNextResendAt() != null && active.getNextResendAt().isAfter(now)) {
+                return cooldown(active, now);
+            }
+            if (active.getResendCount() >= properties.getMaxResends()) {
+                return resendLimit(active, now);
+            }
+            // Match the dominant local cryptographic work of a real challenge resend
+            persistence.digestCode(generateCode());
+            active.setResendCount(active.getResendCount() + 1);
+            active.setNextResendAt(now.plus(properties.getResendCooldown()));
+            Instant cappedCodeExpiry = active.getChallengeExpiresAt() != null && now.plus(properties.getCodeTtl()).isAfter(active.getChallengeExpiresAt())
+                    ? active.getChallengeExpiresAt()
+                    : now.plus(properties.getCodeTtl());
+            active.setCodeExpiresAt(cappedCodeExpiry);
+            active.setClientIdempotencyKey(normalizedIdempotency);
+            observability.record(
+                    AuthSecurityObservability.Flow.PASSWORD_RESET,
+                    AuthSecurityObservability.Outcome.SUCCESS,
+                    AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
+            return acceptedShadow(active, now);
+        }
+
+        // 3. New challenge creation (when no active challenge exists)
         OptionalLong challengeLimit = abuseLimiter.consumeNewChallenge(emailKey);
         if (challengeLimit.isPresent()) {
             return rateLimited(challengeLimit.getAsLong(), now);
@@ -148,7 +234,16 @@ public class PasswordResetService {
                     AuthSecurityObservability.Flow.PASSWORD_RESET,
                     AuthSecurityObservability.Outcome.SUCCESS,
                     AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
-            return acceptedShadow(emailKey, now, 0);
+            ShadowChallenge newShadow = new ShadowChallenge(
+                    UUID.randomUUID().toString(),
+                    emailKey,
+                    normalizedIdempotency,
+                    now.plus(properties.getResendCooldown()),
+                    now.plus(properties.getCodeTtl()),
+                    now.plus(properties.getChallengeTtl()),
+                    0);
+            shadowChallenges.put(emailKey, newShadow);
+            return acceptedShadow(newShadow, now);
         }
 
         String rawCode = generateCode();
@@ -164,13 +259,7 @@ public class PasswordResetService {
                 persistence.tryCreateOrReplaceExpired(challenge, now);
         if (reserved.isEmpty()) {
             return persistence.findByEmailKey(emailKey)
-                    .map(existing -> {
-                        observability.record(
-                                AuthSecurityObservability.Flow.PASSWORD_RESET,
-                                AuthSecurityObservability.Outcome.SUCCESS,
-                                AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
-                        return accepted(existing, now);
-                    })
+                    .map(existing -> acceptedReused(existing, now))
                     .orElseGet(() -> acceptedShadow(emailKey, now, 0));
         }
 
@@ -203,7 +292,7 @@ public class PasswordResetService {
 
         PasswordResetOtpChallenge challenge = found.get();
         if (key.equals(challenge.getClientIdempotencyKey())) {
-            return accepted(challenge, now);
+            return acceptedReused(challenge, now);
         }
         Result stateDenial = resendStateDenial(challenge, now);
         if (stateDenial != null) {
@@ -213,7 +302,7 @@ public class PasswordResetService {
         if (abuseLimiter.reserveIdempotency(emailKey, challenge.getChallengeId(), key)) {
             PasswordResetOtpChallenge replay = persistence.find(emailKey, challenge.getChallengeId())
                     .orElse(challenge);
-            return accepted(replay, now);
+            return acceptedReused(replay, now);
         }
 
         OptionalLong operationLimit = abuseLimiter.consumeEmailOperation(clientIp);
@@ -234,7 +323,7 @@ public class PasswordResetService {
             PasswordResetOtpChallenge latest = persistence.find(emailKey, challenge.getChallengeId())
                     .orElse(challenge);
             if (key.equals(latest.getClientIdempotencyKey())) {
-                return accepted(latest, now);
+                return acceptedReused(latest, now);
             }
             Result denial = resendStateDenial(latest, now);
             return denial == null ? cooldown(latest, now) : denial;
@@ -401,10 +490,14 @@ public class PasswordResetService {
 
     private void deliver(String recipient, String rawCode, PasswordResetOtpChallenge challenge) {
         try {
+            Duration validity = challenge.getCodeExpiresAt() != null
+                    ? Duration.between(persistence.now(), challenge.getCodeExpiresAt())
+                    : properties.getCodeTtl();
             emailSenderService.sendPasswordResetCodeEmail(
                     recipient,
                     rawCode,
-                    challenge.getSendOperationId());
+                    challenge.getSendOperationId(),
+                    validity);
             persistence.markSendOutcome(
                     challenge.getEmailKey(),
                     challenge.getSendOperationId(),
@@ -485,19 +578,37 @@ public class PasswordResetService {
         }
         if (abuseLimiter.reserveIdempotency(
                 handle.emailKey(), handle.internalChallengeId(), idempotencyKey)) {
-            return acceptedShadowHandle(handle, now);
+            return acceptedShadowReused(handle, now);
         }
         OptionalLong operationLimit = abuseLimiter.consumeEmailOperation(clientIp);
         if (operationLimit.isPresent()) {
             return rateLimited(operationLimit.getAsLong(), now);
         }
+        persistence.digestCode(generateCode());
+        Instant nextResend = now.plus(properties.getResendCooldown());
         PasswordResetPublicHandleService.Handle rotated =
                 new PasswordResetPublicHandleService.Handle(
                         handle.internalChallengeId(),
                         handle.emailKey(),
-                        now.plus(properties.getResendCooldown()),
+                        nextResend,
                         handle.challengeExpiresAt(),
                         handle.resendCount() + 1);
+
+        ShadowChallenge shadow = shadowChallenges.get(handle.emailKey());
+        if (shadow != null && shadow.getChallengeId().equals(handle.internalChallengeId())) {
+            shadow.setResendCount(rotated.resendCount());
+            shadow.setNextResendAt(rotated.nextResendAt());
+            Instant cappedExpiry = shadow.getChallengeExpiresAt() != null && now.plus(properties.getCodeTtl()).isAfter(shadow.getChallengeExpiresAt())
+                    ? shadow.getChallengeExpiresAt()
+                    : now.plus(properties.getCodeTtl());
+            shadow.setCodeExpiresAt(cappedExpiry);
+            shadow.setClientIdempotencyKey(idempotencyKey);
+        }
+
+        observability.record(
+                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.RESET_SHADOW_CHALLENGE);
         return acceptedShadowHandle(rotated, now);
     }
 
@@ -540,15 +651,74 @@ public class PasswordResetService {
         return new Result(HttpStatus.ACCEPTED, response, 0L);
     }
 
+    private Result acceptedReused(PasswordResetOtpChallenge challenge, Instant now) {
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CHALLENGE_REUSED",
+                GENERIC_REUSED_MESSAGE,
+                now);
+        response.setChallengeId(publicHandle(challenge));
+        response.setNextResendAt(challenge.getNextResendAt());
+        response.setCodeExpiresAt(challenge.getCodeExpiresAt());
+        response.setChallengeExpiresAt(challenge.getChallengeExpiresAt());
+        response.setResendsRemaining(Math.max(
+                0,
+                properties.getMaxResends() - challenge.getResendCount()));
+        observability.record(
+                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
+        return new Result(HttpStatus.ACCEPTED, response, 0L);
+    }
+
+    private Result acceptedShadow(ShadowChallenge shadow, Instant now) {
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CODE_SENT",
+                GENERIC_SEND_MESSAGE,
+                now);
+        response.setChallengeId(publicHandle(shadow));
+        response.setNextResendAt(shadow.getNextResendAt());
+        response.setCodeExpiresAt(shadow.getCodeExpiresAt());
+        response.setChallengeExpiresAt(shadow.getChallengeExpiresAt());
+        response.setResendsRemaining(Math.max(
+                0,
+                properties.getMaxResends() - shadow.getResendCount()));
+        observability.record(
+                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.RESET_CODE_SENT);
+        return new Result(HttpStatus.ACCEPTED, response, 0L);
+    }
+
+    private Result acceptedShadowReused(ShadowChallenge shadow, Instant now) {
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CHALLENGE_REUSED",
+                GENERIC_REUSED_MESSAGE,
+                now);
+        response.setChallengeId(publicHandle(shadow));
+        response.setNextResendAt(shadow.getNextResendAt());
+        response.setCodeExpiresAt(shadow.getCodeExpiresAt());
+        response.setChallengeExpiresAt(shadow.getChallengeExpiresAt());
+        response.setResendsRemaining(Math.max(
+                0,
+                properties.getMaxResends() - shadow.getResendCount()));
+        observability.record(
+                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
+        return new Result(HttpStatus.ACCEPTED, response, 0L);
+    }
+
     private Result acceptedShadow(String emailKey, Instant now, int resendCount) {
-        PasswordResetPublicHandleService.Handle handle =
-                new PasswordResetPublicHandleService.Handle(
-                        UUID.randomUUID().toString(),
-                        emailKey,
-                        now.plus(properties.getResendCooldown()),
-                        now.plus(properties.getChallengeTtl()),
-                        resendCount);
-        return acceptedShadowHandle(handle, now);
+        ShadowChallenge shadow = new ShadowChallenge(
+                UUID.randomUUID().toString(),
+                emailKey,
+                UUID.randomUUID().toString(),
+                now.plus(properties.getResendCooldown()),
+                now.plus(properties.getCodeTtl()),
+                now.plus(properties.getChallengeTtl()),
+                resendCount);
+        shadowChallenges.put(emailKey, shadow);
+        return acceptedShadow(shadow, now);
     }
 
     private Result acceptedShadowHandle(
@@ -560,7 +730,10 @@ public class PasswordResetService {
                 now);
         response.setChallengeId(handleService.issue(handle));
         response.setNextResendAt(handle.nextResendAt());
-        response.setCodeExpiresAt(now.plus(properties.getCodeTtl()));
+        Instant cappedCodeExpiry = handle.challengeExpiresAt() != null && now.plus(properties.getCodeTtl()).isAfter(handle.challengeExpiresAt())
+                ? handle.challengeExpiresAt()
+                : now.plus(properties.getCodeTtl());
+        response.setCodeExpiresAt(cappedCodeExpiry);
         response.setChallengeExpiresAt(handle.challengeExpiresAt());
         response.setResendsRemaining(Math.max(
                 0,
@@ -572,6 +745,30 @@ public class PasswordResetService {
         return new Result(HttpStatus.ACCEPTED, response, 0L);
     }
 
+    private Result acceptedShadowReused(
+            PasswordResetPublicHandleService.Handle handle,
+            Instant now) {
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CHALLENGE_REUSED",
+                GENERIC_REUSED_MESSAGE,
+                now);
+        response.setChallengeId(handleService.issue(handle));
+        response.setNextResendAt(handle.nextResendAt());
+        Instant cappedCodeExpiry = handle.challengeExpiresAt() != null && now.plus(properties.getCodeTtl()).isAfter(handle.challengeExpiresAt())
+                ? handle.challengeExpiresAt()
+                : now.plus(properties.getCodeTtl());
+        response.setCodeExpiresAt(cappedCodeExpiry);
+        response.setChallengeExpiresAt(handle.challengeExpiresAt());
+        response.setResendsRemaining(Math.max(
+                0,
+                properties.getMaxResends() - handle.resendCount()));
+        observability.record(
+                AuthSecurityObservability.Flow.PASSWORD_RESET,
+                AuthSecurityObservability.Outcome.SUCCESS,
+                AuthSecurityObservability.Reason.RESET_CHALLENGE_REUSED);
+        return new Result(HttpStatus.ACCEPTED, response, 0L);
+    }
+
     private String publicHandle(PasswordResetOtpChallenge challenge) {
         return handleService.issue(new PasswordResetPublicHandleService.Handle(
                 challenge.getChallengeId(),
@@ -579,6 +776,15 @@ public class PasswordResetService {
                 challenge.getNextResendAt(),
                 challenge.getChallengeExpiresAt(),
                 challenge.getResendCount()));
+    }
+
+    private String publicHandle(ShadowChallenge shadow) {
+        return handleService.issue(new PasswordResetPublicHandleService.Handle(
+                shadow.getChallengeId(),
+                shadow.getEmailKey(),
+                shadow.getNextResendAt(),
+                shadow.getChallengeExpiresAt(),
+                shadow.getResendCount()));
     }
 
     private Result cooldown(PasswordResetOtpChallenge challenge, Instant now) {
@@ -593,6 +799,24 @@ public class PasswordResetService {
         return new Result(HttpStatus.TOO_MANY_REQUESTS, response, retry);
     }
 
+    private Result cooldown(ShadowChallenge shadow, Instant now) {
+        recordResetSendDenied();
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CODE_RESEND_COOLDOWN",
+                "Please wait before requesting another reset code.",
+                now);
+        response.setChallengeId(publicHandle(shadow));
+        response.setNextResendAt(shadow.getNextResendAt());
+        response.setCodeExpiresAt(shadow.getCodeExpiresAt());
+        response.setChallengeExpiresAt(shadow.getChallengeExpiresAt());
+        response.setResendsRemaining(Math.max(
+                0,
+                properties.getMaxResends() - shadow.getResendCount()));
+        long retry = retryAfter(now, shadow.getNextResendAt());
+        response.setRetryAfterSeconds(retry);
+        return new Result(HttpStatus.TOO_MANY_REQUESTS, response, retry);
+    }
+
     private Result cooldown(PasswordResetPublicHandleService.Handle handle, Instant now) {
         recordResetSendDenied();
         PasswordResetResponse response = PasswordResetResponse.of(
@@ -601,6 +825,10 @@ public class PasswordResetService {
                 now);
         response.setChallengeId(handleService.issue(handle));
         response.setNextResendAt(handle.nextResendAt());
+        Instant cappedCodeExpiry = handle.challengeExpiresAt() != null && now.plus(properties.getCodeTtl()).isAfter(handle.challengeExpiresAt())
+                ? handle.challengeExpiresAt()
+                : now.plus(properties.getCodeTtl());
+        response.setCodeExpiresAt(cappedCodeExpiry);
         response.setChallengeExpiresAt(handle.challengeExpiresAt());
         response.setResendsRemaining(Math.max(
                 0,
@@ -618,6 +846,20 @@ public class PasswordResetService {
                 challenge,
                 now);
         long retry = retryAfter(now, challenge.getChallengeExpiresAt());
+        response.setRetryAfterSeconds(retry);
+        return new Result(HttpStatus.TOO_MANY_REQUESTS, response, retry);
+    }
+
+    private Result resendLimit(ShadowChallenge shadow, Instant now) {
+        recordResetSendDenied();
+        PasswordResetResponse response = PasswordResetResponse.of(
+                "RESET_CODE_RESEND_LIMIT_REACHED",
+                "No more reset codes can be sent for this reset attempt.",
+                now);
+        response.setChallengeId(publicHandle(shadow));
+        response.setChallengeExpiresAt(shadow.getChallengeExpiresAt());
+        response.setResendsRemaining(0);
+        long retry = retryAfter(now, shadow.getChallengeExpiresAt());
         response.setRetryAfterSeconds(retry);
         return new Result(HttpStatus.TOO_MANY_REQUESTS, response, retry);
     }

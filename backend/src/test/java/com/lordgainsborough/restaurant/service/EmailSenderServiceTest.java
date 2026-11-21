@@ -140,6 +140,44 @@ class EmailSenderServiceTest {
     }
 
     @Test
+    void sendPasswordResetCodeEmail_WithDifferentLifetimes_FormatsTemplatesAccurately() {
+        when(resendEmailService.isConfigured()).thenReturn(true);
+
+        // 9 minutes validity
+        emailSenderService.sendPasswordResetCodeEmail(
+                "reset9@example.com", "999001", "op-9m", java.time.Duration.ofMinutes(9));
+        verify(resendEmailService).sendEmail(
+                eq("reset9@example.com"),
+                eq("Lord Gainsborough - Password Reset Code"),
+                contains("This code is valid for 9 minutes."),
+                contains("This code expires in 9 minutes."),
+                eq("op-9m")
+        );
+
+        // 3 minutes validity
+        emailSenderService.sendPasswordResetCodeEmail(
+                "reset3@example.com", "333001", "op-3m", java.time.Duration.ofMinutes(3));
+        verify(resendEmailService).sendEmail(
+                eq("reset3@example.com"),
+                eq("Lord Gainsborough - Password Reset Code"),
+                contains("This code is valid for 3 minutes."),
+                contains("This code expires in 3 minutes."),
+                eq("op-3m")
+        );
+
+        // 30 seconds validity
+        emailSenderService.sendPasswordResetCodeEmail(
+                "reset30s@example.com", "300001", "op-30s", java.time.Duration.ofSeconds(30));
+        verify(resendEmailService).sendEmail(
+                eq("reset30s@example.com"),
+                eq("Lord Gainsborough - Password Reset Code"),
+                contains("This code is valid for 30 seconds."),
+                contains("This code expires in 30 seconds."),
+                eq("op-30s")
+        );
+    }
+
+    @Test
     void isConfigured_DelegatesToResendEmailService() {
         when(resendEmailService.isConfigured()).thenReturn(true);
         assertTrue(emailSenderService.isConfigured());

@@ -137,10 +137,11 @@ export default function LoginPage() {
     () => false
   );
 
+  const [backendChallengeExpired, setBackendChallengeExpired] = useState(false);
   const loginCooldownSeconds = remainingServerCooldownSeconds(loginCooldown, nowTick);
   const resetCooldownSec = passwordResetCooldownSeconds(challenge, nowTick);
   const rateCooldownSec = remainingServerCooldownSeconds(rateCooldown, nowTick);
-  const challengeExpired = isPasswordResetChallengeExpired(challenge, nowTick);
+  const challengeExpired = backendChallengeExpired || isPasswordResetChallengeExpired(challenge, nowTick);
   const resendExhausted = isPasswordResetResendExhausted(challenge);
 
   const abortInFlightRequests = useCallback(() => {
@@ -600,10 +601,18 @@ export default function LoginPage() {
         publishCrossTab(nextChallenge, 'challenge-updated');
       }
 
-      if (res.ok && body.code === 'RESET_CODE_SENT') {
+      if (res.ok && (body.code === 'RESET_CODE_SENT' || body.code === 'RESET_CHALLENGE_REUSED')) {
         setResetOtp('');
-        setSuccess('If the reset request is still valid, a new code has been sent.');
+        setSuccess(
+          body.message ||
+            (body.code === 'RESET_CHALLENGE_REUSED'
+              ? 'If an account exists for that email, a reset code was already sent.'
+              : 'If the reset request is still valid, a new code has been sent.')
+        );
         return;
+      }
+      if (body.code === 'RESET_CHALLENGE_EXPIRED' || res.status === 410) {
+        setBackendChallengeExpired(true);
       }
       setCodedResetError(body.code, retrySeconds);
     } catch {
@@ -703,7 +712,14 @@ export default function LoginPage() {
         setRateCooldown(createServerCooldown(retrySeconds, body.serverTime));
       }
 
-      applyPasswordResetResponse(current, current.email, body, retrySeconds);
+      const nextChallenge = applyPasswordResetResponse(current, current.email, body, retrySeconds);
+      if (nextChallenge) {
+        updateChallenge(nextChallenge);
+        publishCrossTab(nextChallenge, 'challenge-updated');
+      }
+      if (body.code === 'RESET_CHALLENGE_EXPIRED' || res.status === 410) {
+        setBackendChallengeExpired(true);
+      }
       setCodedResetError(body.code, retrySeconds);
     } catch {
       if (abortController.signal.aborted || currentGen !== requestGenerationRef.current) {
@@ -725,6 +741,7 @@ export default function LoginPage() {
   // Start New Reset on Challenge Expiry or explicit restart
   const handleStartNewReset = () => {
     abortInFlightRequests();
+    setBackendChallengeExpired(false);
     const prevChallenge = challengeRef.current;
     if (prevChallenge?.challengeId) {
       abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
@@ -744,6 +761,7 @@ export default function LoginPage() {
   // Exit Recovery back to Login Identifier
   const returnToLogin = () => {
     abortInFlightRequests();
+    setBackendChallengeExpired(false);
     const prevChallenge = challengeRef.current;
     if (prevChallenge?.challengeId) {
       abandonedChallengeIdsRef.current.add(prevChallenge.challengeId);
@@ -774,6 +792,7 @@ export default function LoginPage() {
 
   const setCodedResetError = (code: PasswordResetCode | undefined, retrySeconds: number) => {
     if (code === 'RESET_CHALLENGE_EXPIRED') {
+      setBackendChallengeExpired(true);
       setError('This password reset session has expired. Please start again.');
     } else if (code === 'RESET_CODE_RESEND_LIMIT_REACHED') {
       setError('No more codes can be sent for this reset request. Please start again.');

@@ -2,6 +2,7 @@ import { readJsonObject } from './authSecurity';
 
 export type PasswordResetCode =
   | 'RESET_CODE_SENT'
+  | 'RESET_CHALLENGE_REUSED'
   | 'RESET_CODE_RESEND_COOLDOWN'
   | 'RESET_CODE_RESEND_LIMIT_REACHED'
   | 'RESET_CHALLENGE_EXPIRED'
@@ -95,6 +96,14 @@ export function applyPasswordResetResponse(
       ? new Date(serverTimeMs + retryAfterSeconds * 1000).toISOString()
       : undefined;
 
+  const isExpired = body.code === 'RESET_CHALLENGE_EXPIRED';
+  const effectiveChallengeExpiresAt = isExpired
+    ? new Date(0).toISOString()
+    : (body.challengeExpiresAt ?? previous?.challengeExpiresAt);
+  const effectiveCodeExpiresAt = isExpired
+    ? new Date(0).toISOString()
+    : (body.codeExpiresAt ?? previous?.codeExpiresAt);
+
   return {
     email: email.trim().toLowerCase(),
     challengeId,
@@ -102,8 +111,8 @@ export function applyPasswordResetResponse(
     nextResendAt: body.nextResendAt
       ?? derivedNextResendAt
       ?? previous?.nextResendAt,
-    codeExpiresAt: body.codeExpiresAt ?? previous?.codeExpiresAt,
-    challengeExpiresAt: body.challengeExpiresAt ?? previous?.challengeExpiresAt,
+    codeExpiresAt: effectiveCodeExpiresAt,
+    challengeExpiresAt: effectiveChallengeExpiresAt,
     resendsRemaining: optionalNonNegativeNumber(body.resendsRemaining)
       ?? previous?.resendsRemaining,
     retryAfterSeconds: retryAfterSeconds > 0
