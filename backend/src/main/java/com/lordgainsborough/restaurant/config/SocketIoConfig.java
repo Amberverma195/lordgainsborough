@@ -105,7 +105,8 @@ public class SocketIoConfig {
                                     });
                             return;
                         }
-                        grant = authorization.authorize(null, role, null, null, ip).orElse(null);
+                        denyConnection(client);
+                        return;
                     }
                     if (grant == null || !Objects.equals(grant.orderId(), orderId)
                             || grant.kitchen() != SocketOrderAuthorizationService.isKitchenRole(role)) {

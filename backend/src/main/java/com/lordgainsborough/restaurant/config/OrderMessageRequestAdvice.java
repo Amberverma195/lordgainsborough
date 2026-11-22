@@ -3,6 +3,7 @@ package com.lordgainsborough.restaurant.config;
 import com.lordgainsborough.restaurant.controller.KdsController;
 import com.lordgainsborough.restaurant.controller.OrderController;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
+import com.lordgainsborough.restaurant.security.RoleAccess;
 import com.lordgainsborough.restaurant.service.*;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.*;
@@ -66,7 +67,16 @@ public class OrderMessageRequestAdvice extends RequestBodyAdviceAdapter {
         String id = (String) variables.get("id");
         boolean isKitchen = parameter.getContainingClass() == KdsController.class;
         if (isKitchen) {
-            if (!kitchen.isRequestAllowed(request)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+            String authorization = request.getHeader("Authorization");
+            boolean allowed = false;
+            if (authorization != null && authorization.startsWith("Bearer ")) {
+                String token = authorization.substring(7);
+                if (access.getJwtUtil().validateToken(token)) {
+                    allowed = access.getIdentityStore().authenticate(token, access.getJwtUtil())
+                            .filter(u -> RoleAccess.canAccessKds(u.getRole())).isPresent();
+                }
+            }
+            if (!allowed) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         } else {
             String authorization = request.getHeader("Authorization");
             String tracking = request.getHeader(OrderAccessService.TRACKING_TOKEN_HEADER);

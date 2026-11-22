@@ -89,7 +89,7 @@ public class SocketOrderAuthorizationService {
                     return true;
                 }
             }
-            return kitchenAllowed(clientIp);
+            return false;
         } catch (RuntimeException failure) {
             log.warn("Socket kitchen authorization check failed");
             return false;

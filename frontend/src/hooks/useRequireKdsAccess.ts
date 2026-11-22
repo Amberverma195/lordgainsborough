@@ -17,9 +17,8 @@ export type KdsAccessState = {
  * Validates whether current visitor can access the Kitchen Display System.
  * - Authenticated ADMIN: Allowed
  * - Authenticated STAFF: Allowed
- * - In-store IP allowlist: Allowed
- * - Unauthenticated: Returns 'unauthenticated' (prompts login)
  * - Ordinary customer: Returns 'forbidden' (access restricted)
+ * - Unauthenticated: Returns 'unauthenticated' (prompts login)
  * - Connection failure: Returns 'error' with retry option
  */
 export function useRequireKdsAccess(): KdsAccessState {

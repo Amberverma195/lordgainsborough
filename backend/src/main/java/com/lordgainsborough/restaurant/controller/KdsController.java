@@ -62,9 +62,6 @@ public class KdsController {
                         .filter(u -> RoleAccess.canAccessKds(u.getRole())).isPresent();
             }
         }
-        if (!authorized && kdsAccessService.isRequestAllowed(request)) {
-            authorized = true;
-        }
         if (!authorized) {
             return ResponseEntity.notFound().build();
         }

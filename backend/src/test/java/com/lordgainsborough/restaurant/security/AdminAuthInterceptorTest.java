@@ -35,21 +35,9 @@ class AdminAuthInterceptorTest {
     }
 
     @Test
-    void allowsOperationalKdsWhenIpAllowed() {
+    void rejectsOperationalKdsWithoutAuthentication() {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
         MockHttpServletResponse response = new MockHttpServletResponse();
-        when(kdsAccessService.isRequestAllowed(any())).thenReturn(true);
-
-        assertTrue(interceptor.preHandle(request, response, new Object()));
-        assertEquals(200, response.getStatus());
-        verifyNoInteractions(jwtUtil, userRepository);
-    }
-
-    @Test
-    void rejectsOperationalKdsWhenIpDenied() {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/access");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
 
         assertFalse(interceptor.preHandle(request, response, new Object()));
         assertEquals(404, response.getStatus());
@@ -129,7 +117,7 @@ class AdminAuthInterceptorTest {
     }
 
     @Test
-    void allowsAdminOnOperationalKdsEvenWhenIpDenied() {
+    void allowsAdminOnOperationalKds() {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
         request.addHeader("Authorization", "Bearer admin-token");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -137,7 +125,6 @@ class AdminAuthInterceptorTest {
         User admin = new User();
         admin.setRole("ADMIN");
 
-        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
         when(jwtUtil.validateToken("admin-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("admin-token")).thenReturn("admin@example.com");
         when(userRepository.findByEmailIgnoreCase("admin@example.com")).thenReturn(Optional.of(admin));
@@ -148,7 +135,7 @@ class AdminAuthInterceptorTest {
     }
 
     @Test
-    void allowsStaffOnOperationalKdsEvenWhenIpDenied() {
+    void allowsStaffOnOperationalKds() {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
         request.addHeader("Authorization", "Bearer staff-token");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -156,7 +143,6 @@ class AdminAuthInterceptorTest {
         User staff = new User();
         staff.setRole("STAFF");
 
-        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
         when(jwtUtil.validateToken("staff-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("staff-token")).thenReturn("staff@example.com");
         when(userRepository.findByEmailIgnoreCase("staff@example.com")).thenReturn(Optional.of(staff));
@@ -167,7 +153,7 @@ class AdminAuthInterceptorTest {
     }
 
     @Test
-    void rejectsCustomerOnOperationalKdsWhenIpDenied() {
+    void rejectsCustomerOnOperationalKds() {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
         request.addHeader("Authorization", "Bearer customer-token");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -175,7 +161,6 @@ class AdminAuthInterceptorTest {
         User customer = new User();
         customer.setRole("CUSTOMER");
 
-        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
         when(jwtUtil.validateToken("customer-token")).thenReturn(true);
         when(jwtUtil.getEmailFromToken("customer-token")).thenReturn("customer@example.com");
         when(userRepository.findByEmailIgnoreCase("customer@example.com")).thenReturn(Optional.of(customer));

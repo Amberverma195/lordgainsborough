@@ -19,8 +19,12 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
     private final KdsAccessService kdsAccessService;
 
     @Autowired
-    public AdminAuthInterceptor(JwtUtil jwtUtil, UserAuthStore identityStore, KdsAccessService kdsAccessService) {
+    public AdminAuthInterceptor(JwtUtil jwtUtil, UserAuthStore identityStore, @Autowired(required = false) KdsAccessService kdsAccessService) {
         this.jwtUtil = jwtUtil; this.identityStore = identityStore; this.kdsAccessService = kdsAccessService;
+    }
+
+    public AdminAuthInterceptor(JwtUtil jwtUtil, UserAuthStore identityStore) {
+        this(jwtUtil, identityStore, null);
     }
 
     public UserAuthStore getIdentityStore() { return identityStore; }
@@ -31,25 +35,6 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
         String path = request.getRequestURI();
 
         if ("OPTIONS".equals(method)) {
-            return true;
-        }
-
-        // Operational KDS endpoints: allow authenticated ADMIN/STAFF or restaurant IP allowlist
-        if (isOperationalKdsPath(path)) {
-            String authHeader = request.getHeader("Authorization");
-            if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                String token = authHeader.substring(7);
-                if (jwtUtil.validateToken(token)) {
-                    var userOpt = identityStore.authenticate(token, jwtUtil);
-                    if (userOpt.isPresent() && RoleAccess.canAccessKds(userOpt.get().getRole())) {
-                        return true;
-                    }
-                }
-            }
-            if (!kdsAccessService.isRequestAllowed(request)) {
-                response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                return false;
-            }
             return true;
         }
 
@@ -100,6 +85,10 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
     private Optional<Predicate<String>> requiredRoleCheck(String method, String path) {
         if (path.startsWith("/api/kds/reviews") || "/api/kds/orders/all".equals(path)) {
             return Optional.of(RoleAccess::isAdmin);
+        }
+
+        if (path.startsWith("/api/kds")) {
+            return Optional.of(RoleAccess::canAccessKds);
         }
 
         if (path.startsWith("/api/admin")) {
