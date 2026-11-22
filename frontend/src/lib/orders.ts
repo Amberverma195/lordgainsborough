@@ -2,7 +2,7 @@ import { apiFetch } from '@/lib/apiFetch';
 import { toAccountNamespace } from '@/lib/accountNamespace';
 export const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_BACKEND_ORIGIN ?? 'http://localhost:8082';
 export const API_BASE = '/api';
-export const KDS_API_BASE = `${BACKEND_ORIGIN}/api`;
+export const KDS_API_BASE = API_BASE;
 export const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? 'http://localhost:9092';
 
 export function backendAssetUrl(src: string): string {

@@ -34,8 +34,18 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // Layer 2: operational KDS is IP-gated only (no login).
+        // Operational KDS endpoints: allow authenticated ADMIN/STAFF or restaurant IP allowlist
         if (isOperationalKdsPath(path)) {
+            String authHeader = request.getHeader("Authorization");
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                String token = authHeader.substring(7);
+                if (jwtUtil.validateToken(token)) {
+                    var userOpt = identityStore.authenticate(token, jwtUtil);
+                    if (userOpt.isPresent() && RoleAccess.canAccessKds(userOpt.get().getRole())) {
+                        return true;
+                    }
+                }
+            }
             if (!kdsAccessService.isRequestAllowed(request)) {
                 response.setStatus(HttpServletResponse.SC_NOT_FOUND);
                 return false;

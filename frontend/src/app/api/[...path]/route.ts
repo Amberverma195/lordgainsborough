@@ -46,10 +46,6 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     clearSession(response);
     return response;
   }
-  // Operational kitchen access must use the browser's real IP, not the frontend server's IP.
-  if (path[0] === 'kds' && route !== 'kds/orders/all' && !route.startsWith('kds/reviews')) {
-    return NextResponse.json({ message: 'Not found.' }, { status: 404 });
-  }
   const headers = new Headers();
   for (const name of forwardedHeaders) { const value = request.headers.get(name); if (value) headers.set(name, value); }
   const session = request.cookies.get(config.session)?.value;

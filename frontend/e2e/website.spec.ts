@@ -113,13 +113,8 @@ test('02 customer signup including incorrect OTP, cart edits, validation and per
   expect(stored).toMatchObject({customer_email:account.email,status:'NEW',subtotal:'13.99',tax:'1.82',total:'15.81'});
   await expect(kitchen.locator('article').filter({hasText:account.name})).toHaveCount(1);
 });
-test('03 customer and kitchen messages, statuses and reconnect persist over real sockets',async()=>{
+test('03 customer and kitchen statuses and reconnect persist over real sockets',async()=>{
   const card=kitchen.locator('article').filter({hasText:account.name});
-  await customer.getByText('Messages (0)',{exact:true}).click();await customer.getByLabel('Message kitchen',{exact:true}).fill('E2E no onions please');
-  await customer.getByRole('button',{name:'Send message',exact:true}).click();
-  await card.getByText(/Messages/).click();await expect(card.getByText('E2E no onions please',{exact:false})).toBeVisible();
-  await card.getByLabel('Message customer',{exact:true}).fill('E2E kitchen confirmed');await card.getByRole('button',{name:'Send message',exact:true}).click();
-  await expect(customer.getByText('E2E kitchen confirmed',{exact:false})).toBeVisible();
   await card.getByRole('button',{name:'Increase ready time by 5 minutes',exact:true}).click();
   await expect.poll(async()=>Number((await db('SELECT average_ready_minutes FROM customer_orders WHERE id=$1',[orderId]))[0].average_ready_minutes)).toBe(30);
   await card.getByRole('button',{name:'Accept',exact:true}).click();await expect(customer.getByText('In progress',{exact:true})).toBeVisible();
@@ -127,7 +122,6 @@ test('03 customer and kitchen messages, statuses and reconnect persist over real
   await customerContext.setOffline(true);await customerContext.setOffline(false);await customer.reload();
   await expect(customer.getByText('Ready for pickup',{exact:true})).toBeVisible();
   await card.getByRole('button',{name:'Picked up',exact:true}).click();await expect(customer.getByText(/Picked up/i).first()).toBeVisible();
-  expect((await db('SELECT count(*) FROM order_messages WHERE order_id=$1',[orderId]))[0].count).toBe('2');
   expect(diagnostics.some(d=>d.role==='kitchen'&&d.kind==='socket-event'&&d.value==='order.created')).toBe(true);
   expect(diagnostics.some(d=>d.role==='customer'&&d.kind==='socket-event'&&d.value==='order.updated')).toBe(true);
 });
@@ -223,9 +217,7 @@ test('11 unrelated customer JWT, wrong tracking token and unauthorized sockets c
   // Model an ordinary remote customer behind the configured trusted loopback proxy.
   const falseKitchen=io('http://localhost:9092',{transports:['websocket'],reconnection:false,query:{role:'KDS'},extraHeaders:{'X-Forwarded-For':'198.51.100.29'}});
   const gate=await new Promise<string>(resolve=>{falseKitchen.on('connect_error',()=>resolve('denied'));setTimeout(()=>resolve('timeout'),5000);});expect(gate).toBe('denied');
-  await customer.goto(`/orders/${orderId}`);await customer.locator('details summary').click();
-  await customer.getByLabel('Message kitchen',{exact:true}).fill('Private security verification');await customer.getByRole('button',{name:'Send message',exact:true}).click();
-  await expect(customer.getByText('Private security verification',{exact:false})).toBeVisible();
+  await customer.goto(`/orders/${orderId}`);
   const hash=(await db('SELECT tracking_token_hash FROM customer_orders WHERE id=$1',[orderId]))[0].tracking_token_hash;
   const visible=await customer.locator('body').innerText();
   expect(visible.includes(hash)).toBe(false);expect(visible.includes(strangerJwt!)).toBe(false);

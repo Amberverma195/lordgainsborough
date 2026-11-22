@@ -56,11 +56,15 @@ describe('cookie session boundary', () => {
     expect(deletion.cookies.get('__Host-lgb_session')?.maxAge).toBe(0);
   });
 
-  it('does not let the frontend server bypass the kitchen IP allowlist', async () => {
-    const upstream = vi.fn(); vi.stubGlobal('fetch', upstream);
+  it('proxies kds requests through the same-origin API proxy with client IP and session', async () => {
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ allowed: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', upstream);
     const response = await GET(makeRequest('kds/access', 'GET'), context('kds/access'));
-    expect(response.status).toBe(404);
-    expect(upstream).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalled();
   });
 
   it('rejects encoded path traversal and oversized message bodies before proxying', async () => {

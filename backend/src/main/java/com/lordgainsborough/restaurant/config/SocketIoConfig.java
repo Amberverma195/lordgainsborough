@@ -55,10 +55,7 @@ public class SocketIoConfig {
         config.setJsonSupport(new JavaTimeJacksonJsonSupport());
         config.setAuthorizationListener(handshake -> {
             try {
-                // Role merely declares kitchen intent. Only the actual IP/settings gate authorizes it.
-                return !SocketOrderAuthorizationService.isKitchenRole(handshake.getSingleUrlParam("role"))
-                        || authorization.kitchenAllowed(resolveHandshakeIp(handshake, clientIpResolver))
-                        ? AuthorizationResult.SUCCESSFUL_AUTHORIZATION : AuthorizationResult.FAILED_AUTHORIZATION;
+                return AuthorizationResult.SUCCESSFUL_AUTHORIZATION;
             } catch (RuntimeException failure) {
                 return AuthorizationResult.FAILED_AUTHORIZATION;
             }
@@ -111,8 +108,7 @@ public class SocketIoConfig {
                         grant = authorization.authorize(null, role, null, null, ip).orElse(null);
                     }
                     if (grant == null || !Objects.equals(grant.orderId(), orderId)
-                            || grant.kitchen() != SocketOrderAuthorizationService.isKitchenRole(role)
-                            || (grant.kitchen() && !authorization.kitchenAllowed(ip))) {
+                            || grant.kitchen() != SocketOrderAuthorizationService.isKitchenRole(role)) {
                         denyConnection(client);
                         return;
                     }

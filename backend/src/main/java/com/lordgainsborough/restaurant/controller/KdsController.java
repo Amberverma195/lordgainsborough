@@ -1,7 +1,10 @@
 package com.lordgainsborough.restaurant.controller;
 
 import com.lordgainsborough.restaurant.model.CustomerOrder;
+import com.lordgainsborough.restaurant.security.JwtUtil;
+import com.lordgainsborough.restaurant.security.RoleAccess;
 import com.lordgainsborough.restaurant.service.*;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,14 +25,52 @@ public class KdsController {
     private final KdsOrderStore orders;
     private final OrderRealtimeService realtime;
     private final Clock clock;
+    private final JwtUtil jwtUtil;
+    private final UserAuthStore identityStore;
+    private final KdsAccessService kdsAccessService;
+
     @Autowired
+    public KdsController(KdsOrderStore orders, OrderRealtimeService realtime, Clock clock,
+                         JwtUtil jwtUtil, UserAuthStore identityStore, KdsAccessService kdsAccessService) {
+        this.orders = orders;
+        this.realtime = realtime;
+        this.clock = clock.withZone(ZoneId.systemDefault());
+        this.jwtUtil = jwtUtil;
+        this.identityStore = identityStore;
+        this.kdsAccessService = kdsAccessService;
+    }
+
     public KdsController(KdsOrderStore orders, OrderRealtimeService realtime, Clock clock) {
-        this.orders = orders; this.realtime = realtime; this.clock = clock.withZone(ZoneId.systemDefault());
+        this(orders, realtime, clock, null, null, null);
     }
 
     public KdsOrderStore getOrderStore() { return orders; }
     @GetMapping("/access")
     public ResponseEntity<Map<String,Object>> checkAccess() { return ResponseEntity.ok(Map.of("allowed",true)); }
+    @GetMapping("/socket-ticket")
+    public ResponseEntity<Map<String, String>> getSocketTicket(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            HttpServletRequest request) {
+        if (jwtUtil == null || identityStore == null || kdsAccessService == null) {
+            return ResponseEntity.notFound().build();
+        }
+        boolean authorized = false;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            if (jwtUtil.validateToken(token)) {
+                authorized = identityStore.authenticate(token, jwtUtil)
+                        .filter(u -> RoleAccess.canAccessKds(u.getRole())).isPresent();
+            }
+        }
+        if (!authorized && kdsAccessService.isRequestAllowed(request)) {
+            authorized = true;
+        }
+        if (!authorized) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok().header("Cache-Control", "no-store")
+                .body(Map.of("ticket", jwtUtil.generateKdsSocketTicket()));
+    }
     @GetMapping("/orders")
     public List<CustomerOrder> getOrders(@RequestParam(required=false) String date) {
         return orders.byPickupDate(date == null || date.isBlank() ? LocalDate.now(clock).toString() : date);

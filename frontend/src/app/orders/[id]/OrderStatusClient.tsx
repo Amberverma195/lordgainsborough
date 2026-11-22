@@ -12,7 +12,6 @@ import {
   Check,
   ChevronDown,
   Clock3,
-  Copy,
   LifeBuoy,
   MapPin,
   NotebookPen,
@@ -38,7 +37,6 @@ import {
 } from '@/lib/orders';
 import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
 import { getAuthHeadersOnly } from '@/lib/auth';
-import OrderMessages from '@/components/OrderMessages';
 import styles from './order-status.module.css';
 
 function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<string, string>): string {
@@ -49,13 +47,6 @@ function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<stri
   return styleMap.statusPickedUp;
 }
 
-const STATUS_DESCRIPTIONS: Record<CustomerOrder['status'], string> = {
-  NEW: 'Your order has been received and is waiting for kitchen confirmation.',
-  ACCEPTED: 'The kitchen is preparing your dishes to perfection.',
-  READY: 'Your order is freshly prepared and ready for pickup at the counter!',
-  PICKED_UP: 'Order completed. Thank you for dining with Lord Gainsborough!',
-  NO_SHOW: 'This order was marked as not picked up. If you have questions, please reach out to us.',
-};
 
 function buildOrderAccessHeaders(orderId: string): HeadersInit {
   const headers: Record<string, string> = {};
@@ -131,7 +122,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [missing, setMissing] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -283,14 +273,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     }
   };
 
-  const handleCopyId = () => {
-    if (!order) return;
-    const formatted = formatOrderId(order.id);
-    void navigator.clipboard.writeText(formatted);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   if (missing) notFound();
 
   if (loading) {
@@ -349,52 +331,27 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
 
       {/* Hero Section */}
       <section className={styles.heroCard} aria-label="Order Status Header">
-        <div className={styles.heroTopRow}>
-          <div className={styles.eyebrowWrap}>
-            <span
-              className={order.status === 'READY' ? styles.liveDotReady : styles.liveDot}
-              aria-hidden
-            />
-            <p className={styles.eyebrow}>Order Tracking</p>
+        <div className={styles.heroSingleRow}>
+          <h1 className={styles.orderHeading}>#{formatOrderId(order.id)}</h1>
+          <div className={styles.heroMetaPills}>
+            <div className={styles.metaPill}>
+              <Calendar size={15} />
+              <span>{isPickedUp ? formatPickedUpDateLabel(order.pickupDate) : formatPickupDateLabel(order.pickupDate)}</span>
+            </div>
+            <div className={styles.metaPill}>
+              <Clock3 size={15} />
+              <span>{isPickedUp ? (pickedUpTimeLabel || 'Completed') : formatPickupTimeLabel(order.pickupTime)}</span>
+            </div>
+            {isAsap && !isPickedUp && (
+              <div className={`${styles.metaPill} ${styles.metaPillHighlight}`}>
+                <Clock3 size={15} />
+                <span>Estimated {order.averageReadyMinutes} mins</span>
+              </div>
+            )}
           </div>
           <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
             {orderStatusLabel(order.status)}
           </span>
-        </div>
-
-        <div className={styles.heroTitleRow}>
-          <h1 className={styles.orderHeading}>#{formatOrderId(order.id)}</h1>
-          <button
-            type="button"
-            className={styles.copyIdBtn}
-            onClick={handleCopyId}
-            aria-label="Copy order ID"
-            title="Copy order ID"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
-          </button>
-        </div>
-
-        <p className={styles.heroDescription}>
-          {STATUS_DESCRIPTIONS[order.status]}
-        </p>
-
-        <div className={styles.heroMetaPills}>
-          <div className={styles.metaPill}>
-            <Calendar size={15} />
-            <span>{isPickedUp ? formatPickedUpDateLabel(order.pickupDate) : formatPickupDateLabel(order.pickupDate)}</span>
-          </div>
-          <div className={styles.metaPill}>
-            <Clock3 size={15} />
-            <span>{isPickedUp ? (pickedUpTimeLabel || 'Completed') : formatPickupTimeLabel(order.pickupTime)}</span>
-          </div>
-          {isAsap && !isPickedUp && (
-            <div className={`${styles.metaPill} ${styles.metaPillHighlight}`}>
-              <Clock3 size={15} />
-              <span>Estimated {order.averageReadyMinutes} mins</span>
-            </div>
-          )}
         </div>
       </section>
 
@@ -546,13 +503,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
               <p>{order.specialInstructions}</p>
             </section>
           )}
-
-          {/* Kitchen Messages */}
-          <OrderMessages
-            orderId={orderId}
-            messages={order.messages || []}
-            onSent={() => { void loadOrder(); }}
-          />
         </div>
 
         {/* Secondary / Sidebar Column */}

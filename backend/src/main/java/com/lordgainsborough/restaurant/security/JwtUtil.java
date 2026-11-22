@@ -114,6 +114,20 @@ public class JwtUtil {
         } catch (Exception invalid) { return false; }
     }
 
+    /** A short-lived, read-only KDS room credential; deliberately invalid as an account JWT. */
+    public String generateKdsSocketTicket() {
+        return Jwts.builder().subject("kds").claim("purpose", "kds-socket")
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60000)).signWith(getSigningKey()).compact();
+    }
+
+    public boolean validateKdsSocketTicket(String token) {
+        try {
+            Claims ticket = claims(token);
+            return "kds-socket".equals(ticket.get("purpose")) && "kds".equals(ticket.getSubject());
+        } catch (Exception invalid) { return false; }
+    }
+
     private Claims claims(String token) {
         return Jwts.parser()
                 .verifyWith(getSigningKey())

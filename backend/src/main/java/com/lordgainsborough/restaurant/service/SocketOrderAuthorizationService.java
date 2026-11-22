@@ -63,7 +63,7 @@ public class SocketOrderAuthorizationService {
     public Optional<RoomGrant> authorize(String orderId, String role, String jwt, String trackingToken, String clientIp) {
         try {
             boolean kitchen = isKitchenRole(role);
-            if (kitchen && !kitchenAllowed(clientIp)) return Optional.empty();
+            if (kitchen && !isKitchenAuthorized(jwt, clientIp)) return Optional.empty();
             // Absence is harmless. A supplied blank/malformed ID never becomes anonymous room access.
             if (orderId == null) return Optional.of(new RoomGrant(null, kitchen));
             if (!validOrderId(orderId)) return Optional.empty();
@@ -76,6 +76,23 @@ public class SocketOrderAuthorizationService {
             // Never reveal database errors, credentials, claims, order existence or exception payloads.
             log.warn("Socket order authorization failed");
             return Optional.empty();
+        }
+    }
+    public boolean isKitchenAuthorized(String token, String clientIp) {
+        try {
+            if (token != null && !token.isBlank()) {
+                if (access.getJwtUtil().validateKdsSocketTicket(token)) {
+                    return true;
+                }
+                if (identities.authenticate(token, access.getJwtUtil())
+                        .filter(u -> RoleAccess.canAccessKds(u.getRole())).isPresent()) {
+                    return true;
+                }
+            }
+            return kitchenAllowed(clientIp);
+        } catch (RuntimeException failure) {
+            log.warn("Socket kitchen authorization check failed");
+            return false;
         }
     }
     public boolean kitchenAllowed(String clientIp) {

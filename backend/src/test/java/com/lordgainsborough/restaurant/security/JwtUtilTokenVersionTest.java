@@ -38,6 +38,13 @@ class JwtUtilTokenVersionTest {
         assertFalse(jwtUtil.validateToken(ticket));
         assertFalse(jwtUtil.validateTokenForUser(ticket, user));
         assertFalse(jwtUtil.validateOrderSocketTicket(jwtUtil.generateToken(user.getId(), user.getEmail()), "order-1"));
+
+        String kdsTicket = jwtUtil.generateKdsSocketTicket();
+        assertTrue(jwtUtil.validateKdsSocketTicket(kdsTicket));
+        assertFalse(jwtUtil.validateKdsSocketTicket("invalid"));
+        assertFalse(jwtUtil.validateToken(kdsTicket));
+        assertFalse(jwtUtil.validateOrderSocketTicket(kdsTicket, "order-1"));
+        assertFalse(jwtUtil.validateKdsSocketTicket(ticket));
     }
 
     @Test

@@ -127,4 +127,61 @@ class AdminAuthInterceptorTest {
         assertFalse(interceptor.preHandle(request, response, new Object()));
         assertEquals(404, response.getStatus());
     }
+
+    @Test
+    void allowsAdminOnOperationalKdsEvenWhenIpDenied() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
+        request.addHeader("Authorization", "Bearer admin-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        User admin = new User();
+        admin.setRole("ADMIN");
+
+        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
+        when(jwtUtil.validateToken("admin-token")).thenReturn(true);
+        when(jwtUtil.getEmailFromToken("admin-token")).thenReturn("admin@example.com");
+        when(userRepository.findByEmailIgnoreCase("admin@example.com")).thenReturn(Optional.of(admin));
+        when(jwtUtil.validateTokenForUser("admin-token", admin)).thenReturn(true);
+
+        assertTrue(interceptor.preHandle(request, response, new Object()));
+        assertEquals(200, response.getStatus());
+    }
+
+    @Test
+    void allowsStaffOnOperationalKdsEvenWhenIpDenied() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
+        request.addHeader("Authorization", "Bearer staff-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        User staff = new User();
+        staff.setRole("STAFF");
+
+        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
+        when(jwtUtil.validateToken("staff-token")).thenReturn(true);
+        when(jwtUtil.getEmailFromToken("staff-token")).thenReturn("staff@example.com");
+        when(userRepository.findByEmailIgnoreCase("staff@example.com")).thenReturn(Optional.of(staff));
+        when(jwtUtil.validateTokenForUser("staff-token", staff)).thenReturn(true);
+
+        assertTrue(interceptor.preHandle(request, response, new Object()));
+        assertEquals(200, response.getStatus());
+    }
+
+    @Test
+    void rejectsCustomerOnOperationalKdsWhenIpDenied() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/kds/orders");
+        request.addHeader("Authorization", "Bearer customer-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        User customer = new User();
+        customer.setRole("CUSTOMER");
+
+        when(kdsAccessService.isRequestAllowed(any())).thenReturn(false);
+        when(jwtUtil.validateToken("customer-token")).thenReturn(true);
+        when(jwtUtil.getEmailFromToken("customer-token")).thenReturn("customer@example.com");
+        when(userRepository.findByEmailIgnoreCase("customer@example.com")).thenReturn(Optional.of(customer));
+        when(jwtUtil.validateTokenForUser("customer-token", customer)).thenReturn(true);
+
+        assertFalse(interceptor.preHandle(request, response, new Object()));
+        assertEquals(404, response.getStatus());
+    }
 }
