@@ -9,31 +9,75 @@ export interface OrderItemSource {
   price?: number;
 }
 
+export interface ReorderOptions {
+  /**
+   * If true, permits substituting an item with the same name when its original
+   * product ID no longer exists on the current menu.
+   * Defaults to false to enforce strict identity by menuItemId / id.
+   */
+  allowNameFallback?: boolean;
+
+  /**
+   * List or set of historical product IDs or dish names that the customer has
+   * explicitly confirmed for name-based substitution.
+   */
+  confirmedSubstitutions?: string[] | Set<string>;
+}
+
+export interface ReorderSubstitutionCandidate {
+  historicalId?: string;
+  historicalName: string;
+  matchedItem: MenuItem;
+}
+
 export interface ReorderPlan {
   availableItems: CartItem[];
   unavailableCount: number;
   priceChangedCount: number;
   notices: string[];
+  /**
+   * Items whose original product IDs disappeared or changed, but a current
+   * menu item with the same name was found. Kept separate because strict identity
+   * prevents silent substitution without customer confirmation.
+   */
+  unconfirmedSubstitutions?: ReorderSubstitutionCandidate[];
 }
 
 export const REORDER_NOTICE_STORAGE_KEY = 'lord_gainsborough_reorder_notice';
 
 /**
  * Matches historical order items against the authoritative current menu.
+ * Enforces strict identity by menuItemId / id by default to prevent silent
+ * substitution of retired items that happen to share a name with a current dish.
  * Discards discontinued or unavailable items, refreshes item details (name, description,
  * category, image, price) to current values, and produces descriptive notices.
  */
 export function planReorder(
   historicalItems: OrderItemSource[],
-  currentMenu: MenuItem[]
+  currentMenu: MenuItem[],
+  options?: ReorderOptions
 ): ReorderPlan {
   const availableItems: CartItem[] = [];
   const notices: string[] = [];
+  const unconfirmedSubstitutions: ReorderSubstitutionCandidate[] = [];
   let unavailableCount = 0;
   let priceChangedCount = 0;
 
   if (!Array.isArray(historicalItems) || !Array.isArray(currentMenu)) {
     return { availableItems: [], unavailableCount: 0, priceChangedCount: 0, notices: [] };
+  }
+
+  const confirmedSet = new Set<string>();
+  if (options?.confirmedSubstitutions) {
+    if (Array.isArray(options.confirmedSubstitutions)) {
+      for (const s of options.confirmedSubstitutions) {
+        if (typeof s === 'string' && s.trim()) confirmedSet.add(s.trim().toLowerCase());
+      }
+    } else if (options.confirmedSubstitutions instanceof Set) {
+      for (const s of options.confirmedSubstitutions) {
+        if (typeof s === 'string' && s.trim()) confirmedSet.add(s.trim().toLowerCase());
+      }
+    }
   }
 
   for (const item of historicalItems) {
@@ -48,10 +92,35 @@ export function planReorder(
         : 0;
     const quantity = Math.max(1, Math.floor(Number(item.quantity) || 1));
 
-    // Match by ID first; fallback to case-insensitive name
-    const menuItem =
-      (historicalId ? currentMenu.find(m => m.id === historicalId) : undefined) ||
-      (historicalName ? currentMenu.find(m => m.name.trim().toLowerCase() === historicalName.toLowerCase()) : undefined);
+    // Strict identity: match strictly by unique item ID
+    let menuItem = historicalId ? currentMenu.find(m => m.id === historicalId) : undefined;
+    let isSubstituted = false;
+
+    // If ID is missing or no longer exists on the current menu, check for a name match
+    if (!menuItem && historicalName) {
+      const nameMatch = currentMenu.find(
+        m => m.name.trim().toLowerCase() === historicalName.toLowerCase()
+      );
+
+      if (nameMatch) {
+        const isExplicitlyConfirmed =
+          options?.allowNameFallback === true ||
+          (historicalId && confirmedSet.has(historicalId.toLowerCase())) ||
+          confirmedSet.has(historicalName.toLowerCase());
+
+        if (isExplicitlyConfirmed) {
+          menuItem = nameMatch;
+          isSubstituted = true;
+        } else {
+          // Record candidate for visibility, but do NOT substitute silently
+          unconfirmedSubstitutions.push({
+            historicalId: historicalId || undefined,
+            historicalName,
+            matchedItem: nameMatch,
+          });
+        }
+      }
+    }
 
     if (!menuItem) {
       unavailableCount++;
@@ -65,6 +134,12 @@ export function planReorder(
       continue;
     }
 
+    if (isSubstituted) {
+      notices.push(
+        `"${menuItem.name}" was substituted with current menu item upon customer confirmation.`
+      );
+    }
+
     if (typeof menuItem.price === 'number' && menuItem.price !== historicalPrice) {
       priceChangedCount++;
       notices.push(
@@ -72,7 +147,7 @@ export function planReorder(
       );
     }
 
-    const existing = availableItems.find(i => i.id === menuItem.id);
+    const existing = availableItems.find(i => i.id === menuItem!.id);
     if (existing) {
       existing.quantity += quantity;
     } else {
@@ -93,6 +168,8 @@ export function planReorder(
     unavailableCount,
     priceChangedCount,
     notices,
+    unconfirmedSubstitutions:
+      unconfirmedSubstitutions.length > 0 ? unconfirmedSubstitutions : undefined,
   };
 }
 

@@ -42,3 +42,36 @@ it('uses live menu prices and reports unavailable or modified dishes', () => {
     [],
   );
 });
+
+it('enforces strict identity and requires explicit customer confirmation for name-based substitution', () => {
+  const lines = [
+    {
+      menuItemId: 'discontinued-id',
+      name: 'Soup',
+      unitPrice: 10,
+      quantity: 1,
+      total: 10,
+      notes: '',
+    },
+  ] satisfies OrderLine[];
+
+  // 1. Without customer confirmation: strict identity rejects substitution
+  const strictPlan = planReorder(lines, [dish]);
+  expect(strictPlan.available).toEqual([]);
+  expect(strictPlan.notices).toEqual(['Soup is unavailable or discontinued.']);
+
+  // 2. With explicit confirmation by ID
+  const confirmedById = planReorder(lines, [dish], {
+    confirmedSubstitutions: ['discontinued-id'],
+  });
+  expect(confirmedById.available).toEqual([{ item: dish, quantity: 1 }]);
+  expect(confirmedById.notices).toContain(
+    'Soup substituted for retired item per customer confirmation.',
+  );
+
+  // 3. With explicit confirmation by name
+  const confirmedByName = planReorder(lines, [dish], {
+    confirmedSubstitutions: ['soup'],
+  });
+  expect(confirmedByName.available).toEqual([{ item: dish, quantity: 1 }]);
+});

@@ -112,7 +112,7 @@ describe('Website Reorder - Menu Refresh & Price Modernization', () => {
     expect(plan.notices).toEqual(['"Seasonal Catch" is currently unavailable.']);
   });
 
-  it('matches by case-insensitive name fallback if menu item IDs were regenerated', () => {
+  it('enforces strict identity: does not silently substitute items by name when old product ID disappears', () => {
     const historicalOrderItems = [
       {
         menuItemId: 'old-random-uuid',
@@ -122,13 +122,54 @@ describe('Website Reorder - Menu Refresh & Price Modernization', () => {
       },
     ];
 
+    // By default, strict identity is enforced; silent name fallback is rejected
     const plan = planReorder(historicalOrderItems, currentMenu);
 
-    expect(plan.availableItems).toHaveLength(1);
-    expect(plan.availableItems[0].id).toBe('dish-1');
-    expect(plan.availableItems[0].name).toBe('Truffle Burrata');
-    expect(plan.availableItems[0].price).toBe(22.0);
-    expect(plan.availableItems[0].quantity).toBe(3);
+    expect(plan.availableItems).toHaveLength(0);
+    expect(plan.unavailableCount).toBe(1);
+    expect(plan.notices).toEqual(['"truffle burrata" is no longer on the menu.']);
+    expect(plan.unconfirmedSubstitutions).toBeDefined();
+    expect(plan.unconfirmedSubstitutions).toHaveLength(1);
+    expect(plan.unconfirmedSubstitutions![0].historicalId).toBe('old-random-uuid');
+    expect(plan.unconfirmedSubstitutions![0].matchedItem.id).toBe('dish-1');
+  });
+
+  it('allows name-based substitution when customer explicitly confirms substitution by ID or name', () => {
+    const historicalOrderItems = [
+      {
+        menuItemId: 'old-random-uuid',
+        name: 'truffle burrata',
+        quantity: 3,
+        unitPrice: 20.0,
+      },
+    ];
+
+    // 1. Confirmed by historical product ID
+    const planById = planReorder(historicalOrderItems, currentMenu, {
+      confirmedSubstitutions: ['old-random-uuid'],
+    });
+    expect(planById.availableItems).toHaveLength(1);
+    expect(planById.availableItems[0].id).toBe('dish-1');
+    expect(planById.availableItems[0].name).toBe('Truffle Burrata');
+    expect(planById.availableItems[0].price).toBe(22.0);
+    expect(planById.availableItems[0].quantity).toBe(3);
+    expect(planById.notices).toContain(
+      '"Truffle Burrata" was substituted with current menu item upon customer confirmation.'
+    );
+
+    // 2. Confirmed by dish name
+    const planByName = planReorder(historicalOrderItems, currentMenu, {
+      confirmedSubstitutions: ['truffle burrata'],
+    });
+    expect(planByName.availableItems).toHaveLength(1);
+    expect(planByName.availableItems[0].id).toBe('dish-1');
+
+    // 3. Explicit allowNameFallback flag
+    const planByFlag = planReorder(historicalOrderItems, currentMenu, {
+      allowNameFallback: true,
+    });
+    expect(planByFlag.availableItems).toHaveLength(1);
+    expect(planByFlag.availableItems[0].id).toBe('dish-1');
   });
 
   it('merges repeated items from historical order into a single cart entry with combined quantity', () => {
