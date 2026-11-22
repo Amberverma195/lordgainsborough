@@ -268,6 +268,8 @@ describe('CartScreen tax resolution and 13% HST fallback', () => {
     await renderCart();
 
     expect(await screen.findByText('Calculating tax...')).toBeTruthy();
+    expect(screen.getByText('Calculating total...')).toBeTruthy();
+    expect(screen.queryByText('$0.00')).toBeNull();
     expect(screen.queryByText('Estimated HST (13%)')).toBeNull();
     expect(screen.queryByText(ESTIMATED_HST_FALLBACK_NOTICE)).toBeNull();
 
@@ -286,6 +288,8 @@ describe('CartScreen tax resolution and 13% HST fallback', () => {
 
     expect(await screen.findByText('Estimated Tax (13%)')).toBeTruthy();
     expect(await screen.findByText('$6.50')).toBeTruthy();
+    expect(await screen.findByText('$56.50')).toBeTruthy();
+    expect(screen.queryByText('Calculating total...')).toBeNull();
   });
 
   it('replaces fallback with authoritative values when backend recovers', async () => {

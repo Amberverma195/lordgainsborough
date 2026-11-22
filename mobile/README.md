@@ -4,7 +4,7 @@ Expo customer app for pickup ordering. It uses the existing Spring Boot API in `
 
 ## Requirements
 
-- Node.js 22.13 or newer. Expo SDK 58 and React Native 0.88 refuse older Node versions.
+- A supported Node release: 22.13+, 24.3+, or 26+. Use Node 22.23.5 for the recorded checks; Node 20 is unsupported.
 - The restaurant API running locally, normally on port 8082. See the repository README and `backend/TESTING.md`.
 - Expo Go for SDK 58 on a phone, or an Android emulator. iOS Simulator requires macOS.
 
@@ -14,18 +14,18 @@ Do not point this app at production when placing test orders.
 
 ```bash
 cd mobile
-npm install
+npm ci
 copy .env.example .env
 ```
 
-`EXPO_PUBLIC_API_ORIGIN` is the Spring Boot origin. `EXPO_PUBLIC_ASSET_ORIGIN` is used for menu images that are not stored under `/uploads`. `EXPO_PUBLIC_SOCKET_URL` is the Socket.IO server origin for live order tracking.
+`EXPO_PUBLIC_API_ORIGIN` is the Spring Boot origin. `EXPO_PUBLIC_ASSET_ORIGIN` is used for menu images that are not stored under `/uploads`. `EXPO_PUBLIC_SOCKET_ORIGIN` is the canonical Socket.IO origin; `EXPO_PUBLIC_SOCKET_URL` remains a legacy alias. Release profiles require the canonical variable.
 
 | Where the app runs | API origin | Socket.IO origin |
 | --- | --- | --- |
 | iOS Simulator | `http://localhost:8082` | `http://localhost:9092` |
 | Android emulator | `http://localhost:8082` (rewritten to `http://10.0.2.2:8082`) | `http://localhost:9092` (rewritten to `http://10.0.2.2:9092`) |
 | Physical phone (dev) | Your computer's LAN address, e.g. `http://192.168.1.20:8082` | Your computer's LAN address, e.g. `http://192.168.1.20:9092` |
-| Production build | `https://api.lordgainsboroughrestaurant.ca` | `https://lordgainsborough-production.up.railway.app` (verified Railway Netty-SocketIO domain targeting port 9092) |
+| Production build | Operator-verified public HTTPS API origin | Operator-verified public HTTPS Socket.IO origin; verify its target port separately |
 
 The Android rewrite applies only while `Constants.isDevice` is false. A physical Android device must use the LAN address.
 
@@ -35,8 +35,8 @@ All variables exposed to the mobile app must begin with the `EXPO_PUBLIC_` prefi
 
 - `EXPO_PUBLIC_API_ORIGIN`: Base URL for the Spring Boot REST API (port 8080). Defaults to `http://localhost:8082`. In production, set to `https://api.lordgainsboroughrestaurant.ca`.
 - `EXPO_PUBLIC_ASSET_ORIGIN`: Base URL for dish images and static assets not stored under `/uploads`. Defaults to `EXPO_PUBLIC_API_ORIGIN`. In production, set to `https://api.lordgainsboroughrestaurant.ca`.
-- `EXPO_PUBLIC_SOCKET_URL` (or `EXPO_PUBLIC_SOCKET_ORIGIN`): Base URL for the Netty-SocketIO server running on port 9092 that powers real-time order status updates (`order.updated`). Defaults to `http://localhost:9092`.
-  > **Production requirement:** Netty-SocketIO runs on port 9092, which is distinct from Spring Boot's HTTP port 8080. In production builds (e.g. EAS Build, APK, AAB, IPA, TestFlight), set `EXPO_PUBLIC_SOCKET_URL=https://lordgainsborough-production.up.railway.app`. Omitting `EXPO_PUBLIC_SOCKET_URL` causes real-time socket connections to fall back to `http://localhost:9092` and fail on devices.
+- `EXPO_PUBLIC_SOCKET_ORIGIN`: Public HTTPS origin for the separately routed Socket.IO service. The development default is `http://localhost:9092`. The legacy `EXPO_PUBLIC_SOCKET_URL` alias remains supported at runtime; preview and production configuration requires `EXPO_PUBLIC_SOCKET_ORIGIN` explicitly.
+- `EXPO_PUBLIC_ORDER_NOTIFICATIONS_ENABLED`: Defaults to false. Native registration and tap handling are implemented behind this gate. Keep disabled until authorized provider configuration and signed-device delivery tests succeed. Socket.IO and polling remain available independently.
 
 ## Run
 
@@ -60,9 +60,9 @@ Tests use fixtures and do not call a live API.
 
 Home, menu, cart, sign-in, pickup checkout, order confirmation, and account order history. Menu rows come from `GET /api/menu`, `GET /api/categories`, and `GET /api/menu/most-loved`. Checkout submits `POST /api/orders` and shows the order only after the API confirms it. Payment is at pickup.
 
-Sign-up, password reset, profile editing, live order status polling, and real-time Socket.IO status updates are implemented. Table requests are not implemented in the mobile screens.
+Sign-up, password reset, favourites, dish details, profile editing, account deletion, reservation requests, live order polling, and Socket.IO updates are implemented. Reservation requests remain pending until the restaurant confirms them. See `docs/RELEASE_PREPARATION.md` for current verification results and release blockers.
 
-The logo and food photographs referenced by the website are not present in `frontend/public` in this repository. Dish photos are loaded from each menu item's `image` field. When an item has no image, the app shows a typographic monogram.
+Dish photos load from each menu item's `image` field. Missing or failed images have a fallback. Draft app icon, adaptive icon and splash assets are included and still require operator approval and signed-device inspection.
 
 ## Authentication & Credential Isolation
 

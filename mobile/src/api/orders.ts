@@ -183,5 +183,5 @@ export async function fetchServerCart(token: string): Promise<ServerCartItem[]> 
 }
 
 export async function saveServerCart(token: string, items: ServerCartItem[]): Promise<void> {
-  await apiRequest('/api/cart', { method: 'PUT', token, body: items });
+  await apiRequest('/api/cart', { method: 'PUT', token, body: items, notifyUnauthorized: false });
 }

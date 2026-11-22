@@ -3,7 +3,8 @@ import {
   enableOrderAlerts,
   disableOrderAlerts,
 } from '../../notifications/orderAlerts';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { onAccountChange } from '../../auth/lifecycle';
 import { router } from 'expo-router';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 
@@ -22,25 +23,34 @@ export default function ProfileScreen() {
 
   const [alertMessage, setAlertMessage] = useState('');
   const [alertBusy, setAlertBusy] = useState(false);
+  const alertGeneration = useRef(0);
+  useEffect(() => onAccountChange(() => {
+    alertGeneration.current += 1;
+    setAlertBusy(false);
+    setAlertMessage('');
+  }), []);
   async function alerts(enabled: boolean) {
     if (!user || alertBusy) return;
     setAlertBusy(true);
+    const generation = alertGeneration.current;
     try {
       if (enabled) await enableOrderAlerts(user.email, user.token);
       else await disableOrderAlerts(user.email, user.token);
+      if (generation !== alertGeneration.current) return;
       setAlertMessage(
         enabled
           ? 'Order alerts enabled for this device.'
           : 'Order alerts disabled for this device.',
       );
     } catch (failure) {
+      if (generation !== alertGeneration.current) return;
       setAlertMessage(
         failure instanceof Error
           ? failure.message
           : 'Unable to update order alerts.',
       );
     } finally {
-      setAlertBusy(false);
+      if (generation === alertGeneration.current) setAlertBusy(false);
     }
   }
   const [signingOut, setSigningOut] = useState(false);

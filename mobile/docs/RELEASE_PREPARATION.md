@@ -1,4 +1,94 @@
-# Customer release preparation - 21 November 2026
+# Customer release preparation
+
+## Current audit - 22 November 2026
+
+Inspected fetched main at `0524187`, including the recent cart-limit, tax-fallback, reorder identity, order-workflow and KDS fixes. This mobile task leaves website and backend source unchanged. No commit, push, deployment, cloud build, store submission or production test order was performed. The historical record below is retained for context; this section supersedes its readiness verdict and command counts.
+
+### Confirmed fixes
+
+- Cart loading now displays both `Calculating tax...` and `Calculating total...`; unknown zero-rate totals are hidden. Backend estimates, legitimate zero tax, valid cached configuration, and the 13% fallback notice remain. Checkout still requires backend settings and retains its existing idempotency and uncertainty protections.
+- Cart saves have generation ownership. Account transitions and unmount invalidate old callbacks before they can release a new save lock, clear errors, remove pending markers or schedule retries. Account hydration guards local persistence. Pending local carts preserve decreases and deletions rather than merging server items back in. Clearing an account cart retains its pending marker until the empty server save succeeds.
+- Late API 401 responses from a previous account generation cannot trigger global sign-out of the new account. Cart save errors remain owned by the cart operation and surface the existing session-expiry notice.
+- Notification registration checks account lifecycle across permission, token and storage awaits. If registration completes after account change, cleanup is attempted using the original account. Registration errors cannot trigger unrelated account sign-out. Notification taps authorize the order before navigation, stop immediately on account change, deduplicate event IDs and clear handled launch responses. Existing opt-ins renew on foreground without requesting permission; revoked permission removes registration. The profile ignores stale opt-in callbacks.
+- Node engine metadata now matches installed React Native's supported major-version ranges. No dependencies were added or upgraded.
+
+### Current executed verification
+
+Used Node **22.23.5**, because host-default Node 20.19.5 is unsupported. Invoke npm's CLI using the supported Node binary or make that Node installation first in PATH; invoking a system `npm.cmd` can otherwise select its adjacent Node 20 binary.
+
+| Check | Actual result |
+| --- | --- |
+| `npm ci` under Node 22.23.5 | PASS; 25 moderate dependency advisories; no forced audit upgrade |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS; 0 errors, 52 warnings |
+| `npm test -- --runInBand --forceExit` | PASS; 52 suites, 282 tests; force-exit handle warning remains |
+| `npx expo-doctor` under Node 22.23.5 | PASS; 20/20 checks |
+| `npx expo export --platform android --output-dir dist` | PASS; fixture origins, JavaScript/assets/Hermes packaging only |
+| `npx expo export --platform ios --output-dir dist-ios` | PASS; fixture origins, JavaScript/assets/Hermes packaging only; not a simulator or signing test |
+| Local PostgreSQL/API/Socket.IO regression selection | PASS; 74 tests, no failures/errors/skips |
+| `adb devices -l` | No attached devices |
+| Signed Android preview / TestFlight / iOS simulator | BLOCKED; no verified project association or signed device artifact |
+
+New regression coverage includes pending saves resolving/rejecting/expiring after an account switch, serialization of the new account's save, failed clear/restart without item resurrection, tax loading, late unauthorized replies, permission rejection, registration identity reuse, account change during permission, foreground renewal without permission prompts, unauthorized taps, duplicate taps and account changes during tap authorization. Existing tests cover cart limits/guest merging, order polling/reconnection/ticket renewal, background refresh, checkout idempotency/uncertainty and current-menu reorder behavior.
+
+The backend selection is `PostgresOnlyApplicationIntegrationTest#checkoutPickupIsPersistedListedAndDeliveredToKitchen+authenticatedKitchenSocketAdmitsWithValidTicketAndRejectsAnonymousOrInvalidTicket+kitchenEventsObserveCommittedWritesAndRollbackEmitsNothing,KdsOrderTransitionsTest,OrderSchedulingValidatorTest`, using mandatory isolated PostgreSQL on port 54353. It verifies POST persistence, matching KDS IDs/dates, protected events and status transitions. It does **not** verify a phone placing an order or native notification delivery.
+
+### Notifications gate and outstanding verification
+
+Native notification permission is requested only by the explicit Profile enable action. Keep `EXPO_PUBLIC_ORDER_NOTIFICATIONS_ENABLED=false` for unverified releases. Backend `ORDER_NOTIFICATIONS_ENABLED` and `ORDER_NOTIFICATIONS_DELIVERY_VERIFIED` default to false. Existing encrypted device storage, unique outbox events, minimal notification text, Expo push-ticket/receipt handling, invalid-token removal, session-revocation checks and account-deletion cascades are preserved. Do not mark delivery verified based on mocks, bundling or a successful push ticket alone.
+
+Before any production enablement, authorized staging tests must demonstrate signed-device permission accept/reject, foreground/background/terminated delivery, notification tap ownership, account switches, logout, deletion, permission revocation, expired sessions, token replacement and provider receipts. Network failures during cleanup remain retryable; a failed opt-out must not be represented as success. Backend revocation/expiry prevents delivery from invalidated sessions. Actual provider delivery remains unverified.
+
+### Build setup required
+
+The checkout has no configured `extra.eas.projectId` and no supplied `EXPO_PROJECT_ID`, `EXPO_OWNER` or approved staging origins. The operator explicitly confirmed these are unverified/unavailable on 22 November 2026 and instructed that they remain unset. Repository production endpoints are not approved staging targets. A cached Expo login alone does not establish project ownership or signing authorization. Do not create a replacement project. The existing app identifiers remain `com.lordgainsborough.customer` on Android and iOS; display name remains Lord Gainsborough. Existing preview APK, iOS simulator, TestFlight and production AAB profiles are retained. Icon, adaptive icon foreground/background/monochrome and splash PNGs are present at 1024×1024; actual appearance still needs signed-device testing.
+
+From `mobile/`, with supported Node active and operator-approved values configured in the matching EAS environments:
+
+```sh
+npx eas-cli@latest login
+# Only after obtaining the existing project UUID:
+npx eas-cli@latest init --id <existing-project-uuid>
+npx eas-cli@latest project:info
+npx eas-cli@latest credentials --platform android
+npx eas-cli@latest build --platform android --profile preview
+# macOS simulator artifact or Apple-signed TestFlight build, respectively:
+npx eas-cli@latest build --platform ios --profile preview-ios-simulator
+npx eas-cli@latest credentials --platform ios
+npx eas-cli@latest build --platform ios --profile testflight
+```
+
+No `submit` command is authorized. Android needs the existing keystore or authorized EAS-managed signing. iOS needs Apple Developer enrollment, the matching App Store Connect app, distribution certificate and provisioning; physical internal distribution also needs registered UDIDs. Windows cannot run Xcode/iOS Simulator. Retain existing remote version counters and confirm they match store records before building.
+
+App/EAS configuration required: `EXPO_PROJECT_ID`, optional authorized `EXPO_OWNER`, `EXPO_PUBLIC_API_ORIGIN`, `EXPO_PUBLIC_ASSET_ORIGIN`, `EXPO_PUBLIC_SOCKET_ORIGIN`, and `EXPO_PUBLIC_ORDER_NOTIFICATIONS_ENABLED=false`. Public variables are embedded in the app. The API, asset and socket origins must be independently verified public HTTPS endpoints; preview/TestFlight must use approved staging resources.
+
+Notification-related **backend-only** configuration: `ORDER_NOTIFICATIONS_ENABLED`, `ORDER_NOTIFICATIONS_DELIVERY_VERIFIED`, `EXPO_PUSH_ACCESS_TOKEN`, and the existing persistent `PASSWORD_RESET_QUEUE_ENCRYPTION_KEY` used by encrypted payload storage. Configure FCM/APNs credentials for the existing Expo project with the authorized team. Never put these backend/provider secrets into `EXPO_PUBLIC_*` values or Git.
+
+### Customer-release acceptance checklist - pending operator/device work
+
+- [ ] Install a signed staging APK and signed iOS build; inspect icon, adaptive/monochrome icon, splash, dark theme, safe areas and keyboards. Approve draft assets.
+- [ ] Complete the full requested phone journey: menu, dish details, several cart items/quantities, login and sync, Toronto pickup, disposable order, persisted/KDS ticket, Accept/Ready/Picked Up reflected on phone, restart/history and current-price reorder.
+- [ ] Repeat with socket loss/reconnect/ticket renewal, background/foreground, offline saves, A/B account transitions, and interrupted checkout; verify one persisted order per idempotency key.
+- [ ] Complete signed Android/iOS notification tests and provider receipt verification before changing the production gates.
+- [ ] Confirm public HTTPS privacy, Terms, account-deletion and support URLs from the signed app. Do not assume historical publication status is current.
+- [ ] Operator approves `store/listing.json`, business/support contact, age/content rating, app identifiers/version counters and reviewer credentials/instructions.
+- [ ] Capture real Android/iPhone/iPad screenshots and required Play feature graphics. Do not use fabricated screens.
+- [ ] Complete Google Play Data Safety and account-deletion declarations; Apple App Privacy, permission disclosures, privacy-manifest/required-reason API review and encryption/export declarations against the final signed binary and actual SDK/network inventory.
+- [ ] Confirm Play Console/App Store Connect enrollment, signing ownership, production environment, approved FCM/APNs/Expo credentials, and staged release authorization.
+
+The complete native ordering workflow, signed-device delivery and customer release are **not verified** by this audit. Missing external prerequisites remain release blockers; automated checks and local API tests are evidence for code behavior only. Build-profile guidance follows [Expo build configuration](https://docs.expo.dev/build/eas-json/); native notification integration was checked against [Expo SDK 58 Notifications](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/).
+
+### Files changed in this mobile audit
+
+All paths are relative to `mobile/`:
+
+- Configuration/documentation: `.env.example`, `README.md`, `docs/RELEASE_PREPARATION.md`, `package.json`, `package-lock.json`.
+- API/account handling: `src/api/client.ts`, `src/api/orders.ts`.
+- Cart/profile: `src/app/(tabs)/cart.tsx`, `src/app/(tabs)/profile.tsx`, `src/cart/CartContext.tsx`, `src/cart/tax.ts`.
+- Native notifications: `src/notifications/orderAlerts.ts`, `src/notifications/OrderAlertBridge.tsx`, `src/notifications/nativeModule.ts`.
+- Regression tests: `src/cart/__tests__/cartTaxFallback.test.tsx`, `src/cart/__tests__/syncRace.test.tsx`, `src/api/__tests__/staleUnauthorized.test.ts`, `src/notifications/__tests__/enabled.test.ts`, `src/notifications/__tests__/bridge.test.tsx`.
+
+## Historical audit - 21 November 2026
 
 Audited main at eea2dd1 (equal to origin/main when fetched). Changes remain local. No deployments, store submissions, pushes or production writes were made.
 

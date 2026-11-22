@@ -6,7 +6,9 @@ import { Pressable, Text, View } from 'react-native';
 import * as ordersApi from '../../api/orders';
 import * as authContext from '../../auth/AuthContext';
 import { CartProvider, useCart } from '../CartContext';
-import { getCartPendingStorageKey } from '../storage';
+import { getCartPendingStorageKey, getCartStorageKey, GUEST_CART_KEY } from '../storage';
+import { accountWillChange } from '../../auth/lifecycle';
+import { ApiError } from '../../api/errors';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -22,11 +24,13 @@ const mockFetchServerCart = ordersApi.fetchServerCart as jest.Mock;
 const mockSaveServerCart = ordersApi.saveServerCart as jest.Mock;
 
 function CartTestController() {
-  const { ready, lines, addItem, updateQuantity } = useCart();
+  const { ready, lines, addItem, updateQuantity, syncError, clear } = useCart();
   return (
     <View testID="cart-controller">
       <Text testID="ready">{String(ready)}</Text>
       <Text testID="count">{String(lines.length)}</Text>
+      <Text testID="sync-error">{syncError ?? ''}</Text>
+      <Pressable testID="clear" onPress={clear}><Text>Clear</Text></Pressable>
       <Pressable
         testID="add-item-1"
         onPress={() => {
@@ -54,8 +58,10 @@ function CartTestController() {
 }
 
 describe('Cart sync race conditions and pending marker protection', () => {
+  afterEach(() => jest.useRealTimers());
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockSaveServerCart.mockReset().mockResolvedValue(undefined);
     await AsyncStorage.clear();
 
     jest.spyOn(authContext, 'useAuth').mockReturnValue({
@@ -81,6 +87,77 @@ describe('Cart sync race conditions and pending marker protection', () => {
     });
 
     mockFetchServerCart.mockResolvedValue([]);
+  });
+
+  it.each(['resolve', 'reject', 'expired'])('isolates an old account save (%s) during the new account save', async (outcome) => {
+    jest.useFakeTimers();
+    let finishA!: () => void;
+    let failA!: (error: Error) => void;
+    let finishB!: () => void;
+    mockSaveServerCart.mockReset()
+      .mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finishA = resolve; failA = reject; }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishB = resolve; }))
+      .mockResolvedValue(undefined);
+    const view = await render(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    await act(async () => { fireEvent.press(view.getByTestId('add-item-1')); jest.advanceTimersByTime(850); });
+    expect(mockSaveServerCart).toHaveBeenCalledTimes(1);
+    const old = jest.mocked(authContext.useAuth).mock.results.at(-1)!.value;
+    await act(async () => { accountWillChange(); });
+    jest.mocked(authContext.useAuth).mockReturnValue({ ...old, user: { ...old.user!, email: 'b@example.com', token: 'token-b' } });
+    await view.rerender(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    await act(async () => { fireEvent.press(view.getByTestId('add-item-1')); });
+    await act(async () => { jest.advanceTimersByTime(850); });
+    expect(mockSaveServerCart).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      if (outcome === 'resolve') finishA();
+      else failA(outcome === 'expired' ? new ApiError({ status: 401, code: 'EXPIRED', message: 'Expired' }) : new Error('old network failure'));
+    });
+    expect(view.getByTestId('sync-error').props.children).toBe('');
+    await act(async () => { fireEvent.press(view.getByTestId('inc-item-1')); });
+    await act(async () => { jest.advanceTimersByTime(850); });
+    expect(mockSaveServerCart).toHaveBeenCalledTimes(2);
+    expect(await AsyncStorage.getItem(getCartPendingStorageKey('b@example.com'))).toBe('1');
+    await act(async () => { finishB(); });
+    expect(mockSaveServerCart).toHaveBeenCalledTimes(3);
+    expect(mockSaveServerCart.mock.calls[2][0]).toBe('token-b');
+    expect(mockSaveServerCart.mock.calls[2][1][0].quantity).toBe(2);
+    await view.unmount();
+  });
+
+  it('preserves merged guest items through a failed save and restart', async () => {
+    jest.useFakeTimers();
+    await AsyncStorage.setItem(GUEST_CART_KEY, JSON.stringify([{ menuItemId: 'guest', name: 'Guest dish', quantity: 1, unitPrice: 10 }]));
+    mockSaveServerCart.mockRejectedValue(new Error('offline'));
+    const view = await render(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(view.getByTestId('count').props.children).toBe('1');
+    expect(await AsyncStorage.getItem(GUEST_CART_KEY)).toBeNull();
+    expect(await AsyncStorage.getItem(getCartPendingStorageKey('race@example.com'))).toBe('1');
+    await act(async () => { jest.advanceTimersByTime(850); });
+    await view.unmount();
+    const restarted = await render(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(restarted.getByTestId('count').props.children).toBe('1');
+    await restarted.unmount();
+  });
+
+  it('preserves an offline clear and does not resurrect server items on restart', async () => {
+    jest.useFakeTimers();
+    mockFetchServerCart.mockResolvedValue([{ menuItemId: 'old', name: 'Old dish', quantity: 1, price: 10 }]);
+    const view = await render(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(view.getByTestId('count').props.children).toBe('1');
+    mockSaveServerCart.mockRejectedValue(new Error('offline'));
+    await act(async () => { fireEvent.press(view.getByTestId('clear')); });
+    expect(await AsyncStorage.getItem(getCartPendingStorageKey('race@example.com'))).toBe('1');
+    expect(await AsyncStorage.getItem(getCartStorageKey('race@example.com'))).toBe('[]');
+    await view.unmount();
+    const restarted = await render(<CartProvider><CartTestController /></CartProvider>);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(restarted.getByTestId('count').props.children).toBe('0');
+    await restarted.unmount();
   });
 
   it('serializes overlapping saves and preserves pending marker if mutated during in-flight save', async () => {

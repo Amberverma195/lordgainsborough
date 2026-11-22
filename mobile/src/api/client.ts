@@ -1,5 +1,9 @@
 import { fallbackMessage, toApiError } from './errors';
 import { resolveApiOrigins } from './runtime';
+import { onAccountChange } from '../auth/lifecycle';
+
+let accountGeneration = 0;
+onAccountChange(() => { accountGeneration += 1; });
 
 export interface ApiResponse {
   status: number;
@@ -40,6 +44,7 @@ export async function apiRequest(
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<ApiResponse> {
+  const generation = accountGeneration;
   const origin = resolveApiOrigins().api;
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -71,6 +76,7 @@ export async function apiRequest(
     if (
       options.token &&
       response.status === 401 &&
+      generation === accountGeneration &&
       options.notifyUnauthorized !== false
     ) {
       unauthorizedListeners.forEach((listener) => listener());

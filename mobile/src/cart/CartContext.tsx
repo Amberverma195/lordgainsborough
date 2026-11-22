@@ -23,7 +23,6 @@ import {
 } from '../checkout/pickup';
 import {
   addToCart,
-  mergeCarts,
   mergeGuestCart,
   parseStoredCart,
   reconcileWithCatalog,
@@ -126,6 +125,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const cartVersionRef = useRef(0);
   const isSavingRef = useRef(false);
   const queuedSaveRef = useRef(false);
+  const saveGenerationRef = useRef(0);
+  const hydratedRef = useRef(false);
   useLayoutEffect(() => {
     linesRef.current = lines;
   }, [lines]);
@@ -133,6 +134,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   useEffect(
     () =>
       onAccountChange(() => {
+        saveGenerationRef.current += 1;
+        hydratedRef.current = false;
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
         if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -166,6 +169,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // Account switch & initialization effect
   useEffect(() => {
     let cancelled = false;
+    hydratedRef.current = false;
+    saveGenerationRef.current += 1;
+    isSavingRef.current = false;
+    queuedSaveRef.current = false;
+    retryCountRef.current = 0;
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
     currentAccountRef.current = accountKey;
     syncedTokenRef.current = null;
     if (debounceTimerRef.current) {
@@ -175,6 +185,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
     void (async () => {
       setReady(false);
+      setSyncError(null);
+      if (isSyncNoticeRef.current) setNotice(null);
+      isSyncNoticeRef.current = false;
       try {
         const cartKey = getCartStorageKey(accountKey);
         const pickupKey = getPickupStorageKey(accountKey);
@@ -243,12 +256,17 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             let resolved: CartLine[];
             if (guestLines.length > 0) {
               // User had guest items prior to login: merge guest items into account cart
-              resolved = mergeGuestCart(guestLines, remoteLines);
-              void AsyncStorage.removeItem(guestCartKey).catch(() => undefined);
+              resolved = mergeGuestCart(guestLines, hasPendingEdits ? localLines : remoteLines);
+              // Persist the pending account snapshot before consuming the guest copy.
+              await AsyncStorage.setItem(cartKey, JSON.stringify(resolved));
+              await AsyncStorage.setItem(pendingKey, '1');
+              if (cancelled) return;
+              await AsyncStorage.removeItem(guestCartKey);
+              if (cancelled) return;
               setServerSync((val) => val + 1);
             } else if (hasPendingEdits) {
               // Local cart had pending edits before restart: preserve them
-              resolved = mergeCarts(localLines, remoteLines);
+              resolved = localLines;
             } else {
               // Server is authoritative; avoids resurrecting stale items deleted on another device,
               // even when the server cart is empty (e.g. intentionally cleared elsewhere).
@@ -286,6 +304,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       } finally {
         if (!cancelled) {
+          hydratedRef.current = true;
           setReady(true);
         }
       }
@@ -302,15 +321,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   // Persist to account-scoped AsyncStorage whenever lines or pickup change
   useEffect(() => {
-    if (!ready) {
+    if (!ready || !hydratedRef.current || (authToken && syncedTokenRef.current !== authToken)) {
       return;
     }
     const cartKey = getCartStorageKey(currentAccountRef.current);
     void AsyncStorage.setItem(cartKey, JSON.stringify(lines));
-  }, [lines, ready]);
+  }, [lines, ready, authToken]);
 
   useEffect(() => {
-    if (!ready) {
+    if (!ready || !hydratedRef.current || (authToken && syncedTokenRef.current !== authToken)) {
       return;
     }
     const pickupKey = getPickupStorageKey(currentAccountRef.current);
@@ -318,7 +337,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       pickupKey,
       JSON.stringify({ date: pickupDate, time: pickupTime }),
     );
-  }, [pickupDate, pickupTime, ready]);
+  }, [pickupDate, pickupTime, ready, authToken]);
 
   // Re-verify saved pickup date and time when the app resumes
   useEffect(() => {
@@ -356,6 +375,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // Cleanup timers on unmount
   useEffect(() => {
     return () => {
+      saveGenerationRef.current += 1;
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
@@ -367,7 +387,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const executeServerSave = useCallback(async (token: string, account: string) => {
+  const executeServerSave = useCallback(async function executeServerSave(token: string, account: string) {
+    const generation = saveGenerationRef.current;
+    const ownsSave = () => generation === saveGenerationRef.current &&
+      account === currentAccountRef.current && syncedTokenRef.current === token;
+    if (!ownsSave()) return;
     if (isSavingRef.current) {
       // An existing save is in-flight: queue the next save so network calls never overlap
       queuedSaveRef.current = true;
@@ -381,6 +405,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await saveServerCart(token, itemsToSave);
+      if (!ownsSave()) return;
       // Save succeeded! Reset retry counter and clear any scheduled retry or sync error
       retryCountRef.current = 0;
       if (retryTimerRef.current) {
@@ -403,6 +428,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         );
       }
     } catch (err: unknown) {
+      if (!ownsSave()) return;
       // Keep pending marker so unsaved changes can be retried / preserved
       const isAuthError =
         err instanceof ApiError && (err.status === 401 || err.status === 403);
@@ -452,20 +478,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } finally {
-      isSavingRef.current = false;
-      // If a newer save was queued or cart changed during this save, trigger the next save immediately
-      if (
-        (queuedSaveRef.current || cartVersionRef.current !== versionAtStart) &&
-        syncedTokenRef.current === token &&
-        currentAccountRef.current === account
-      ) {
-        queuedSaveRef.current = false;
-        retryCountRef.current = 0;
-        if (retryTimerRef.current) {
-          clearTimeout(retryTimerRef.current);
-          retryTimerRef.current = null;
+      if (ownsSave()) {
+        isSavingRef.current = false;
+        // Only this generation can release the lock or dispatch its queued save.
+        if (
+          (queuedSaveRef.current || cartVersionRef.current !== versionAtStart) &&
+          syncedTokenRef.current === token &&
+          currentAccountRef.current === account
+        ) {
+          queuedSaveRef.current = false;
+          retryCountRef.current = 0;
+          if (retryTimerRef.current) {
+            clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
+          }
+          void executeServerSave(token, account);
         }
-        void executeServerSave(token, account);
       }
     }
   }, []);
@@ -566,8 +594,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     const cartKey = getCartStorageKey(account);
     const pickupKey = getPickupStorageKey(account);
     const pendingKey = getCartPendingStorageKey(account);
-    void AsyncStorage.multiRemove([cartKey, pickupKey, pendingKey]).catch(() => undefined);
+    void AsyncStorage.multiRemove([cartKey, pickupKey, ...(authToken && account ? [] : [pendingKey])]).catch(() => undefined);
     if (authToken && account) {
+      void AsyncStorage.setItem(pendingKey, '1').catch(() => undefined);
       void executeServerSave(authToken, account);
     }
   }, [authToken, clearSyncStateOnMutation, executeServerSave]);

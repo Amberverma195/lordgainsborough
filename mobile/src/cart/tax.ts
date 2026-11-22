@@ -261,11 +261,12 @@ export function useCartTax(
   // When backend returns a fresh valid rate, persist it to cache
   useEffect(() => {
     if (!settings.isError && isValidTaxRate(settings.data?.taxRate)) {
-      void saveCachedTaxConfig(settings.data.taxRate);
-      setCachedConfig({
-        taxRate: settings.data.taxRate,
-        verifiedAt: Date.now(),
+      let cancelled = false;
+      const taxRate = settings.data.taxRate;
+      void saveCachedTaxConfig(taxRate).then(() => {
+        if (!cancelled) setCachedConfig({ taxRate, verifiedAt: Date.now() });
       });
+      return () => { cancelled = true; };
     }
   }, [settings.data?.taxRate, settings.isError]);
 

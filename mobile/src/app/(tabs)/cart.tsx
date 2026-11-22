@@ -91,7 +91,11 @@ export default function CartScreen() {
         <View style={styles.divider} />
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Estimated Total</Text>
-          <Price amount={totals.total} large />
+          {tax.isCalculating ? (
+            <Text style={styles.summaryValue}>Calculating total...</Text>
+          ) : (
+            <Price amount={totals.total} large />
+          )}
         </View>
         {tax.notice ? (
           <Text style={styles.taxNotice}>{tax.notice}</Text>
