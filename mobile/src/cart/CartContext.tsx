@@ -13,6 +13,7 @@ import React, {
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { fetchServerCart, saveServerCart, ServerCartItem } from '../api/orders';
+import { ApiError } from '../api/errors';
 import { MenuItem } from '../api/parse';
 import { useAuth } from '../auth/AuthContext';
 import {
@@ -42,11 +43,13 @@ import {
 } from './storage';
 import { CartLine } from './types';
 
-interface CartContextValue {
+export interface CartContextValue {
   ready: boolean;
   lines: CartLine[];
   count: number;
   notice: string | null;
+  syncError?: string | null;
+  retrySync?: () => void;
   pickupDate: string;
   pickupTime: string;
   addItem: (item: MenuItem, quantity?: number) => string | null;
@@ -64,6 +67,8 @@ interface CartContextValue {
 }
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
+
+const MAX_SYNC_RETRIES = 3;
 
 function fromServer(items: ServerCartItem[]): CartLine[] {
   return items
@@ -106,6 +111,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [pickupDate, setPickupDate] = useState('');
   const [pickupTime, setPickupTime] = useState('');
   const [serverSync, setServerSync] = useState(0);
@@ -113,6 +119,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const syncedTokenRef = useRef<string | null>(null);
   const currentAccountRef = useRef<string | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const isSyncNoticeRef = useRef(false);
   const linesRef = useRef(lines);
   const cartVersionRef = useRef(0);
   const isSavingRef = useRef(false);
@@ -126,11 +135,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       onAccountChange(() => {
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+        retryCountRef.current = 0;
+        isSyncNoticeRef.current = false;
         syncedTokenRef.current = null;
         linesRef.current = [];
         cartVersionRef.current = 0;
         isSavingRef.current = false;
         queuedSaveRef.current = false;
+        setSyncError(null);
         setReady(false);
         setLines([]);
         setPickupDate('');
@@ -339,6 +353,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [pickupDate, pickupTime, ready]);
 
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const executeServerSave = useCallback(async (token: string, account: string) => {
     if (isSavingRef.current) {
       // An existing save is in-flight: queue the next save so network calls never overlap
@@ -353,6 +381,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await saveServerCart(token, itemsToSave);
+      // Save succeeded! Reset retry counter and clear any scheduled retry or sync error
+      retryCountRef.current = 0;
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      setSyncError(null);
+      if (isSyncNoticeRef.current) {
+        isSyncNoticeRef.current = false;
+        setNotice(null);
+      }
+
       // Only remove the pending marker if no new local edits occurred while save was in flight
       if (
         versionAtStart === cartVersionRef.current &&
@@ -362,8 +402,55 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           () => undefined,
         );
       }
-    } catch {
+    } catch (err: unknown) {
       // Keep pending marker so unsaved changes can be retried / preserved
+      const isAuthError =
+        err instanceof ApiError && (err.status === 401 || err.status === 403);
+
+      if (isAuthError) {
+        const authMsg = 'Your session has expired. Sign in to sync your cart.';
+        isSyncNoticeRef.current = true;
+        setNotice(authMsg);
+        setSyncError(authMsg);
+      } else {
+        // Transient error (network or 5xx): inform customer and schedule a controlled retry
+        if (
+          versionAtStart === cartVersionRef.current &&
+          account === currentAccountRef.current
+        ) {
+          if (retryCountRef.current < MAX_SYNC_RETRIES) {
+            retryCountRef.current += 1;
+            const delay =
+              err instanceof ApiError && err.retryAfterSeconds
+                ? err.retryAfterSeconds * 1000
+                : Math.min(1000 * Math.pow(2, retryCountRef.current - 1), 8000);
+
+            const retryMsg = 'Unable to sync cart with your account. Retrying...';
+            isSyncNoticeRef.current = true;
+            setNotice(retryMsg);
+            setSyncError(retryMsg);
+
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+            }
+            retryTimerRef.current = setTimeout(() => {
+              retryTimerRef.current = null;
+              if (
+                syncedTokenRef.current === token &&
+                currentAccountRef.current === account
+              ) {
+                void executeServerSave(token, account);
+              }
+            }, delay);
+          } else {
+            const finalMsg =
+              'Cart saved locally, but online sync failed. Check your connection.';
+            isSyncNoticeRef.current = true;
+            setNotice(finalMsg);
+            setSyncError(finalMsg);
+          }
+        }
+      }
     } finally {
       isSavingRef.current = false;
       // If a newer save was queued or cart changed during this save, trigger the next save immediately
@@ -373,6 +460,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         currentAccountRef.current === account
       ) {
         queuedSaveRef.current = false;
+        retryCountRef.current = 0;
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
         void executeServerSave(token, account);
       }
     }
@@ -410,7 +502,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const clearSyncStateOnMutation = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryCountRef.current = 0;
+    if (isSyncNoticeRef.current) {
+      isSyncNoticeRef.current = false;
+      setNotice(null);
+    }
+    setSyncError(null);
+  }, []);
+
   const addItem = useCallback((item: MenuItem, quantity = 1) => {
+    clearSyncStateOnMutation();
     const result = addToCart(linesRef.current, item, quantity);
     linesRef.current = result.cart;
     setLines(result.cart);
@@ -420,9 +526,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       markPending();
     }
     return result.error;
-  }, [markPending]);
+  }, [clearSyncStateOnMutation, markPending]);
 
   const updateQuantity = useCallback((menuItemId: string, quantity: number) => {
+    clearSyncStateOnMutation();
     const result = setQuantity(linesRef.current, menuItemId, quantity);
     linesRef.current = result.cart;
     setLines(result.cart);
@@ -432,18 +539,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       markPending();
     }
     return result.error;
-  }, [markPending]);
+  }, [clearSyncStateOnMutation, markPending]);
 
   const removeItem = useCallback((menuItemId: string) => {
+    clearSyncStateOnMutation();
     const next = removeFromCart(linesRef.current, menuItemId);
     linesRef.current = next;
     setLines(next);
     cartVersionRef.current += 1;
     markPending();
-  }, [markPending]);
+  }, [clearSyncStateOnMutation, markPending]);
 
   const clear = useCallback(() => {
     cartVersionRef.current += 1;
+    clearSyncStateOnMutation();
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
@@ -461,7 +570,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (authToken && account) {
       void executeServerSave(authToken, account);
     }
-  }, [authToken, executeServerSave]);
+  }, [authToken, clearSyncStateOnMutation, executeServerSave]);
 
   const reconcile = useCallback((catalog: MenuItem[]) => {
     setLines((current) => {
@@ -488,12 +597,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setNotice(null);
   }, []);
 
+  const dismissNotice = useCallback(() => {
+    isSyncNoticeRef.current = false;
+    setNotice(null);
+  }, []);
+
+  const retrySync = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryCountRef.current = 0;
+    if (authToken && currentAccountRef.current) {
+      void executeServerSave(authToken, currentAccountRef.current);
+    }
+  }, [authToken, executeServerSave]);
+
   const value = useMemo<CartContextValue>(
     () => ({
       ready,
       lines,
       count: lines.reduce((sum, line) => sum + line.quantity, 0),
       notice,
+      syncError,
+      retrySync,
       pickupDate,
       pickupTime,
       addItem,
@@ -502,13 +629,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       clear,
       reconcile,
       setPickup,
-      dismissNotice: () => setNotice(null),
+      dismissNotice,
       estimate: (taxRate: number) => estimateTotals(lines, taxRate),
     }),
     [
       ready,
       lines,
       notice,
+      syncError,
+      retrySync,
       pickupDate,
       pickupTime,
       addItem,
@@ -517,6 +646,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       clear,
       reconcile,
       setPickup,
+      dismissNotice,
     ],
   );
 

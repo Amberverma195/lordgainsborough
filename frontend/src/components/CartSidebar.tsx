@@ -10,7 +10,7 @@ import styles from './CartSidebar.module.css';
 import { X, Plus, Minus, Trash2, ShoppingBag } from 'lucide-react';
 
 const CartSidebar = () => {
-  const { cart, isCartOpen, toggleCart, removeFromCart, updateQuantity, cartTotal } = useCart();
+  const { cart, isCartOpen, toggleCart, removeFromCart, updateQuantity, cartTotal, syncError } = useCart();
   const router = useRouter();
   const [pickupOrdersEnabled, setPickupOrdersEnabled] = useState(true);
   const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
@@ -56,6 +56,12 @@ const CartSidebar = () => {
                 <X size={24} />
               </button>
             </div>
+
+            {syncError && (
+              <div className={styles.syncErrorBanner} role="alert">
+                {syncError}
+              </div>
+            )}
 
             <div className={styles.itemsContainer}>
               {cart.length === 0 ? (

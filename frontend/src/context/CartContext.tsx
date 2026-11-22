@@ -35,9 +35,12 @@ interface CartContextType {
   isCartOpen: boolean;
   toggleCart: () => void;
   clearCart: () => void;
+  syncError?: string | null;
+  retrySync?: () => void;
 }
 
 const AUTH_STORAGE_KEYS = new Set(['sessionUser', 'userRole', 'userName', 'userEmail', 'userPhone']);
+const MAX_SYNC_RETRIES = 3;
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
@@ -55,6 +58,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isCartOpen, setIsCartOpen] = useState(false);
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const isSyncingRef = useRef(false);
   const pendingServerSavesRef = useRef(0);
   const cartRef = useRef<CartItem[]>([]);
@@ -93,6 +99,10 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
   }, []);
 
   const saveServerCart = useCallback(async (items: CartItem[], accountEmail: string) => {
@@ -125,9 +135,37 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('storage'));
         }
+        return;
       }
+      if (!res.ok) {
+        throw new Error(`Failed to save server cart: HTTP ${res.status}`);
+      }
+      // Save succeeded! Reset retry counter and clear sync errors
+      retryCountRef.current = 0;
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      setSyncError(null);
     } catch (err) {
       console.error('Failed to save server cart', err);
+      const currentAccount = activeAccountRef.current ?? getSessionKey();
+      if (currentAccount === accountEmail && versionAtStart === cartVersionRef.current) {
+        if (retryCountRef.current < MAX_SYNC_RETRIES) {
+          retryCountRef.current += 1;
+          const delay = Math.min(1000 * Math.pow(2, retryCountRef.current - 1), 8000);
+          setSyncError('Unable to sync cart to your account. Retrying...');
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = setTimeout(() => {
+            retryTimerRef.current = null;
+            if ((activeAccountRef.current ?? getSessionKey()) === accountEmail) {
+              void saveServerCart(cartRef.current, accountEmail);
+            }
+          }, delay);
+        } else {
+          setSyncError('Cart changes saved locally, but online sync failed. Check your connection.');
+        }
+      }
     } finally {
       pendingServerSavesRef.current = Math.max(0, pendingServerSavesRef.current - 1);
       isSavingRef.current = false;
@@ -137,6 +175,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentAccount === accountEmail
       ) {
         queuedSaveRef.current = false;
+        retryCountRef.current = 0;
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
         void saveServerCart(cartRef.current, accountEmail);
       }
     }
@@ -167,6 +210,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Helper for applying UI cart mutation and persisting to the correct namespace
   const persistCartMutation = useCallback((updated: CartItem[], immediate = false) => {
     cartVersionRef.current += 1;
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryCountRef.current = 0;
+    setSyncError(null);
     cartRef.current = updated;
     setCart(updated);
 
@@ -446,6 +495,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     cartVersionRef.current += 1;
     syncGenerationRef.current += 1;
     clearPendingServerSave();
+    retryCountRef.current = 0;
+    setSyncError(null);
     const currentAccount = activeAccountRef.current ?? getSessionKey();
     clearCheckoutIdempotencyKey(currentAccount);
 
@@ -460,12 +511,24 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const retrySync = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryCountRef.current = 0;
+    const currentAccount = activeAccountRef.current ?? getSessionKey();
+    if (currentAccount) {
+      void saveServerCart(cartRef.current, currentAccount);
+    }
+  }, [saveServerCart]);
+
   const cartCount = cart.reduce((total, item) => total + item.quantity, 0);
   const cartTotal = cart.reduce((total, item) => total + (item.price * item.quantity), 0);
 
   return (
     <CartContext.Provider value={{
-      cart, addToCart, replaceCart, removeFromCart, updateQuantity, cartCount, cartTotal, isCartOpen, toggleCart, clearCart
+      cart, addToCart, replaceCart, removeFromCart, updateQuantity, cartCount, cartTotal, isCartOpen, toggleCart, clearCart, syncError, retrySync
     }}>
       {children}
     </CartContext.Provider>
