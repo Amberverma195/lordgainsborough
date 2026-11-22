@@ -303,6 +303,7 @@ class ReservationMapperTest {
 
     @Test void configuredSeatingBufferAndAdvanceNoticeAreEnforced() {
         var policy=new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy();
+        policy.setManagementApproved(true);
         policy.setLastSeatingBeforeClose(Duration.ofHours(1));
         policy.setMinimumAdvanceNotice(Duration.ofMinutes(30));
         var configured=new ReservationMapper(clock,policy);

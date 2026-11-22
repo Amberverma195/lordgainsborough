@@ -13,13 +13,14 @@ it('isolates guest and account records without namespace collisions', () => {
   );
 });
 it('offers Toronto dates and upcoming half-hour slots excluding closing', () => {
-  const now = new Date('2026-11-22T00:45:00Z');
-  expect(reservationDates(now)[0]).toBe('2026-11-21');
-  expect(reservationTimes('2026-11-21', now)).toEqual([]);
-  expect(reservationTimes('2026-11-22', now)).not.toContain('18:00');
-  expect(reservationTimes('2026-11-23', now)).not.toContain('20:00');
-  expect(reservationTimes('2026-11-21', now)).not.toContain('20:30');
-  expect(reservationTimes('2026-11-20', now)).toEqual([]);
+  const afterClose = new Date('2026-11-22T02:00:00Z'); // 21:00 on Saturday 2026-11-21 (after 20:30 close)
+  expect(reservationDates(afterClose)[0]).toBe('2026-11-21');
+  expect(reservationTimes('2026-11-21', afterClose)).toEqual([]);
+  const sundayMorning = new Date('2026-11-22T14:00:00Z');
+  expect(reservationTimes('2026-11-22', sundayMorning)).not.toContain('18:00');
+  expect(reservationTimes('2026-11-23', sundayMorning)).not.toContain('20:00');
+  expect(reservationTimes('2026-11-28', sundayMorning)).not.toContain('20:30');
+  expect(reservationTimes('2026-11-20', sundayMorning)).toEqual([]);
 });
 
 it('does not enforce unapproved seating policy rules on customer choices', () => {

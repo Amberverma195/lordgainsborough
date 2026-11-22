@@ -442,4 +442,97 @@ describe('Checkout uncertain order submission recovery', () => {
     expect(await AsyncStorage.getItem(key)).toBe('pending:' + idempotencyKey);
     expect(screen.queryByText('Place pickup order')).toBeNull();
   });
+
+  it('safely gates concurrent reconciliation taps without duplicate in-flight requests', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    const idempotencyKey = 'saved-key-concurrent';
+    await AsyncStorage.setItem(key, 'pending:' + idempotencyKey);
+
+    let resolveLookup: ((val: any) => void) | null = null;
+    const lookupPromise = new Promise((res) => {
+      resolveLookup = res;
+    });
+    (ordersApi.fetchOrderByIdempotencyKey as jest.Mock).mockReturnValue(lookupPromise);
+
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+
+    const btn = screen.getByLabelText("I've checked, try again");
+    // Rapid double tap
+    await fireEvent.press(btn);
+    await fireEvent.press(btn);
+
+    // Exactly one call should be initiated while guard is held
+    expect(ordersApi.fetchOrderByIdempotencyKey).toHaveBeenCalledTimes(1);
+
+    // Resolve the delayed order creation lookup
+    resolveLookup!({
+      id: 'order-concurrent-1',
+      pickupDate: '2026-11-21',
+      pickupTime: '18:00',
+      status: 'CONFIRMED',
+      items: [],
+      subtotal: 10,
+      tax: 1.3,
+      total: 11.3,
+    });
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith('/order/order-concurrent-1?confirmed=1');
+    });
+  });
+
+  it('safely recovers delayed order creation on second reconciliation attempt', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    const idempotencyKey = 'delayed-key-999';
+    await AsyncStorage.setItem(key, 'pending:' + idempotencyKey);
+
+    // First attempt: Server / network timeout while order was still in-flight
+    (ordersApi.fetchOrderByIdempotencyKey as jest.Mock).mockRejectedValueOnce(
+      new Error('Gateway Timeout (order still committing)'),
+    );
+
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Gateway Timeout (order still committing)'),
+      ).toBeTruthy();
+    });
+
+    // Marker is still pending, checkout remains protected against duplicate orders
+    expect(await AsyncStorage.getItem(key)).toBe('pending:' + idempotencyKey);
+    expect(screen.queryByText('Place pickup order')).toBeNull();
+
+    // Second attempt: Order has now committed on backend and is returned
+    (ordersApi.fetchOrderByIdempotencyKey as jest.Mock).mockResolvedValueOnce({
+      id: 'order-delayed-completed',
+      pickupDate: '2026-11-21',
+      pickupTime: '18:00',
+      status: 'NEW',
+      items: [],
+      subtotal: 20,
+      tax: 2.6,
+      total: 22.6,
+    });
+
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(
+        '/order/order-delayed-completed?confirmed=1',
+      );
+    });
+
+    expect(await AsyncStorage.getItem(key)).toBeNull();
+  });
 });

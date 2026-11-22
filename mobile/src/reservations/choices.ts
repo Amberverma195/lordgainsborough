@@ -52,7 +52,7 @@ export function reservationTimes(date: string, now = new Date(), policy:SeatingP
 }
 
 export interface SeatingPolicy {lastSeatingMinutes:number;advanceNoticeMinutes:number;managementApproved?:boolean;}
-export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:true};
+export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:false};
 export function torontoSeatingInstant(date:string,time:string):number {
  const wanted=Date.parse(date+'T'+time+':00Z');let instant=wanted;
  for(let i=0;i<3;i++){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));const read=(type:string)=>Number(parts.find(part=>part.type===type)?.value);instant+=wanted-Date.UTC(read('year'),read('month')-1,read('day'),read('hour'),read('minute'));}

@@ -87,6 +87,7 @@ export function ReservationPicker({
             <FlatList
               data={choices}
               keyExtractor={(value) => value}
+              initialNumToRender={50}
               ListEmptyComponent={
                 <Text style={{ color: colors.text }}>
                   No upcoming slots. Choose another date or call the restaurant.
@@ -99,7 +100,7 @@ export function ReservationPicker({
                   onPress={() => {
                     if (
                       open === 'time' &&
-                      reservationTimes(date).includes(item)
+                      reservationTimes(date, new Date(), policy).includes(item)
                     )
                       onChange({ date, time: item, partySize });
                     else if (open === 'partySize')

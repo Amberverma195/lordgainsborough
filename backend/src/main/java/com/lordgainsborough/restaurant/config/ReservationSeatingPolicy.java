@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class ReservationSeatingPolicy {
     private Duration lastSeatingBeforeClose = Duration.ofMinutes(60);
     private Duration minimumAdvanceNotice = Duration.ofMinutes(30);
-    private boolean managementApproved = true;
+    private boolean managementApproved = false;
     private org.springframework.jdbc.core.JdbcTemplate jdbc;
     @org.springframework.beans.factory.annotation.Autowired
     public void setDataSource(javax.sql.DataSource source){jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);}
