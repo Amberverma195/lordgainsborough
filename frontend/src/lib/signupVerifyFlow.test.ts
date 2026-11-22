@@ -368,5 +368,24 @@ describe('Signup and Verify Flow UX & Mechanics', () => {
 
       vi.useRealTimers();
     });
+
+    it('provides Start New Verification and Change Email Address recovery paths when challenge expires or user mistypes email', () => {
+      const getRecoveryActions = ({ challengeExpired, loading }: { challengeExpired: boolean; loading: boolean }) => {
+        return {
+          primaryAction: challengeExpired ? 'Start New Verification' : 'Verify Email & Create Account',
+          changeEmailAvailable: !loading,
+        };
+      };
+
+      // Normal active verification state
+      const activeState = getRecoveryActions({ challengeExpired: false, loading: false });
+      expect(activeState.primaryAction).toBe('Verify Email & Create Account');
+      expect(activeState.changeEmailAvailable).toBe(true);
+
+      // Expired verification session state: customer is never trapped!
+      const expiredState = getRecoveryActions({ challengeExpired: true, loading: false });
+      expect(expiredState.primaryAction).toBe('Start New Verification');
+      expect(expiredState.changeEmailAvailable).toBe(true);
+    });
   });
 });

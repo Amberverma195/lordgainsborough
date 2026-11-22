@@ -308,9 +308,24 @@ test.describe('Phase 8: Unified Login & Recovery Regression Tests', () => {
       // 2. Inline OTP verification appears without route navigation away from /signup
       await expect(page).toHaveURL(/\/signup$/);
       await expect(page.getByRole('heading', { name: 'Verify Your Email' })).toBeVisible();
+      await expect(page.getByRole('button', { name: /Change Email Address/i })).toBeVisible();
 
-      // 3. Complete OTP verification
-      const otp = await getLatestInboxOtp(email, offset);
+      // 3. Test "Change Email Address" preserves other field values
+      await page.getByRole('button', { name: /Change Email Address/i }).click();
+      await expect(page.getByRole('heading', { name: 'Join the Club' })).toBeVisible();
+      await expect(page.getByPlaceholder('Enter your full name')).toHaveValue(name);
+      await expect(page.getByPlaceholder('+1 (123)-456-7890')).toHaveValue(phone);
+
+      // 4. Update to the corrected email address, re-submit and verify
+      const correctedEmail = `consolidated-corrected-${randomUUID()}@example.test`;
+      await page.getByPlaceholder('Enter email address').fill(correctedEmail);
+      await page.getByPlaceholder('Enter Password', { exact: true }).fill(password);
+      await page.getByPlaceholder('Re-enter password', { exact: true }).fill(password);
+      await page.getByRole('checkbox').check();
+      await page.getByRole('button', { name: 'Create Account' }).click();
+      await expect(page.getByRole('heading', { name: 'Verify Your Email' })).toBeVisible();
+
+      const otp = await getLatestInboxOtp(correctedEmail, offset);
       for (let i = 0; i < 6; i++) {
         await page.getByRole('textbox', { name: `Digit ${i + 1}` }).fill(otp[i]);
       }
