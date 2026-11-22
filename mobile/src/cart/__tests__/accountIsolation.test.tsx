@@ -67,7 +67,7 @@ describe('Cart account isolation', () => {
     expect(await AsyncStorage.getItem(LEGACY_PICKUP_KEY)).toBeNull();
   });
 
-  it('loads Customer A cart from account-scoped storage for Customer A', async () => {
+  it('loads Customer A cart from account-scoped storage for Customer A on network failure', async () => {
     const keyA = getCartStorageKey('customera@example.com');
     await AsyncStorage.setItem(
       keyA,
@@ -103,7 +103,7 @@ describe('Cart account isolation', () => {
       updateUser: jest.fn(),
       finishAccountDeletion: jest.fn(),
     });
-    mockFetchServerCart.mockResolvedValueOnce([]);
+    mockFetchServerCart.mockRejectedValueOnce(new Error('Network error'));
 
     render(
       <CartProvider>
@@ -114,6 +114,56 @@ describe('Cart account isolation', () => {
     await waitFor(() => expect(screen.getByTestId('ready').props.children).toBe('true'));
     expect(screen.getByTestId('line-count').props.children).toBe('1');
     expect(screen.getByTestId('line-d1')).toBeTruthy();
+  });
+
+  it('does not restore old local items when server cart is empty after intentional clear on another device', async () => {
+    const keyA = getCartStorageKey('customera@example.com');
+    await AsyncStorage.setItem(
+      keyA,
+      JSON.stringify([
+        {
+          menuItemId: 'd1',
+          name: 'Roast Beef',
+          unitPrice: 25.0,
+          quantity: 2,
+          available: true,
+        },
+      ]),
+    );
+
+    jest.spyOn(authContext, 'useAuth').mockReturnValue({
+      status: 'signedIn',
+      user: {
+        token: 'tok-A',
+        name: 'Customer A',
+        email: 'customera@example.com',
+        phone: '',
+        memberSince: '',
+        role: 'CUSTOMER',
+        canUpdateProfile: true,
+        nextProfileUpdateAt: null,
+        noShowCount: 0,
+        pickupDisabled: false,
+      },
+      signIn: jest.fn(),
+      signOut: jest.fn(),
+      refresh: jest.fn(),
+      establishSession: jest.fn(),
+      updateUser: jest.fn(),
+      finishAccountDeletion: jest.fn(),
+    });
+    // Server returns empty cart because another device cleared it
+    mockFetchServerCart.mockResolvedValueOnce([]);
+
+    render(
+      <CartProvider>
+        <CartProbe />
+      </CartProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('ready').props.children).toBe('true'));
+    expect(screen.getByTestId('line-count').props.children).toBe('0');
+    expect(screen.queryByTestId('line-d1')).toBeNull();
   });
 
   it('shows empty guest cart when signed out even if Customer A had stored items', async () => {

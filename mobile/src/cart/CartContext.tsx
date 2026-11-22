@@ -223,19 +223,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             let resolved: CartLine[];
             if (guestLines.length > 0) {
               // User had guest items prior to login: merge guest items into account cart
-              const base = remoteLines.length > 0 ? remoteLines : localLines;
-              resolved = mergeGuestCart(guestLines, base);
+              resolved = mergeGuestCart(guestLines, remoteLines);
               void AsyncStorage.removeItem(guestCartKey).catch(() => undefined);
               setServerSync((val) => val + 1);
             } else if (hasPendingEdits) {
               // Local cart had pending edits before restart: preserve them
               resolved = mergeCarts(localLines, remoteLines);
-            } else if (remoteLines.length > 0) {
-              // Server is authoritative; avoids resurrecting stale items deleted on another device
-              resolved = remoteLines;
             } else {
-              // Remote empty: keep localLines if any
-              resolved = localLines;
+              // Server is authoritative; avoids resurrecting stale items deleted on another device,
+              // even when the server cart is empty (e.g. intentionally cleared elsewhere).
+              resolved = remoteLines;
             }
 
             linesRef.current = resolved;

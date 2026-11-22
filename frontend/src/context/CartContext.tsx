@@ -209,11 +209,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
               clearGuestCart();
               await saveServerCart(finalCart, authenticatedUser);
             } else {
-              const localAccountCart = loadAccountCart(authenticatedUser);
-              finalCart = mergeCartItems(localAccountCart, serverRes.items);
-              if (localAccountCart.length > 0 && JSON.stringify(finalCart) !== JSON.stringify(serverRes.items)) {
-                await saveServerCart(finalCart, authenticatedUser);
-              }
+              // Server is authoritative for an authenticated account; an empty server cart
+              // must not restore old local items when another device cleared the cart.
+              finalCart = serverRes.items;
             }
             cartRef.current = finalCart;
             setCart(finalCart);
@@ -336,12 +334,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   clearGuestCart();
                   await saveServerCart(finalCart, sessionKey);
                 } else {
-                  // No genuine guest cart: ONLY load this account's items (never previous account!)
-                  const localAccountCart = loadAccountCart(sessionKey);
-                  finalCart = mergeCartItems(localAccountCart, serverRes.items);
-                  if (localAccountCart.length > 0 && JSON.stringify(finalCart) !== JSON.stringify(serverRes.items)) {
-                    await saveServerCart(finalCart, sessionKey);
-                  }
+                  // Server is authoritative for this account; do not restore old local items when server cart is empty
+                  finalCart = serverRes.items;
                 }
                 cartRef.current = finalCart;
                 setCart(finalCart);
