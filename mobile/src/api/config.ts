@@ -1,5 +1,6 @@
 export const DEFAULT_API_ORIGIN = 'http://localhost:8082';
 export const DEFAULT_SOCKET_ORIGIN = 'http://localhost:9092';
+export const DEFAULT_ESTIMATED_HST_RATE = 0.13;
 
 export interface RuntimeHost {
   platform: string;

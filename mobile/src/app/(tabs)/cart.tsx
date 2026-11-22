@@ -14,6 +14,7 @@ import { QuantityStepper } from '../../components/QuantityStepper';
 import { Screen } from '../../components/Screen';
 import { useCart } from '../../cart/CartContext';
 import { formatMoney } from '../../cart/money';
+import { useCartTax } from '../../cart/tax';
 import { colors, radius, space, type } from '../../theme/tokens';
 
 export default function CartScreen() {
@@ -22,8 +23,8 @@ export default function CartScreen() {
     queryKey: ['settings'],
     queryFn: ({ signal }) => fetchStoreSettings(signal),
   });
-  const taxRate = settings.data?.taxRate ?? 0;
-  const totals = estimate(taxRate);
+  const tax = useCartTax(settings);
+  const totals = estimate(tax.taxRate);
 
   if (lines.length === 0) {
     return (
@@ -81,15 +82,20 @@ export default function CartScreen() {
         </View>
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>
-            {taxRate > 0 ? `Estimated Tax (${(taxRate * 100).toFixed(1)}%)` : 'Estimated Tax'}
+            {tax.taxLabel}
           </Text>
-          <Text style={styles.summaryValue}>{formatMoney(totals.tax)}</Text>
+          <Text style={styles.summaryValue}>
+            {tax.isCalculating ? 'Calculating tax...' : formatMoney(totals.tax)}
+          </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Estimated Total</Text>
           <Price amount={totals.total} large />
         </View>
+        {tax.notice ? (
+          <Text style={styles.taxNotice}>{tax.notice}</Text>
+        ) : null}
         <Text style={styles.help}>
           Payment is made in person when picking up your order. The kitchen confirms the final total.
         </Text>
@@ -210,6 +216,13 @@ const styles = StyleSheet.create({
     fontFamily: type.body,
     fontSize: 13,
     lineHeight: 18,
+    marginTop: space.xs,
+  },
+  taxNotice: {
+    color: colors.gold,
+    fontFamily: type.body,
+    fontSize: 12,
+    lineHeight: 16,
     marginTop: space.xs,
   },
   notice: {

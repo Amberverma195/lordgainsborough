@@ -2,6 +2,8 @@
  * Facts taken from the existing website and backend, not invented for the app.
  * Dining hours come from the homepage. Pickup hours come from OrderSchedulingValidator.
  */
+export const DEFAULT_ESTIMATED_HST_RATE = 0.13;
+
 export const restaurantFacts = {
   name: 'Lord Gainsborough',
   established: '1985',
