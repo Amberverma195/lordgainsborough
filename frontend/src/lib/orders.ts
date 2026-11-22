@@ -104,12 +104,10 @@ export interface OrderReview {
   updatedAt: string;
 }
 
-export function getTodayString(): string {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0');
-  const day = String(today.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+export const RESTAURANT_TIMEZONE = 'America/Toronto';
+
+export function getTodayString(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: RESTAURANT_TIMEZONE }).format(now);
 }
 
 export function formatPickupDateLabel(isoDate: string): string {

@@ -183,6 +183,7 @@ export default function KdsPage() {
       const res = await apiFetch(url, { cache: 'no-store' });
 
       if (!res.ok) {
+        console.warn(`[KDS Orders] Fetch failed with status ${res.status}`);
         throw new Error('Unable to load KDS orders.');
       }
 
@@ -251,8 +252,21 @@ export default function KdsPage() {
       fetchOrdersRef.current();
     };
 
-    const handleDisconnect = () => setConnected(false);
-    const handleConnectError = () => setConnected(false);
+    const handleDisconnect = (reason?: string) => {
+      setConnected(false);
+      if (process.env.NODE_ENV !== 'production' && reason) {
+        console.warn(`[KDS Socket] Disconnected: ${reason}`);
+      }
+    };
+    const handleConnectError = (error?: Error) => {
+      setConnected(false);
+      const msg = error?.message || 'Connection error';
+      if (msg.includes('Order access denied') || msg.includes('denied')) {
+        console.warn('[KDS Socket] Socket connection rejected: Order access denied');
+      } else {
+        console.warn(`[KDS Socket] Socket connect_error: ${msg}`);
+      }
+    };
 
     const removeDeletedOrder = ({ id }: { id: string }) => {
       setOrders(previous => previous.filter(order => order.id !== id));

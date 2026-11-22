@@ -42,9 +42,18 @@ class JwtUtilTokenVersionTest {
         String kdsTicket = jwtUtil.generateKdsSocketTicket();
         assertTrue(jwtUtil.validateKdsSocketTicket(kdsTicket));
         assertFalse(jwtUtil.validateKdsSocketTicket("invalid"));
+        assertFalse(jwtUtil.validateKdsSocketTicket(null));
+        assertFalse(jwtUtil.validateKdsSocketTicket(""));
         assertFalse(jwtUtil.validateToken(kdsTicket));
         assertFalse(jwtUtil.validateOrderSocketTicket(kdsTicket, "order-1"));
         assertFalse(jwtUtil.validateKdsSocketTicket(ticket));
+
+        javax.crypto.SecretKey key = (javax.crypto.SecretKey) ReflectionTestUtils.invokeMethod(jwtUtil, "getSigningKey");
+        String expiredKdsTicket = io.jsonwebtoken.Jwts.builder().subject("kds").claim("purpose", "kds-socket")
+                .issuedAt(new java.util.Date(System.currentTimeMillis() - 120_000))
+                .expiration(new java.util.Date(System.currentTimeMillis() - 60_000))
+                .signWith(key).compact();
+        assertFalse(jwtUtil.validateKdsSocketTicket(expiredKdsTicket));
     }
 
     @Test

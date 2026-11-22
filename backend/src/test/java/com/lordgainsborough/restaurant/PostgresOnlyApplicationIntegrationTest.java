@@ -211,7 +211,7 @@ class PostgresOnlyApplicationIntegrationTest {
 
     @Test void messagesRejectOversizedBodiesBeforeSavingOrBroadcasting() throws Exception {
         var created=messageOrder("message-body@example.com","5195551122");String id=created.getOrder().getId();
-        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        var kitchen=kitchenClient();var events=new LinkedBlockingQueue<String>();
         kitchen.on("chat.message",args->events.add(args[0].toString()));connect(kitchen);
         for(String path:List.of("/api/orders/"+id+"/messages","/api/kds/orders/"+id+"/messages")) {
             mvc.perform(post(path).header(OrderAccessService.TRACKING_TOKEN_HEADER,created.getTrackingToken())
@@ -312,7 +312,7 @@ class PostgresOnlyApplicationIntegrationTest {
         // Orders are owned by email, including case-insensitive matches.
         jdbc.update("update customer_orders set customer_email=upper(customer_email) where id=?",id);
         var customer=client("orderId="+id,Map.of("token",token(owner)));connect(customer);waitRoom(id,1);
-        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        var kitchen=kitchenClient();var events=new LinkedBlockingQueue<String>();
         kitchen.on("order.deleted",args->events.add(args[0].toString()));connect(kitchen);
         for(String active:List.of("NEW","ACCEPTED","READY")) {
             jdbc.update("update customer_orders set status=? where id=?",active,id);
@@ -436,7 +436,7 @@ class PostgresOnlyApplicationIntegrationTest {
         var customer=client("orderId="+id,Map.of("token",token(owner)));
         var guest=client("orderId="+id,Map.of("trackingToken",created.getTrackingToken()));
         connect(customer);connect(guest);waitRoom(id,2);
-        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        var kitchen=kitchenClient();var events=new LinkedBlockingQueue<String>();
         kitchen.on("order.deleted",args->events.add(args[0].toString()));connect(kitchen);
         mvc.perform(deleteRequest(token(owner),"CorrectPassword1!")).andExpect(status().isNoContent());
         assertThat(events.poll(5,TimeUnit.SECONDS)).contains(id);
@@ -482,7 +482,7 @@ class PostgresOnlyApplicationIntegrationTest {
         String id=deletionOrder(owner,"READY").getOrder().getId();
         String remaining=deletionOrder(owner,"NEW").getOrder().getId();
         deletionData(owner.getId(),owner.getEmail(),id);
-        var kitchen=client("role=KDS",null);var updates=new LinkedBlockingQueue<String>();var deletions=new LinkedBlockingQueue<String>();
+        var kitchen=kitchenClient();var updates=new LinkedBlockingQueue<String>();var deletions=new LinkedBlockingQueue<String>();
         kitchen.on("order.updated",args->updates.add(args[0].toString()));
         kitchen.on("order.deleted",args->deletions.add(args[0].toString()));connect(kitchen);
         var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(
@@ -710,6 +710,10 @@ class PostgresOnlyApplicationIntegrationTest {
         options.transports=new String[]{"websocket"};options.query=query;options.auth=auth;
         Socket socket=IO.socket("http://127.0.0.1:"+socketPort,options);clients.add(socket);return socket;
     }
+    Socket kitchenClient() throws Exception {
+        String ticket = context.getBean(JwtUtil.class).generateKdsSocketTicket();
+        return client("role=KDS", Map.of("token", ticket));
+    }
     void connect(Socket socket) throws Exception {
         var connected=new CountDownLatch(1);socket.on(Socket.EVENT_CONNECT,args->connected.countDown());socket.connect();
         assertThat(connected.await(5,TimeUnit.SECONDS)).as("live Socket.IO connection").isTrue();
@@ -768,15 +772,21 @@ class PostgresOnlyApplicationIntegrationTest {
         one.disconnect();waitRoom(firstId,0);connect(one);waitRoom(firstId,1);
         assertThat(socketServer.getRoomOperations("kds").getClients()).isEmpty();
     }
-    @Test void kitchenUsesIpAllowlistForBothHandshakeAndRoomAdmission() throws Exception {
-        var kitchen=client("role=KDS",null);connect(kitchen);
+    @Test void authenticatedKitchenSocketAdmitsWithValidTicketAndRejectsAnonymousOrInvalidTicket() throws Exception {
+        var kitchen=kitchenClient();connect(kitchen);
         await(()->socketServer.getRoomOperations("kds").getClients().size()==1,3000);
         assertThat(socketServer.getRoomOperations("kds").getClients()).hasSize(1);
-        kitchen.disconnect();jdbc.update("UPDATE store_settings SET kds_allowed_ip='192.0.2.1'");
+        kitchen.disconnect();
+        jdbc.update("UPDATE store_settings SET kds_allowed_ip='192.0.2.1'");
+        var kitchenOtherIp=kitchenClient();connect(kitchenOtherIp);
+        await(()->socketServer.getRoomOperations("kds").getClients().size()==1,3000);
+        assertThat(socketServer.getRoomOperations("kds").getClients()).hasSize(1);
+        kitchenOtherIp.disconnect();
         denied(client("role=KDS",null));
+        denied(client("role=KDS",Map.of("token","invalid-ticket")));
     }
     @Test void kitchenEventsObserveCommittedWritesAndRollbackEmitsNothing() throws Exception {
-        var kitchen=client("role=KDS",null);var events=new LinkedBlockingQueue<String>();
+        var kitchen=kitchenClient();var events=new LinkedBlockingQueue<String>();
         kitchen.on("order.created",args->events.add(args[0].toString()));connect(kitchen);
         await(()->socketServer.getRoomOperations("kds").getClients().size()==1,3000);
         var created=order("guest@example.com","5195551111");String payload=events.poll(5,TimeUnit.SECONDS);

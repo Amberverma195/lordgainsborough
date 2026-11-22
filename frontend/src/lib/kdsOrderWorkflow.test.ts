@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { CustomerOrder, isActiveOrderStatus, orderStatusLabel, sortOrders } from './orders';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CustomerOrder, getTodayString, isActiveOrderStatus, orderStatusLabel, RESTAURANT_TIMEZONE, sortOrders } from './orders';
+import { kdsSocketAuth } from './kdsSocketAuth';
 
 describe('KDS Order Workflow and Terminal Statuses', () => {
   it('correctly identifies active orders versus terminal orders', () => {
@@ -123,5 +124,94 @@ describe('KDS Order Workflow and Terminal Statuses', () => {
   it('configures automatic fallback polling for disconnected state to 5 minutes', async () => {
     const { KDS_DISCONNECTED_POLL_INTERVAL_MS } = await import('@/app/kds/page');
     expect(KDS_DISCONNECTED_POLL_INTERVAL_MS).toBe(5 * 60 * 1000);
+  });
+
+  describe('Restaurant Timezone (America/Toronto) and Date Sync', () => {
+    it('uses America/Toronto timezone for getTodayString()', () => {
+      expect(RESTAURANT_TIMEZONE).toBe('America/Toronto');
+    });
+
+    it('handles late-evening UTC boundary without shifting to tomorrow in Toronto', () => {
+      // 2026-11-22 at 02:00:00 UTC is 2026-11-21 at 21:00:00 EST in Toronto
+      const lateUtc = new Date('2026-11-22T02:00:00.000Z');
+      expect(getTodayString(lateUtc)).toBe('2026-11-21');
+    });
+
+    it('correctly shifts to next date only when midnight passes in Toronto', () => {
+      // 2026-11-22 at 05:01:00 UTC is 2026-11-22 at 00:01:00 EST in Toronto
+      const nextDayUtc = new Date('2026-11-22T05:01:00.000Z');
+      expect(getTodayString(nextDayUtc)).toBe('2026-11-22');
+    });
+  });
+
+  describe('KDS Socket Auth and Error Diagnostics', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('delivers 60-second ticket payload on successful retrieval', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'mock-kds-ticket-token' }),
+      }));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: 'mock-kds-ticket-token' });
+    });
+
+    it('returns error and null token on 404 unauthorized / unauthenticated', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+      }));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: null, error: 'AUTH_FAILED_404' });
+    });
+
+    it('returns error and null token on 401/403', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+      }));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: null, error: 'AUTH_FAILED_403' });
+    });
+
+    it('returns server error and null token on 500', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+      }));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: null, error: 'SERVER_ERROR_500' });
+    });
+
+    it('returns network error and null token on fetch failure', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network connection dropped')));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: null, error: 'NETWORK_ERROR' });
+    });
+
+    it('returns error when ticket response payload is missing ticket property', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ other: 'data' }),
+      }));
+
+      const authFn = kdsSocketAuth();
+      const payload = await new Promise(resolve => authFn(resolve));
+      expect(payload).toEqual({ token: null, error: 'MISSING_TICKET' });
+    });
   });
 });

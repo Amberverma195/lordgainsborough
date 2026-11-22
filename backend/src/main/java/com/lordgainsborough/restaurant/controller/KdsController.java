@@ -22,6 +22,8 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/kds")
 public class KdsController {
+    public static final ZoneId RESTAURANT_ZONE = ZoneId.of("America/Toronto");
+
     private final KdsOrderStore orders;
     private final OrderRealtimeService realtime;
     private final Clock clock;
@@ -34,7 +36,7 @@ public class KdsController {
                          JwtUtil jwtUtil, UserAuthStore identityStore, KdsAccessService kdsAccessService) {
         this.orders = orders;
         this.realtime = realtime;
-        this.clock = clock.withZone(ZoneId.systemDefault());
+        this.clock = clock != null ? clock.withZone(RESTAURANT_ZONE) : Clock.system(RESTAURANT_ZONE);
         this.jwtUtil = jwtUtil;
         this.identityStore = identityStore;
         this.kdsAccessService = kdsAccessService;

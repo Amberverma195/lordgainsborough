@@ -15,6 +15,8 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.lordgainsborough.restaurant.security.ClientIpResolver;
 import com.lordgainsborough.restaurant.service.SocketOrderAuthorizationService;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 
@@ -26,6 +28,7 @@ import java.util.Objects;
 
 @org.springframework.context.annotation.Configuration
 public class SocketIoConfig {
+    private static final Logger log = LoggerFactory.getLogger(SocketIoConfig.class);
     private static final String ROOM_GRANT = SocketIoConfig.class.getName() + ".roomGrant";
     private SocketOrderAuthorizationService authorizationService;
 
@@ -70,7 +73,10 @@ public class SocketIoConfig {
                     var grant = authorization.authorize(handshake.getSingleUrlParam("orderId"),
                             handshake.getSingleUrlParam("role"), authValue(authToken, "token", 8192),
                             authValue(authToken, "trackingToken", 43), resolveHandshakeIp(handshake, clientIpResolver));
-                    if (grant.isEmpty()) return deniedAuthorization();
+                    if (grant.isEmpty()) {
+                        log.debug("Namespace auth rejected: authorization returned empty grant");
+                        return deniedAuthorization();
+                    }
                     // Engine.IO can invoke connect listeners before namespace authentication.
                     // Admit rooms here after the real auth payload has been validated.
                     admit(client, grant.get());
@@ -94,7 +100,7 @@ public class SocketIoConfig {
                     // netty-socketio 2.0.14 skips namespace auth for a null auth payload (and older Engine.IO).
                     // Such a path can enter no order room; kitchen-only connections still pass the real IP gate.
                     if (grant == null) {
-                        if (orderId != null) {
+                        if (orderId != null || SocketOrderAuthorizationService.isKitchenRole(role)) {
                             // This is provisional transport connectivity, not an order-room grant.
                             // The library skips namespace authentication for an absent auth payload.
                             java.util.concurrent.CompletableFuture.delayedExecutor(3, java.util.concurrent.TimeUnit.SECONDS)
@@ -134,6 +140,7 @@ public class SocketIoConfig {
         if (grant.orderId() != null) client.joinRoom("order:" + grant.orderId());
         if (grant.kitchen()) client.joinRoom("kds");
         client.set(ROOM_GRANT, grant);
+        log.debug("Admitted socket connection (orderIdPresent={}, kitchen={})", grant.orderId() != null, grant.kitchen());
     }
 
     private static AuthTokenResult deniedAuthorization() {
@@ -161,6 +168,7 @@ public class SocketIoConfig {
 
     private static void denyConnection(SocketIOClient client) {
         safelyRevoke(client);
+        log.debug("Denied socket connection (unauthorized or missing room grant)");
         try {
             Packet denial = new Packet(PacketType.MESSAGE, client.getEngineIOVersion());
             denial.setSubType(PacketType.ERROR);
