@@ -5,6 +5,8 @@ export interface MenuItem {
   price: number;
   category: string;
   image: string;
+  available?: boolean;
+  mostLoved?: boolean;
 }
 
 export const menuItems: MenuItem[] = [

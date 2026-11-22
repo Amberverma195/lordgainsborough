@@ -37,6 +37,8 @@ import {
 } from '@/lib/orders';
 import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
 import { getAuthHeadersOnly } from '@/lib/auth';
+import { MenuItem } from '@/lib/mockData';
+import { planReorder, storeReorderNotice } from '@/lib/reorder';
 // import OrderMessages from '@/components/OrderMessages';
 import styles from './order-status.module.css';
 
@@ -123,6 +125,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [reordering, setReordering] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -212,23 +215,39 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     setReviewOpen(true);
   };
 
-  const reorderItems = () => {
-    if (!order) {
+  const reorderItems = async () => {
+    if (!order || !order.items || order.items.length === 0 || reordering) {
       return;
     }
 
-    const cartItems: CartItem[] = order.items.map(item => ({
-      id: item.menuItemId,
-      name: item.name,
-      description: '',
-      category: 'Reorder',
-      image: '',
-      price: item.unitPrice,
-      quantity: item.quantity,
-    }));
+    setReordering(true);
+    setNotice('');
 
-    replaceCart(cartItems);
-    router.push('/checkout');
+    try {
+      const res = await apiFetch(`${API_BASE}/menu`, { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error('Menu fetch failed');
+      }
+
+      const currentMenu: MenuItem[] = await res.json();
+      const plan = planReorder(order.items, currentMenu);
+
+      if (plan.availableItems.length === 0) {
+        setNotice('None of the items from this order are currently available on the menu.');
+        setReordering(false);
+        return;
+      }
+
+      if (plan.notices.length > 0) {
+        storeReorderNotice(plan.notices.join(' '));
+      }
+
+      replaceCart(plan.availableItems);
+      router.push('/checkout');
+    } catch {
+      setNotice('Unable to refresh menu prices. Please try again.');
+      setReordering(false);
+    }
   };
 
   const submitReview = async (e: React.FormEvent) => {
@@ -573,8 +592,9 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
                     type="button"
                     className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
                     onClick={reorderItems}
+                    disabled={reordering}
                   >
-                    <RotateCcw size={17} /> Reorder These Items
+                    <RotateCcw size={17} /> {reordering ? 'Refreshing Menu...' : 'Reorder These Items'}
                   </button>
                   {!order.reviewed ? (
                     <button

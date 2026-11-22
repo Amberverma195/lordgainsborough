@@ -36,6 +36,7 @@ import {
   type AuthData,
 } from '@/lib/auth';
 import LoginModal from '@/components/LoginModal';
+import { consumeReorderNotice } from '@/lib/reorder';
 
 
 
@@ -64,6 +65,7 @@ export default function CheckoutPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [reorderNotice, setReorderNotice] = useState('');
   const [storeSettings, setStoreSettings] = useState<StoreSettings | null>(null);
   const [pickupDisabledForUser, setPickupDisabledForUser] = useState(false);
   const pendingOrderSubmit = useRef(false);
@@ -89,6 +91,10 @@ export default function CheckoutPage() {
   }, []);
 
   useEffect(() => {
+    const notice = consumeReorderNotice();
+    if (notice) {
+      setReorderNotice(notice);
+    }
     fetchStoreSettings().then(setStoreSettings);
     const timeout = window.setTimeout(() => {
       setPickupDisabledForUser(isPickupDisabledForUser());
@@ -324,6 +330,10 @@ export default function CheckoutPage() {
                 />
               </div>
             </div>
+
+            {reorderNotice && (
+              <p className={styles.infoNotice}>{reorderNotice}</p>
+            )}
 
             <div className={styles.paymentNote}>
               <CreditCard size={20} className={styles.icon} />
