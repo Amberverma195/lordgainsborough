@@ -312,4 +312,17 @@ class ReservationMapperTest {
         r.setTime("12:30");assertThat(configured.toJpa(r)).isNotNull();
         assertThatThrownBy(()->policy.setMinimumAdvanceNotice(Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test void unapprovedSeatingPolicyRulesAreNotEnforced() {
+        var policy = new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy();
+        policy.setManagementApproved(false);
+        policy.setLastSeatingBeforeClose(Duration.ofHours(1));
+        policy.setMinimumAdvanceNotice(Duration.ofMinutes(30));
+        var configured = new ReservationMapper(clock, policy);
+        var r = validReservation();
+        r.setTime("19:30");
+        assertThat(configured.toJpa(r)).isNotNull();
+        r.setTime("20:00");
+        assertThatThrownBy(() -> configured.toJpa(r)).isInstanceOf(ResponseStatusException.class);
+    }
 }

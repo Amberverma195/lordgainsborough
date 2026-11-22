@@ -191,7 +191,7 @@ export default function ReservePage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
       >
-        <div role="status">{policy?<>Last seating: {policy.lastSeatingMinutes} minutes before closing. Minimum notice: {policy.advanceNoticeMinutes} minutes. {!policy.managementApproved?'Proposed policy pending restaurant management approval.':''}</>:policyError?'Reservation policy unavailable. Please retry or call.':'Loading reservation policy...'}{policyError?<button type="button" onClick={()=>setPolicyVersion(value=>value+1)}>Retry policy</button>:null}</div>
+        <div role="status">{policy?policy.managementApproved?<>Last seating: {policy.lastSeatingMinutes} minutes before closing. Minimum notice: {policy.advanceNoticeMinutes} minutes.</>:<>Standard dining hours in effect. Proposed policy ({policy.lastSeatingMinutes} min cutoff, {policy.advanceNoticeMinutes} min notice) pending management approval.</>:policyError?'Reservation policy unavailable. Please retry or call.':'Loading reservation policy...'}{policyError?<button type="button" onClick={()=>setPolicyVersion(value=>value+1)}>Retry policy</button>:null}</div>
             <form onSubmit={handleSubmit} className={styles.form}>
           
           <div className={styles.formSection}>

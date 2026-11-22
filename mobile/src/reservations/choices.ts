@@ -28,8 +28,21 @@ export function reservationTimes(date: string, now = new Date(), policy:SeatingP
   const open = day === 0 ? 600 : 540;
   const close = day === 0 ? 1080 : day === 5 || day === 6 ? 1230 : 1200;
   const times: string[] = [];
-  for (let minute = open; minute < close && minute <= close-policy.lastSeatingMinutes; minute += 30)
-    if ((date !== today.date || minute > today.minutes) && torontoSeatingInstant(date,String(Math.floor(minute / 60)).padStart(2, '0')+':'+String(minute % 60).padStart(2, '0'))>=now.getTime()+policy.advanceNoticeMinutes*60000)
+  const isApproved = Boolean(policy?.managementApproved);
+  const lastSeating = isApproved ? policy.lastSeatingMinutes : 30;
+  const notice = isApproved ? policy.advanceNoticeMinutes : 0;
+  for (let minute = open; minute < close && minute <= close - lastSeating; minute += 30)
+    if (
+      (date !== today.date || minute > today.minutes) &&
+      (!isApproved ||
+        torontoSeatingInstant(
+          date,
+          String(Math.floor(minute / 60)).padStart(2, '0') +
+            ':' +
+            String(minute % 60).padStart(2, '0'),
+        ) >=
+          now.getTime() + notice * 60000)
+    )
       times.push(
         String(Math.floor(minute / 60)).padStart(2, '0') +
           ':' +
@@ -39,7 +52,7 @@ export function reservationTimes(date: string, now = new Date(), policy:SeatingP
 }
 
 export interface SeatingPolicy {lastSeatingMinutes:number;advanceNoticeMinutes:number;managementApproved?:boolean;}
-export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:false};
+export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:true};
 export function torontoSeatingInstant(date:string,time:string):number {
  const wanted=Date.parse(date+'T'+time+':00Z');let instant=wanted;
  for(let i=0;i<3;i++){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));const read=(type:string)=>Number(parts.find(part=>part.type===type)?.value);instant+=wanted-Date.UTC(read('year'),read('month')-1,read('day'),read('hour'),read('minute'));}

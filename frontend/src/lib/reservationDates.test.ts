@@ -135,6 +135,20 @@ describe('reservationDates utility', () => {
       expect(times[0].value).toBe('14:30');
       expect(times[0].label).toBe('2:30 PM');
     });
+
+    it('enforces seating buffer and advance notice when policy is approved by management', () => {
+      const approvedPolicy = { lastSeatingMinutes: 60, advanceNoticeMinutes: 30, managementApproved: true };
+      // Future Monday: 2026-11-16 (closes at 20:00). With 60m cutoff, last slot is 19:00.
+      const times = getAvailableTimesForDate('2026-11-16', new Date('2026-11-01T12:00:00Z'), approvedPolicy);
+      expect(times[times.length - 1].value).toBe('19:00');
+      expect(times.some(t => t.value === '19:30')).toBe(false);
+      expect(times.some(t => t.value === '20:00')).toBe(false);
+
+      // Advance notice test for today (14:15 + 30m = 14:45 -> first slot is 15:00)
+      const current = new Date('2026-11-02T19:15:00Z');
+      const todayTimes = getAvailableTimesForDate('2026-11-02', current, approvedPolicy);
+      expect(todayTimes[0].value).toBe('15:00');
+    });
   });
 
   describe('validateReservationDateTime', () => {

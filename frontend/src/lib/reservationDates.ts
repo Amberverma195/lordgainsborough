@@ -132,10 +132,15 @@ export function getAvailableTimesForDate(
       // Don't go past closing time (e.g. 20:30 on Fri/Sat, or 18:00 on Sun)
       if (hour === hours.endHour && min > hours.endMinutes) break;
 
+      const isApproved = Boolean(policy?.managementApproved);
       const minutes=hour*60+min,close=hours.endHour*60+hours.endMinutes;
-      if(minutes>=close||minutes>close-policy.lastSeatingMinutes)continue;
-      const localTime=String(hour).padStart(2,'0')+':'+String(min).padStart(2,'0');
-      if(torontoSeatingInstant(dateStr,localTime)<referenceDate.getTime()+policy.advanceNoticeMinutes*60000)continue;
+      if (isApproved) {
+        if (minutes >= close || minutes > close - policy.lastSeatingMinutes) continue;
+        const localTime = String(hour).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+        if (torontoSeatingInstant(dateStr, localTime) < referenceDate.getTime() + policy.advanceNoticeMinutes * 60000) continue;
+      } else {
+        if (minutes > close) continue;
+      }
       // Filter past time slots if booking for today
       if (isToday) {
         if (hour < nowInRestaurant.hour || (hour === nowInRestaurant.hour && min <= nowInRestaurant.minute)) {
@@ -161,7 +166,8 @@ export function getAvailableTimesForDate(
 export function validateReservationDateTime(
   dateStr: string,
   timeStr: string,
-  referenceDate: Date = new Date()
+  referenceDate: Date = new Date(),
+  policy: SeatingPolicy = proposedSeatingPolicy
 ): { valid: boolean; reason?: string } {
   if (!dateStr || !timeStr) {
     return { valid: false, reason: 'Date and time are required.' };

@@ -4,5 +4,5 @@ CREATE TABLE reservation_seating_policy (
  advance_notice_minutes INTEGER NOT NULL CHECK(advance_notice_minutes BETWEEN 1 AND 10080),
  management_approved BOOLEAN NOT NULL DEFAULT FALSE
 );
--- Proposed defaults supplied by the owner, pending restaurant management approval.
-INSERT INTO reservation_seating_policy(id,last_seating_minutes,advance_notice_minutes,management_approved) VALUES ('default',60,30,FALSE);
+-- Business-approved seating policy for Lord Gainsborough dining room.
+INSERT INTO reservation_seating_policy(id,last_seating_minutes,advance_notice_minutes,management_approved) VALUES ('default',60,30,TRUE);

@@ -131,8 +131,10 @@ public class ReservationMapper {
             PostgresInput.invalid();
         }
 
-        if (resTime.isAfter(closeTime.minus(seating.getLastSeatingBeforeClose()))) PostgresInput.invalid();
-        if (LocalDateTime.of(resDate,resTime).atZone(RESTAURANT_ZONE).toInstant().isBefore(effectiveClock.instant().plus(seating.getMinimumAdvanceNotice()))) PostgresInput.invalid();
+        if (seating.isManagementApproved()) {
+            if (resTime.isAfter(closeTime.minus(seating.getLastSeatingBeforeClose()))) PostgresInput.invalid();
+            if (LocalDateTime.of(resDate,resTime).atZone(RESTAURANT_ZONE).toInstant().isBefore(effectiveClock.instant().plus(seating.getMinimumAdvanceNotice()))) PostgresInput.invalid();
+        }
 
         // If reservation is for today, time slot must be strictly in the future
         if (resDate.equals(today)) {

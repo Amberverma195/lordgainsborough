@@ -218,7 +218,24 @@ export default function ReserveScreen() {
           Request a table. Submission is pending confirmation, not a guaranteed
           reservation. All dates and times are America/Toronto.
         </Text>
-        {policy.data?<Text style={{color:colors.textSecondary}}>Last seating is {policy.data.lastSeatingMinutes} minutes before closing. Request at least {policy.data.advanceNoticeMinutes} minutes ahead.{!policy.data.managementApproved?' Proposed policy awaiting restaurant management approval.':''}</Text>:<><Text style={{color:colors.danger}}>Reservation policy is loading or unavailable. Please retry or call.</Text><Button label="Retry reservation policy" onPress={()=>void policy.refetch()}/></>}
+        {policy.data ? (
+          <Text style={{ color: colors.textSecondary }}>
+            {policy.data.managementApproved
+              ? `Last seating is ${policy.data.lastSeatingMinutes} minutes before closing. Request at least ${policy.data.advanceNoticeMinutes} minutes ahead.`
+              : `Standard dining hours in effect. Proposed seating policy (${policy.data.lastSeatingMinutes} min last seating, ${policy.data.advanceNoticeMinutes} min advance notice) is awaiting restaurant management approval and is not active.`}
+          </Text>
+        ) : (
+          <>
+            <Text style={{ color: colors.danger }}>
+              Reservation policy is loading or unavailable. Please retry or
+              call.
+            </Text>
+            <Button
+              label="Retry reservation policy"
+              onPress={() => void policy.refetch()}
+            />
+          </>
+        )}
       {restaurantFacts.diningHours.map((line) => (
           <Text key={line} style={{ color: colors.textSecondary }}>
             {line}
