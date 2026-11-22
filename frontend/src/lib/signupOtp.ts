@@ -51,6 +51,8 @@ export interface PendingSignupCredentials {
 
 export const PENDING_SIGNUP_KEY = 'pendingSignup';
 export const SIGNUP_OTP_CHALLENGE_KEY = 'signupOtpChallenge';
+export const MAX_OTP_STATUS_SYNC_ATTEMPTS = 3;
+export const MIN_OTP_STATUS_SYNC_INTERVAL_MS = 5000;
 
 export async function readSignupOtpResponse(res: Response): Promise<SignupOtpResponse> {
   try {
@@ -69,17 +71,33 @@ export function applyBackendChallengeState(
   emailFallback?: string,
   nowMs: number = Date.now()
 ): SignupOtpChallengeState {
+  if (!body || typeof body !== 'object' || Object.keys(body).length === 0) {
+    return previous || { email: emailFallback || '' };
+  }
+
+  // Stale-response protection: if we are already verified, do not regress to an unverified state
+  if (previous?.code === 'OTP_VERIFIED' && body.code !== 'OTP_VERIFIED') {
+    return previous;
+  }
+
+  // Prevent cross-account state pollution
+  const incomingEmail = (body as { email?: string }).email;
+  if (incomingEmail && previous?.email && incomingEmail.trim().toLowerCase() !== previous.email.trim().toLowerCase()) {
+    return previous;
+  }
+
   // Stale-response protection: if the incoming response has an older serverTime
   // than what we already have, discard it to prevent out-of-order overwrites.
-  if (previous?.serverTime && body.serverTime) {
+  const isIncomingServerValid = typeof body.serverTime === 'string' && Number.isFinite(Date.parse(body.serverTime));
+  if (previous?.serverTime && isIncomingServerValid) {
     const prevServer = Date.parse(previous.serverTime);
-    const incomingServer = Date.parse(body.serverTime);
-    if (Number.isFinite(prevServer) && Number.isFinite(incomingServer) && incomingServer < prevServer) {
+    const incomingServer = Date.parse(body.serverTime!);
+    if (Number.isFinite(prevServer) && incomingServer < prevServer) {
       return previous;
     }
   }
 
-  const email = (body as { email?: string }).email
+  const email = incomingEmail
     || previous?.email
     || emailFallback
     || '';
@@ -93,10 +111,34 @@ export function applyBackendChallengeState(
   const attemptToken = body.attemptToken
     ?? (isSameOrUnspecifiedChallenge ? previous?.attemptToken : undefined);
 
-  const serverTime = body.serverTime ?? previous?.serverTime;
-  const receivedAtMs = (body.serverTime && body.serverTime !== previous?.serverTime)
+  // Preserve valid authoritative timing if incoming response lacks valid timing
+  const isIncomingNextResendValid = typeof body.nextResendAt === 'string' && Number.isFinite(Date.parse(body.nextResendAt));
+  const isIncomingOtpExpiresValid = typeof body.otpExpiresAt === 'string' && Number.isFinite(Date.parse(body.otpExpiresAt));
+  const isIncomingChallengeExpiresValid = typeof body.challengeExpiresAt === 'string' && Number.isFinite(Date.parse(body.challengeExpiresAt));
+
+  const serverTime = isIncomingServerValid
+    ? body.serverTime
+    : (previous?.serverTime && Number.isFinite(Date.parse(previous.serverTime)) ? previous.serverTime : undefined);
+
+  const nextResendAt = isIncomingNextResendValid
+    ? body.nextResendAt
+    : (previous?.nextResendAt && Number.isFinite(Date.parse(previous.nextResendAt)) ? previous.nextResendAt : undefined);
+
+  const otpExpiresAt = isIncomingOtpExpiresValid
+    ? body.otpExpiresAt
+    : (previous?.otpExpiresAt && Number.isFinite(Date.parse(previous.otpExpiresAt)) ? previous.otpExpiresAt : undefined);
+
+  const challengeExpiresAt = isIncomingChallengeExpiresValid
+    ? body.challengeExpiresAt
+    : (previous?.challengeExpiresAt && Number.isFinite(Date.parse(previous.challengeExpiresAt)) ? previous.challengeExpiresAt : undefined);
+
+  const receivedAtMs = (isIncomingServerValid && body.serverTime !== previous?.serverTime)
     ? nowMs
     : (previous?.receivedAtMs ?? nowMs);
+
+  const code = (isChallengeExpiredState(previous, nowMs) && body.code === 'OTP_SENT')
+    ? 'OTP_CHALLENGE_EXPIRED'
+    : (body.code ?? previous?.code);
 
   return {
     email,
@@ -104,13 +146,13 @@ export function applyBackendChallengeState(
     attemptToken,
     serverTime,
     receivedAtMs,
-    nextResendAt: body.nextResendAt ?? previous?.nextResendAt,
-    otpExpiresAt: body.otpExpiresAt ?? previous?.otpExpiresAt,
-    challengeExpiresAt: body.challengeExpiresAt ?? previous?.challengeExpiresAt,
+    nextResendAt,
+    otpExpiresAt,
+    challengeExpiresAt,
     resendsRemaining: typeof body.resendsRemaining === 'number'
       ? body.resendsRemaining
       : previous?.resendsRemaining,
-    code: body.code ?? previous?.code,
+    code,
     message: body.message ?? previous?.message,
   };
 }

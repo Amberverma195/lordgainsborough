@@ -9,6 +9,8 @@ import {
   isResendExhausted,
   loadPendingSignupCredentials,
   loadSignupOtpChallengeState,
+  MAX_OTP_STATUS_SYNC_ATTEMPTS,
+  MIN_OTP_STATUS_SYNC_INTERVAL_MS,
   PENDING_SIGNUP_KEY,
   savePendingSignupCredentials,
   saveSignupOtpChallengeState,
@@ -441,6 +443,68 @@ describe('signupOtp challenge state', () => {
         updated.receivedAtMs
       );
       expect(cooldown).toBe(30);
+    });
+
+    it('preserves existing authoritative timing when incoming status check lacks valid timing', () => {
+      const now = 1720872000000;
+      const existingState: SignupOtpChallengeState = {
+        email: 'amber@example.com',
+        challengeId: 'c-auth-1',
+        serverTime: new Date(now).toISOString(),
+        nextResendAt: new Date(now + 60000).toISOString(),
+        resendsRemaining: 4,
+        code: 'OTP_SENT',
+      };
+
+      // Backend returns status without timing (e.g. legacy/minimal response)
+      const untimedResponse = {
+        challengeId: 'c-auth-1',
+        code: 'OTP_SENT' as const,
+        message: 'Active challenge',
+      };
+
+      const updated = applyBackendChallengeState(existingState, untimedResponse, 'amber@example.com', now + 1000);
+      expect(hasAuthoritativeCooldownTiming(updated)).toBe(true);
+      expect(updated.serverTime).toBe(existingState.serverTime);
+      expect(updated.nextResendAt).toBe(existingState.nextResendAt);
+    });
+
+    it('rejects stale regression from OTP_VERIFIED state', () => {
+      const verifiedState: SignupOtpChallengeState = {
+        email: 'amber@example.com',
+        challengeId: 'c-verified',
+        code: 'OTP_VERIFIED',
+      };
+
+      const lateResponse = {
+        challengeId: 'c-verified',
+        code: 'OTP_SENT' as const,
+      };
+
+      const result = applyBackendChallengeState(verifiedState, lateResponse);
+      expect(result.code).toBe('OTP_VERIFIED');
+    });
+
+    it('rejects state updates for mismatched email address', () => {
+      const existingState: SignupOtpChallengeState = {
+        email: 'user1@example.com',
+        challengeId: 'c-1',
+        code: 'OTP_SENT',
+      };
+
+      const wrongAccountResponse = {
+        email: 'user2@example.com',
+        challengeId: 'c-2',
+        code: 'OTP_SENT' as const,
+      };
+
+      const result = applyBackendChallengeState(existingState, wrongAccountResponse);
+      expect(result).toBe(existingState);
+    });
+
+    it('defines bounded retry constants for OTP status synchronization', () => {
+      expect(MAX_OTP_STATUS_SYNC_ATTEMPTS).toBe(3);
+      expect(MIN_OTP_STATUS_SYNC_INTERVAL_MS).toBe(5000);
     });
   });
 });

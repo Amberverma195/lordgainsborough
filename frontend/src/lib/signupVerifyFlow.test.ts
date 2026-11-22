@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  applyBackendChallengeState,
   cooldownSecondsFromServerClocks,
   fetchSignupOtpStatus,
   hasAuthoritativeCooldownTiming,
@@ -7,6 +8,7 @@ import {
   isResendExhausted,
   loadPendingSignupCredentials,
   loadSignupOtpChallengeState,
+  MAX_OTP_STATUS_SYNC_ATTEMPTS,
   savePendingSignupCredentials,
   saveSignupOtpChallengeState,
   SignupOtpChallengeState,
@@ -168,6 +170,35 @@ describe('Signup and Verify Flow UX & Mechanics', () => {
       // Verify that NO POST /auth/signup/send-otp was ever called
       const sendOtpCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/send-otp'));
       expect(sendOtpCalls.length).toBe(0);
+    });
+
+    it('bounds status sync retries when backend returns challenge without valid timing information', () => {
+      let syncAttempts = 0;
+      let challenge: SignupOtpChallengeState = {
+        email: 'amber@example.com',
+        challengeId: 'c-untimed',
+        code: 'OTP_SENT',
+      };
+
+      const simulateSyncEffect = () => {
+        // Simulates useEffect bounded retry logic
+        if (!hasAuthoritativeCooldownTiming(challenge)) {
+          if (syncAttempts >= MAX_OTP_STATUS_SYNC_ATTEMPTS) {
+            return; // Bounded retry halts fetch loop
+          }
+          syncAttempts++;
+          // Backend returns untimed response
+          challenge = applyBackendChallengeState(challenge, {
+            challengeId: 'c-untimed',
+            code: 'OTP_SENT',
+            message: 'Active code',
+          });
+          simulateSyncEffect();
+        }
+      };
+
+      simulateSyncEffect();
+      expect(syncAttempts).toBe(MAX_OTP_STATUS_SYNC_ATTEMPTS);
     });
 
     it('displays "Resend available in Xs" during cooldown and "Resend Code" once elapsed', () => {

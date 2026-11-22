@@ -36,6 +36,8 @@ import {
   isResendExhausted,
   loadPendingSignupCredentials,
   loadSignupOtpChallengeState,
+  MAX_OTP_STATUS_SYNC_ATTEMPTS,
+  MIN_OTP_STATUS_SYNC_INTERVAL_MS,
   PendingSignupCredentials,
   readSignupOtpResponse,
   savePendingSignupCredentials,
@@ -123,6 +125,9 @@ export default function SignupPage() {
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const syncSeqRef = useRef(0);
   const requestInFlight = useRef(false);
+  const timingSyncAttemptsRef = useRef(0);
+  const syncInFlightRef = useRef(false);
+  const lastSyncTimestampRef = useRef(0);
 
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -167,7 +172,14 @@ export default function SignupPage() {
   }, [publishChallenge]);
 
   // Sync challenge status on mount/focus
-  const syncChallengeStatus = useCallback(async (credentials: PendingSignupCredentials) => {
+  const syncChallengeStatus = useCallback(async (credentials: PendingSignupCredentials, isTimingRetry = false) => {
+    if (syncInFlightRef.current) return;
+    const now = Date.now();
+    if (isTimingRetry && now - lastSyncTimestampRef.current < MIN_OTP_STATUS_SYNC_INTERVAL_MS) {
+      return;
+    }
+    syncInFlightRef.current = true;
+    lastSyncTimestampRef.current = now;
     const currentSeq = ++syncSeqRef.current;
     const cached = loadSignupOtpChallengeState() || challengeRef.current;
     try {
@@ -185,6 +197,10 @@ export default function SignupPage() {
       saveSignupOtpChallengeState(next);
       publishChallenge(next);
 
+      if (hasAuthoritativeCooldownTiming(next)) {
+        timingSyncAttemptsRef.current = 0;
+      }
+
       if (body.code === 'OTP_DELIVERY_UNKNOWN') {
         setInfoMessage(body.message || "We couldn't confirm whether the code was sent. Please check your inbox and spam folder.");
       } else if (body.code === 'OTP_CHALLENGE_EXPIRED') {
@@ -194,6 +210,8 @@ export default function SignupPage() {
       }
     } catch {
       // Offline or temporary error
+    } finally {
+      syncInFlightRef.current = false;
     }
   }, [publishChallenge]);
 
@@ -201,12 +219,14 @@ export default function SignupPage() {
   useEffect(() => {
     const handle = subscribeSignupOtpCrossTab((payload) => {
       if (payload.type === 'verified') {
+        timingSyncAttemptsRef.current = 0;
         setError('');
         clearAllSignupSession();
         router.replace('/profile');
         return;
       }
       if (payload.type === 'cleared') {
+        timingSyncAttemptsRef.current = 0;
         challengeRef.current = null;
         setChallenge(null);
         clearAllSignupSession();
@@ -250,10 +270,20 @@ export default function SignupPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, [pendingSignup, step, syncChallengeStatus]);
 
-  // If in verification step and challenge lacks authoritative timing, query backend for status
+  // If in verification step and challenge lacks authoritative timing, query backend for status with bounded retries
   useEffect(() => {
-    if (step === 'signup-verify' && pendingSignup && !hasAuthoritativeCooldownTiming(challenge) && !loading && !resending) {
-      void syncChallengeStatus(pendingSignup);
+    if (
+      step === 'signup-verify' &&
+      pendingSignup &&
+      !hasAuthoritativeCooldownTiming(challenge) &&
+      !loading &&
+      !resending
+    ) {
+      if (timingSyncAttemptsRef.current >= MAX_OTP_STATUS_SYNC_ATTEMPTS) {
+        return; // Bounded retry: stop repeated fetching when backend returns challenge without valid timing
+      }
+      timingSyncAttemptsRef.current += 1;
+      void syncChallengeStatus(pendingSignup, true);
     }
   }, [step, pendingSignup, challenge, loading, resending, syncChallengeStatus]);
 
@@ -374,6 +404,7 @@ export default function SignupPage() {
       if (res.ok || res.status === 202) {
         const body = await readSignupOtpResponse(res);
         clearAllSignupSession();
+        timingSyncAttemptsRef.current = 0;
         const challengeState = applyBackendChallengeState(existingChallenge, body, cleanEmail);
         saveSignupOtpChallengeState(challengeState);
         const credentials: PendingSignupCredentials = {
@@ -453,6 +484,7 @@ export default function SignupPage() {
 
     requestInFlight.current = true;
     syncSeqRef.current++;
+    timingSyncAttemptsRef.current = 0;
     setResending(true);
     setError('');
     setInfoMessage('');
