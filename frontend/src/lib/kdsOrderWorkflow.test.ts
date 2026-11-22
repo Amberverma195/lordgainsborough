@@ -119,4 +119,9 @@ describe('KDS Order Workflow and Terminal Statuses', () => {
     const active = list.filter(order => isActiveOrderStatus(order.status));
     expect(active.map(o => o.id)).toEqual(['ord-new', 'ord-ready']);
   });
+
+  it('configures automatic fallback polling for disconnected state to 5 minutes', async () => {
+    const { KDS_DISCONNECTED_POLL_INTERVAL_MS } = await import('@/app/kds/page');
+    expect(KDS_DISCONNECTED_POLL_INTERVAL_MS).toBe(5 * 60 * 1000);
+  });
 });

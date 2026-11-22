@@ -46,6 +46,7 @@ import styles from './kds.module.css';
 
 const MIN_READY_MINUTES = 5;
 const MAX_READY_MINUTES = 120;
+export const KDS_DISCONNECTED_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes polling fallback while disconnected
 
 function clampReadyMinutes(minutes: number): number {
   return Math.min(MAX_READY_MINUTES, Math.max(MIN_READY_MINUTES, minutes));
@@ -100,6 +101,7 @@ export default function KdsPage() {
   const modalDateInputRef = useRef<HTMLInputElement>(null);
   const fetchOrdersRef = useRef<() => void>(() => {});
   const updatingRef = useRef<string | null>(null);
+  const connectedRef = useRef(connected);
 
   useEffect(() => {
     selectedDateRef.current = selectedDate;
@@ -108,6 +110,10 @@ export default function KdsPage() {
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
   }, [soundEnabled]);
+
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
 
   useEffect(() => {
     if (!ordersModalOpen && !confirmNoShowOrder) {
@@ -169,6 +175,7 @@ export default function KdsPage() {
   }, [upsertOrder]);
 
   const fetchOrders = useCallback(async () => {
+    if (updatingRef.current) return;
     setLoading(true);
     setNotice('');
     try {
@@ -198,6 +205,30 @@ export default function KdsPage() {
       return () => window.clearTimeout(timeout);
     }
   }, [fetchOrders, access.authorized]);
+
+  // Modest fallback: automatic polling every 5 minutes while disconnected from Socket.IO
+  useEffect(() => {
+    if (!access.authorized || connected) return;
+
+    const interval = window.setInterval(() => {
+      fetchOrdersRef.current();
+    }, KDS_DISCONNECTED_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [access.authorized, connected]);
+
+  useEffect(() => {
+    if (!access.authorized) return;
+
+    const handleFocus = () => {
+      if (!connectedRef.current) {
+        fetchOrdersRef.current();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [access.authorized]);
 
   useEffect(() => {
     if (!access.authorized) return;
@@ -482,7 +513,7 @@ export default function KdsPage() {
 
           <span
             className={`${styles.connPill} ${connected ? styles.connOnline : styles.connOffline}`}
-            title={connected ? 'Live Socket.IO order stream connected' : 'Disconnected — attempting reconnect…'}
+            title={connected ? 'Live Socket.IO order stream connected' : 'Disconnected — attempting reconnect with 5-minute fallback polling…'}
           >
             {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
             <span>{connected ? 'Live' : 'Offline'}</span>
