@@ -359,7 +359,57 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
       <div className={styles.layoutGrid}>
         {/* Main Column */}
         <div className={styles.mainColumn}>
-          {/* Tracker Card */}
+          {/* Receipt / Order Summary Card */}
+          <section className={styles.card} aria-label="Order Summary">
+            <div className={styles.cardHeader}>
+              <h2><ReceiptText size={18} /> Order Summary</h2>
+              <span className={styles.headerBadge}>
+                {order.items.reduce((acc, it) => acc + it.quantity, 0)} {order.items.reduce((acc, it) => acc + it.quantity, 0) === 1 ? 'item' : 'items'}
+              </span>
+            </div>
+
+            <ul className={styles.itemsList}>
+              {order.items.map((item, index) => (
+                <li key={`${item.menuItemId}-${index}`} className={styles.itemRow}>
+                  <div className={styles.itemMain}>
+                    <span className={styles.itemQty}>{item.quantity}x</span>
+                    <div className={styles.itemMeta}>
+                      <span className={styles.itemName}>{item.name}</span>
+                      <span className={styles.itemUnitPrice}>{formatMoney(item.unitPrice)} each</span>
+                    </div>
+                  </div>
+                  <strong className={styles.itemPrice}>{formatMoney(item.total)}</strong>
+                </li>
+              ))}
+            </ul>
+
+            <div className={styles.totalsDivider} />
+
+            <div className={styles.totalsSection}>
+              <div className={styles.totalsRow}>
+                <span>Subtotal</span>
+                <strong>{formatMoney(order.subtotal)}</strong>
+              </div>
+              <div className={styles.totalsRow}>
+                <span>Tax</span>
+                <strong>{formatMoney(order.tax)}</strong>
+              </div>
+              <div className={styles.grandTotalRow}>
+                <span>Total Paid</span>
+                <strong>{formatMoney(order.total)}</strong>
+              </div>
+            </div>
+          </section>
+
+          {/* Special Instructions */}
+          {order.specialInstructions && order.specialInstructions.trim().length > 0 && (
+            <section className={styles.specialCard} aria-label="Special Instructions">
+              <h2><NotebookPen size={18} /> Special Instructions</h2>
+              <p>{order.specialInstructions}</p>
+            </section>
+          )}
+
+          {/* Tracker Card / Order Progress */}
           <section className={styles.card} aria-label="Order Progress">
             <div className={styles.cardHeader}>
               <h2><Clock3 size={18} /> Order Progress</h2>
@@ -453,56 +503,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
               </div>
             )}
           </section>
-
-          {/* Receipt / Order Summary Card */}
-          <section className={styles.card} aria-label="Order Summary">
-            <div className={styles.cardHeader}>
-              <h2><ReceiptText size={18} /> Order Summary</h2>
-              <span className={styles.headerBadge}>
-                {order.items.reduce((acc, it) => acc + it.quantity, 0)} {order.items.reduce((acc, it) => acc + it.quantity, 0) === 1 ? 'item' : 'items'}
-              </span>
-            </div>
-
-            <ul className={styles.itemsList}>
-              {order.items.map((item, index) => (
-                <li key={`${item.menuItemId}-${index}`} className={styles.itemRow}>
-                  <div className={styles.itemMain}>
-                    <span className={styles.itemQty}>{item.quantity}x</span>
-                    <div className={styles.itemMeta}>
-                      <span className={styles.itemName}>{item.name}</span>
-                      <span className={styles.itemUnitPrice}>{formatMoney(item.unitPrice)} each</span>
-                    </div>
-                  </div>
-                  <strong className={styles.itemPrice}>{formatMoney(item.total)}</strong>
-                </li>
-              ))}
-            </ul>
-
-            <div className={styles.totalsDivider} />
-
-            <div className={styles.totalsSection}>
-              <div className={styles.totalsRow}>
-                <span>Subtotal</span>
-                <strong>{formatMoney(order.subtotal)}</strong>
-              </div>
-              <div className={styles.totalsRow}>
-                <span>Tax</span>
-                <strong>{formatMoney(order.tax)}</strong>
-              </div>
-              <div className={styles.grandTotalRow}>
-                <span>Total Paid</span>
-                <strong>{formatMoney(order.total)}</strong>
-              </div>
-            </div>
-          </section>
-
-          {/* Special Instructions */}
-          {order.specialInstructions && order.specialInstructions.trim().length > 0 && (
-            <section className={styles.specialCard} aria-label="Special Instructions">
-              <h2><NotebookPen size={18} /> Special Instructions</h2>
-              <p>{order.specialInstructions}</p>
-            </section>
-          )}
         </div>
 
         {/* Secondary / Sidebar Column */}
