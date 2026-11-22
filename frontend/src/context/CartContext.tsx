@@ -61,6 +61,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const activeAccountRef = useRef<string | null>(null);
   const syncGenerationRef = useRef(0);
   const isApplyingCrossTabRef = useRef(false);
+  const cartVersionRef = useRef(0);
+  const isSavingRef = useRef(false);
+  const queuedSaveRef = useRef(false);
 
   // --- Server API calls ---
 
@@ -94,7 +97,16 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const saveServerCart = useCallback(async (items: CartItem[], accountEmail: string) => {
     if (!accountEmail || accountEmail !== getSessionKey()) return;
+    if (isSavingRef.current) {
+      queuedSaveRef.current = true;
+      return;
+    }
+
+    isSavingRef.current = true;
+    queuedSaveRef.current = false;
+    const versionAtStart = cartVersionRef.current;
     pendingServerSavesRef.current += 1;
+
     try {
       const res = await apiFetch(`${API_BASE}/cart`, {
         method: 'PUT',
@@ -118,6 +130,15 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to save server cart', err);
     } finally {
       pendingServerSavesRef.current = Math.max(0, pendingServerSavesRef.current - 1);
+      isSavingRef.current = false;
+      const currentAccount = activeAccountRef.current ?? getSessionKey();
+      if (
+        (queuedSaveRef.current || cartVersionRef.current !== versionAtStart) &&
+        currentAccount === accountEmail
+      ) {
+        queuedSaveRef.current = false;
+        void saveServerCart(cartRef.current, accountEmail);
+      }
     }
   }, [clearPendingServerSave]);
 
@@ -145,6 +166,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Helper for applying UI cart mutation and persisting to the correct namespace
   const persistCartMutation = useCallback((updated: CartItem[], immediate = false) => {
+    cartVersionRef.current += 1;
     cartRef.current = updated;
     setCart(updated);
 
@@ -421,6 +443,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const toggleCart = () => setIsCartOpen(!isCartOpen);
 
   const clearCart = () => {
+    cartVersionRef.current += 1;
     syncGenerationRef.current += 1;
     clearPendingServerSave();
     const currentAccount = activeAccountRef.current ?? getSessionKey();

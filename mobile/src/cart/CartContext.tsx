@@ -114,6 +114,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const currentAccountRef = useRef<string | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const linesRef = useRef(lines);
+  const cartVersionRef = useRef(0);
+  const isSavingRef = useRef(false);
+  const queuedSaveRef = useRef(false);
   useLayoutEffect(() => {
     linesRef.current = lines;
   }, [lines]);
@@ -125,6 +128,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         debounceTimerRef.current = null;
         syncedTokenRef.current = null;
         linesRef.current = [];
+        cartVersionRef.current = 0;
+        isSavingRef.current = false;
+        queuedSaveRef.current = false;
         setReady(false);
         setLines([]);
         setPickupDate('');
@@ -333,6 +339,45 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [pickupDate, pickupTime, ready]);
 
+  const executeServerSave = useCallback(async (token: string, account: string) => {
+    if (isSavingRef.current) {
+      // An existing save is in-flight: queue the next save so network calls never overlap
+      queuedSaveRef.current = true;
+      return;
+    }
+
+    isSavingRef.current = true;
+    queuedSaveRef.current = false;
+    const versionAtStart = cartVersionRef.current;
+    const itemsToSave = toServer(linesRef.current);
+
+    try {
+      await saveServerCart(token, itemsToSave);
+      // Only remove the pending marker if no new local edits occurred while save was in flight
+      if (
+        versionAtStart === cartVersionRef.current &&
+        account === currentAccountRef.current
+      ) {
+        void AsyncStorage.removeItem(getCartPendingStorageKey(account)).catch(
+          () => undefined,
+        );
+      }
+    } catch {
+      // Keep pending marker so unsaved changes can be retried / preserved
+    } finally {
+      isSavingRef.current = false;
+      // If a newer save was queued or cart changed during this save, trigger the next save immediately
+      if (
+        (queuedSaveRef.current || cartVersionRef.current !== versionAtStart) &&
+        syncedTokenRef.current === token &&
+        currentAccountRef.current === account
+      ) {
+        queuedSaveRef.current = false;
+        void executeServerSave(token, account);
+      }
+    }
+  }, []);
+
   // Debounced server save
   useEffect(() => {
     if (!ready || !authToken || syncedTokenRef.current !== authToken) {
@@ -343,15 +388,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void saveServerCart(authToken, toServer(linesRef.current))
-        .then(() => {
-          if (currentAccountRef.current) {
-            void AsyncStorage.removeItem(
-              getCartPendingStorageKey(currentAccountRef.current),
-            ).catch(() => undefined);
-          }
-        })
-        .catch(() => undefined);
+      if (currentAccountRef.current) {
+        void executeServerSave(authToken, currentAccountRef.current);
+      }
     }, 800);
 
     return () => {
@@ -360,7 +399,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         debounceTimerRef.current = null;
       }
     };
-  }, [lines, ready, serverSync, authToken]);
+  }, [lines, ready, serverSync, authToken, executeServerSave]);
 
   const markPending = useCallback(() => {
     if (currentAccountRef.current) {
@@ -377,6 +416,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setLines(result.cart);
     setNotice(result.error);
     if (!result.error) {
+      cartVersionRef.current += 1;
       markPending();
     }
     return result.error;
@@ -388,6 +428,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setLines(result.cart);
     setNotice(result.error);
     if (!result.error) {
+      cartVersionRef.current += 1;
       markPending();
     }
     return result.error;
@@ -397,26 +438,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     const next = removeFromCart(linesRef.current, menuItemId);
     linesRef.current = next;
     setLines(next);
+    cartVersionRef.current += 1;
     markPending();
   }, [markPending]);
 
   const clear = useCallback(() => {
+    cartVersionRef.current += 1;
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
+    queuedSaveRef.current = false;
     linesRef.current = [];
     setLines([]);
     setPickupDate('');
     setPickupTime('');
-    const cartKey = getCartStorageKey(currentAccountRef.current);
-    const pickupKey = getPickupStorageKey(currentAccountRef.current);
-    const pendingKey = getCartPendingStorageKey(currentAccountRef.current);
+    const account = currentAccountRef.current;
+    const cartKey = getCartStorageKey(account);
+    const pickupKey = getPickupStorageKey(account);
+    const pendingKey = getCartPendingStorageKey(account);
     void AsyncStorage.multiRemove([cartKey, pickupKey, pendingKey]).catch(() => undefined);
-    if (authToken) {
-      void saveServerCart(authToken, []).catch(() => undefined);
+    if (authToken && account) {
+      void executeServerSave(authToken, account);
     }
-  }, [authToken]);
+  }, [authToken, executeServerSave]);
 
   const reconcile = useCallback((catalog: MenuItem[]) => {
     setLines((current) => {
