@@ -591,12 +591,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
                 <LifeBuoy size={17} /> Need Help with Order?
               </button>
             </div>
-
-            <div className={styles.callBox}>
-              <a className={styles.callLink} href={`tel:${RESTAURANT_PHONE_TEL}`}>
-                <Phone size={16} /> Call {RESTAURANT_PHONE_DISPLAY}
-              </a>
-            </div>
           </section>
         </div>
       </div>

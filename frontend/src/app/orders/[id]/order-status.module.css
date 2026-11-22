@@ -763,36 +763,6 @@
   font-size: 0.88rem;
 }
 
-.callBox {
-  margin-top: 0.5rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--glass-border);
-}
-
-.callLink {
-  width: 100%;
-  min-height: 44px;
-  border-radius: 12px;
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  background: rgba(212, 175, 55, 0.08);
-  color: var(--secondary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.55rem;
-  padding: 0.75rem 1rem;
-  font-weight: 600;
-  font-size: 0.92rem;
-  transition: var(--transition-smooth);
-}
-
-.callLink:hover {
-  background: rgba(212, 175, 55, 0.16);
-  border-color: var(--secondary);
-  color: var(--primary);
-  transform: translateY(-2px);
-}
-
 /* --------------------------------------------------------------------------
    7. Modals (Review & Help)
    -------------------------------------------------------------------------- */
