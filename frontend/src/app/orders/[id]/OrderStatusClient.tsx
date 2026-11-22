@@ -37,6 +37,7 @@ import {
 } from '@/lib/orders';
 import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
 import { getAuthHeadersOnly } from '@/lib/auth';
+// import OrderMessages from '@/components/OrderMessages';
 import styles from './order-status.module.css';
 
 function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<string, string>): string {
@@ -408,6 +409,14 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
               <p>{order.specialInstructions}</p>
             </section>
           )}
+
+          {/* Chat disabled for Lord Gainsborough pickup-only model
+          <OrderMessages
+            orderId={orderId}
+            messages={order.messages || []}
+            onSent={() => { void loadOrder(); }}
+          />
+          */}
 
           {/* Tracker Card / Order Progress */}
           <section className={styles.card} aria-label="Order Progress">

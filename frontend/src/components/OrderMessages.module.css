@@ -1,0 +1,8 @@
+.panel { margin-block: 1rem; padding: 1rem; border: 1px solid #c5cbd3; border-radius: 10px; background: #fff; color: #17202a; }
+.panel summary { cursor: pointer; font-weight: 600; }
+.messages { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
+.messages p { margin-block: .7rem; }
+.form { display: grid; gap: .5rem; margin-top: 1rem; }
+.form textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: .6rem; color: #17202a; background: white; border: 1px solid #8a929c; border-radius: 6px; }
+.form button { padding: .65rem; border: 0; border-radius: 6px; background: #17202a; color: white; cursor: pointer; }
+.form button:disabled { opacity: .55; cursor: default; }

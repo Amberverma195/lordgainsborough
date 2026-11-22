@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useRequireKdsAccess } from '@/hooks/useRequireKdsAccess';
 import { kdsSocketAuth } from '@/lib/kdsSocketAuth';
+// import OrderMessages from '@/components/OrderMessages';
 import {
   KDS_API_BASE,
   CustomerOrder,
@@ -230,6 +231,7 @@ export default function KdsPage() {
     socket.on('order.created', handleNewOrder);
     socket.on('order.updated', upsertOrder);
     socket.on('order.deleted', removeDeletedOrder);
+    // socket.on('chat.message', handleChatMessage); // Chat disabled for pickup-only model
 
     return () => {
       socket.off('connect', handleConnect);
@@ -238,6 +240,7 @@ export default function KdsPage() {
       socket.off('order.created', handleNewOrder);
       socket.off('order.updated', upsertOrder);
       socket.off('order.deleted', removeDeletedOrder);
+      // socket.off('chat.message', handleChatMessage); // Chat disabled for pickup-only model
       socket.disconnect();
       socketRef.current = null;
       setConnected(false);
@@ -580,6 +583,15 @@ export default function KdsPage() {
                     ))}
                   </ul>
 
+                  {/* Chat disabled for Lord Gainsborough pickup-only model
+                  <OrderMessages
+                    orderId={order.id}
+                    messages={order.messages || []}
+                    kitchen
+                    onSent={() => { void fetchOrders(); }}
+                  />
+                  */}
+
                   <div className={styles.actionRow}>
                     <button
                       type="button"
@@ -688,6 +700,15 @@ export default function KdsPage() {
                     ))}
                   </ul>
 
+                  {/* Chat disabled for Lord Gainsborough pickup-only model
+                  <OrderMessages
+                    orderId={order.id}
+                    messages={order.messages || []}
+                    kitchen
+                    onSent={() => { void fetchOrders(); }}
+                  />
+                  */}
+
                   <div className={styles.actionRow}>
                     <button
                       type="button"
@@ -773,6 +794,15 @@ export default function KdsPage() {
                       </li>
                     ))}
                   </ul>
+
+                  {/* Chat disabled for Lord Gainsborough pickup-only model
+                  <OrderMessages
+                    orderId={order.id}
+                    messages={order.messages || []}
+                    kitchen
+                    onSent={() => { void fetchOrders(); }}
+                  />
+                  */}
 
                   <div className={styles.actionRow}>
                     <button
