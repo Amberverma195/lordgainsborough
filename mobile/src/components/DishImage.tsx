@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Image } from 'expo-image';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, ImageStyle } from 'expo-image';
+import { StyleProp, StyleSheet, Text, View } from 'react-native';
 
 import { resolveMediaUrl } from '../api/config';
 import { resolveApiOrigins } from '../api/runtime';
@@ -10,16 +10,20 @@ export function DishImage({
   image,
   title,
   height = 180,
+  width = '100%',
+  style,
 }: {
   image?: string | null;
   title: string;
   height?: number;
+  width?: number | `${number}%` | 'auto';
+  style?: StyleProp<ImageStyle>;
 }) {
   const uri = resolveMediaUrl(image, resolveApiOrigins());
   const [failedUri, setFailedUri] = useState<string | null>(null);
   if (!uri || failedUri === uri || (!__DEV__ && uri.startsWith('http:'))) {
     return (
-      <View style={[styles.fallback, { height }]}>
+      <View style={[styles.fallback, { height, width: width as any }, style as any]}>
         <Text style={styles.monogram}>LG</Text>
         <Text style={styles.caption} numberOfLines={1}>
           {title}
@@ -31,7 +35,7 @@ export function DishImage({
     <Image
       source={{ uri }}
       onError={() => setFailedUri(uri)}
-      style={{ height, width: '100%' }}
+      style={[{ height, width: width as any }, style]}
       contentFit="cover"
       accessibilityLabel={title}
       transition={180}

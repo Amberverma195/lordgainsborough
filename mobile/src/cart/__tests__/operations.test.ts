@@ -1,5 +1,5 @@
 import { MenuItem } from '../../api/parse';
-import { addToCart, reconcileWithCatalog, removeFromCart, setQuantity } from '../operations';
+import { addToCart, mergeCarts, mergeGuestCart, reconcileWithCatalog, removeFromCart, setQuantity } from '../operations';
 import { CartLine } from '../types';
 
 const pie: MenuItem = {
@@ -56,5 +56,74 @@ describe('cart operations', () => {
     const reconciled = reconcileWithCatalog(cart, [pie]);
     expect(reconciled[0]).toMatchObject({ name: 'Heritage Pie', unitPrice: 24, available: true });
     expect(reconciled[1].available).toBe(false);
+  });
+
+  it('mergeCarts preserves server quantities when server is authoritative, avoiding resurrection of reduced items', () => {
+    const localCart: CartLine[] = [{
+      menuItemId: 'pie',
+      name: 'Heritage Pie',
+      description: '',
+      unitPrice: 24,
+      category: 'Mains',
+      image: '',
+      quantity: 5,
+      available: true,
+    }];
+    const remoteCart: CartLine[] = [{
+      menuItemId: 'pie',
+      name: 'Heritage Pie',
+      description: '',
+      unitPrice: 24,
+      category: 'Mains',
+      image: '',
+      quantity: 1, // Reduced on website/desktop
+      available: true,
+    }];
+
+    const merged = mergeCarts(localCart, remoteCart, { preserveServerQuantities: true });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].quantity).toBe(1);
+  });
+
+  it('mergeGuestCart combines guest quantities into account cart and adds new items', () => {
+    const guestCart: CartLine[] = [
+      {
+        menuItemId: 'pie',
+        name: 'Heritage Pie',
+        description: '',
+        unitPrice: 24,
+        category: 'Mains',
+        image: '',
+        quantity: 1,
+        available: true,
+      },
+      {
+        menuItemId: 'soup',
+        name: 'Soup',
+        description: '',
+        unitPrice: 10,
+        category: 'Starters',
+        image: '',
+        quantity: 2,
+        available: true,
+      },
+    ];
+    const accountCart: CartLine[] = [
+      {
+        menuItemId: 'pie',
+        name: 'Heritage Pie',
+        description: '',
+        unitPrice: 24,
+        category: 'Mains',
+        image: '',
+        quantity: 2,
+        available: true,
+      },
+    ];
+
+    const merged = mergeGuestCart(guestCart, accountCart);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((i) => i.menuItemId === 'pie')?.quantity).toBe(3);
+    expect(merged.find((i) => i.menuItemId === 'soup')?.quantity).toBe(2);
   });
 });

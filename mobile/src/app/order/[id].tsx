@@ -13,15 +13,16 @@ import { formatPickupDateLabel, formatPickupTimeLabel } from '../../checkout/pic
 import { AppHeader } from '../../components/AppHeader';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { OrderProgressTracker } from '../../components/OrderProgressTracker';
 import { Price } from '../../components/Price';
 import { Screen } from '../../components/Screen';
 import { ErrorState, LoadingState } from '../../components/States';
 import { StatusBadge } from '../../components/StatusBadge';
 import { formatMoney } from '../../cart/money';
-import { formatOrderReference } from '../../format/display';
+import { formatOrderId } from '../../format/display';
 import { isActiveOrderStatus } from '../../order/status';
 import { useOrderRealtime } from '../../order/useOrderRealtime';
-import { colors, space, type } from '../../theme/tokens';
+import { colors, radius, space, type } from '../../theme/tokens';
 
 export default function OrderDetailScreen() {
   const params = useLocalSearchParams<{ id: string; confirmed?: string }>();
@@ -109,8 +110,15 @@ export default function OrderDetailScreen() {
     }, [orderId, status, user]),
   );
 
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+
   const handleConnect = useCallback(() => {
+    setIsSocketConnected(true);
     void refetchRef.current();
+  }, []);
+
+  const handleDisconnect = useCallback(() => {
+    setIsSocketConnected(false);
   }, []);
 
   const handleOrderUpdated = useCallback(
@@ -127,6 +135,7 @@ export default function OrderDetailScreen() {
     trackingToken: requestTrackingToken,
     enabled: status === 'signedIn' && !!orderId,
     onConnect: handleConnect,
+    onDisconnect: handleDisconnect,
     onOrderUpdated: handleOrderUpdated,
   });
 
@@ -142,7 +151,7 @@ export default function OrderDetailScreen() {
         />
       }
     >
-      <AppHeader title={confirmed ? 'Confirmed' : 'Order'} showBack />
+      <AppHeader title={confirmed ? 'Confirmed' : 'Order Details'} showBack />
       {order.isLoading && !display ? <LoadingState label="Loading your order" /> : null}
       {!display && !order.isLoading && !order.isError ? (
         <Text style={styles.note}>Sign in with the account that placed this order to view it.</Text>
@@ -157,33 +166,122 @@ export default function OrderDetailScreen() {
       {display ? (
         <View style={styles.stack}>
           {confirmed ? <Text style={styles.kicker}>Sent to the kitchen</Text> : null}
-          <Text style={styles.reference}>{formatOrderReference(display.id)}</Text>
-          <StatusBadge status={display.status} />
-          <Card>
-            <Text style={styles.label}>Pickup</Text>
-            <Text style={styles.value}>{formatPickupDateLabel(display.pickupDate)}</Text>
-            <Text style={styles.value}>{formatPickupTimeLabel(display.pickupTime)}</Text>
-            {display.specialInstructions ? (
-              <>
-                <Text style={styles.label}>Instructions</Text>
-                <Text style={styles.value}>{display.specialInstructions}</Text>
-              </>
-            ) : null}
-          </Card>
-          <Card>
-            <Text style={styles.label}>Summary</Text>
-            {display.items.map((item, index) => (
-              <Text key={`${item.menuItemId}-${index}`} style={styles.value}>
-                {item.quantity} × {item.name} · {formatMoney(item.total)}
-              </Text>
-            ))}
-            <View style={styles.totalRow}>
-              <Text style={styles.total}>Total</Text>
-              <Price amount={display.total} />
+
+          {/* Row 1: Very first row: Order ID, then the date and time, and then the status */}
+          <Card style={styles.heroCard}>
+            <View style={styles.heroRow}>
+              <View style={styles.heroLeft}>
+                <Text style={styles.orderId}>#{formatOrderId(display.id)}</Text>
+                <Text style={styles.dateTimeText}>
+                  {formatPickupDateLabel(display.pickupDate)} · {formatPickupTimeLabel(display.pickupTime)}
+                </Text>
+              </View>
+              <View style={styles.heroRight}>
+                <StatusBadge status={display.status} />
+                {isActiveOrderStatus(display.status) ? (
+                  <View style={styles.liveBadge}>
+                    <View
+                      style={[
+                        styles.liveDot,
+                        isSocketConnected ? styles.liveDotGreen : styles.liveDotAmber,
+                      ]}
+                    />
+                    <Text style={styles.liveText}>
+                      {isSocketConnected ? 'Live' : 'Polling'}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
-            <Text style={styles.note}>Tax {formatMoney(display.tax)} is included in the restaurant total. Pay when you pick up.</Text>
           </Card>
-          <Button label="View all orders" onPress={() => router.push('/(tabs)/orders')} />
+
+          {/* Row 2: Order summary (below first row) */}
+          <Card style={styles.summaryCard}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardHeaderTitle}>Order Summary</Text>
+              <View style={styles.itemCountBadge}>
+                <Text style={styles.itemCountText}>
+                  {display.items.reduce((acc, it) => acc + it.quantity, 0)}{' '}
+                  {display.items.reduce((acc, it) => acc + it.quantity, 0) === 1 ? 'item' : 'items'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.itemsList}>
+              {display.items.map((item, index) => (
+                <View key={`${item.menuItemId}-${index}`} style={styles.itemRow}>
+                  <View style={styles.itemMain}>
+                    <Text style={styles.itemQty}>{item.quantity}×</Text>
+                    <View style={styles.itemMeta}>
+                      <Text style={styles.itemName}>{item.name}</Text>
+                      <Text style={styles.itemUnitPrice}>{formatMoney(item.unitPrice)} each</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.itemTotal}>{formatMoney(item.total)}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.totalsSection}>
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>Subtotal</Text>
+                <Text style={styles.totalsValue}>{formatMoney(display.subtotal)}</Text>
+              </View>
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>Tax</Text>
+                <Text style={styles.totalsValue}>{formatMoney(display.tax)}</Text>
+              </View>
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.grandTotalLabel}>Total Paid</Text>
+                <Price amount={display.total} large />
+              </View>
+            </View>
+          </Card>
+
+          {/* Row 3: Special instructions (below order summary) */}
+          {display.specialInstructions?.trim() ? (
+            <Card style={styles.specialCard}>
+              <Text style={styles.sectionTitle}>Special Instructions</Text>
+              <Text style={styles.instructionsText}>{display.specialInstructions.trim()}</Text>
+            </Card>
+          ) : null}
+
+          {/* Row 4: Order progress (below special instructions) */}
+          <OrderProgressTracker
+            status={display.status}
+            createdAt={display.createdAt}
+            acceptedAt={display.acceptedAt}
+            readyAt={display.readyAt}
+            pickedUpAt={display.pickedUpAt}
+            noShowAt={display.noShowAt}
+          />
+
+          {/* Dialog box / pickup info: pushed all the way at the bottom */}
+          <Card style={styles.pickupInfoCard}>
+            <Text style={styles.pickupInfoTitle}>Pay at Restaurant on Pickup</Text>
+            <Text style={styles.pickupInfoBody}>
+              All orders are prepared for in-person pickup. Payment is collected at the restaurant counter.
+            </Text>
+            <Text style={styles.pickupContact}>Restaurant: (905) 892-0700</Text>
+          </Card>
+
+          {/* Action buttons */}
+          <View style={styles.actionButtons}>
+            {display.status === 'PICKED_UP' ? (
+              <Button
+                label="Reorder this meal"
+                variant="primary"
+                onPress={() => router.push('/reorder/' + display.id)}
+              />
+            ) : null}
+            <Button
+              label="View all orders"
+              variant={display.status === 'PICKED_UP' ? 'secondary' : 'primary'}
+              onPress={() => router.push('/(tabs)/orders')}
+            />
+          </View>
         </View>
       ) : null}
     </Screen>
@@ -193,6 +291,7 @@ export default function OrderDetailScreen() {
 const styles = StyleSheet.create({
   stack: {
     gap: space.lg,
+    paddingBottom: space.xl,
   },
   kicker: {
     color: colors.gold,
@@ -200,39 +299,200 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
-  reference: {
-    color: colors.text,
-    fontFamily: type.display,
-    fontSize: 36,
+  heroCard: {
+    padding: space.md,
   },
-  label: {
-    color: colors.gold,
-    fontFamily: type.label,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: space.sm,
-  },
-  value: {
-    color: colors.text,
-    fontFamily: type.body,
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  totalRow: {
+  heroRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: space.md,
   },
-  total: {
+  heroLeft: {
+    gap: 4,
+  },
+  orderId: {
+    color: colors.text,
+    fontFamily: type.heading,
+    fontSize: 26,
+    letterSpacing: 0.5,
+  },
+  dateTimeText: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 14,
+  },
+  heroRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  liveDotGreen: {
+    backgroundColor: '#22C55E',
+  },
+  liveDotAmber: {
+    backgroundColor: colors.gold,
+  },
+  liveText: {
+    color: colors.textMuted,
+    fontFamily: type.label,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  summaryCard: {
+    gap: space.md,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardHeaderTitle: {
     color: colors.text,
     fontFamily: type.heading,
     fontSize: 20,
+  },
+  itemCountBadge: {
+    backgroundColor: colors.goldSoft,
+    borderColor: colors.goldBorder,
+    borderWidth: 1,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  itemCountText: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 12,
+  },
+  itemsList: {
+    gap: space.sm,
+  },
+  itemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  itemMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    flex: 1,
+  },
+  itemQty: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 15,
+    minWidth: 26,
+  },
+  itemMeta: {
+    flex: 1,
+  },
+  itemName: {
+    color: colors.text,
+    fontFamily: type.bodyMedium,
+    fontSize: 15,
+  },
+  itemUnitPrice: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 13,
+  },
+  itemTotal: {
+    color: colors.text,
+    fontFamily: type.label,
+    fontSize: 15,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.goldBorder,
+    marginVertical: space.xs,
+  },
+  totalsSection: {
+    gap: space.xs,
+  },
+  totalsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  totalsLabel: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 15,
+  },
+  totalsValue: {
+    color: colors.text,
+    fontFamily: type.bodyMedium,
+    fontSize: 15,
+  },
+  grandTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: space.sm,
+  },
+  grandTotalLabel: {
+    color: colors.text,
+    fontFamily: type.heading,
+    fontSize: 18,
+  },
+  specialCard: {
+    gap: space.xs,
+  },
+  sectionTitle: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  instructionsText: {
+    color: colors.text,
+    fontFamily: type.body,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  pickupInfoCard: {
+    gap: 6,
+    backgroundColor: colors.backgroundRaised,
+  },
+  pickupInfoTitle: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 12,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  pickupInfoBody: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  pickupContact: {
+    color: colors.text,
+    fontFamily: type.bodyMedium,
+    fontSize: 14,
+    marginTop: 2,
+  },
+  actionButtons: {
+    gap: space.md,
+    marginTop: space.xs,
   },
   note: {
     color: colors.textSecondary,
     fontFamily: type.body,
     lineHeight: 22,
-    marginTop: space.sm,
   },
 });

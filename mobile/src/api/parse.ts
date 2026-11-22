@@ -64,6 +64,10 @@ export interface CustomerOrderView {
   tax: number;
   total: number;
   createdAt: string;
+  acceptedAt?: string | null;
+  readyAt?: string | null;
+  pickedUpAt?: string | null;
+  noShowAt?: string | null;
   reviewed: boolean;
   customerName: string;
   customerEmail: string;
@@ -317,6 +321,10 @@ export function parseCustomerOrder(body: unknown): ParseResult<CustomerOrderView
       tax,
       total,
       createdAt: text(body.createdAt) ?? '',
+      ...(body.acceptedAt !== undefined ? { acceptedAt: text(body.acceptedAt) ?? null } : {}),
+      ...(body.readyAt !== undefined ? { readyAt: text(body.readyAt) ?? null } : {}),
+      ...(body.pickedUpAt !== undefined ? { pickedUpAt: text(body.pickedUpAt) ?? null } : {}),
+      ...(body.noShowAt !== undefined ? { noShowAt: text(body.noShowAt) ?? null } : {}),
       reviewed: booleanValue(body.reviewed) ?? false,
       customerName: text(body.customerName) ?? '',
       customerEmail: text(body.customerEmail) ?? '',

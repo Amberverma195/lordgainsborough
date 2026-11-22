@@ -69,7 +69,24 @@ export function reconcileWithCatalog(cart: CartLine[], catalog: MenuItem[]): Car
   });
 }
 
-export function mergeCarts(localCart: CartLine[], remoteCart: CartLine[]): CartLine[] {
+/**
+ * Deterministic reconciliation between local and remote cart items.
+ * If server is authoritative for existing lines (preserveServerQuantities: true),
+ * server quantities take precedence to prevent resurrecting items decreased or
+ * removed on another device.
+ * Genuine local-only additions (e.g. items added offline) are preserved.
+ */
+export function mergeCarts(
+  localCart: CartLine[],
+  remoteCart: CartLine[],
+  options?: { preserveServerQuantities?: boolean },
+): CartLine[] {
+  if (remoteCart.length === 0) {
+    return localCart;
+  }
+  if (localCart.length === 0) {
+    return remoteCart;
+  }
   const merged = new Map<string, CartLine>();
   for (const line of remoteCart) {
     merged.set(line.menuItemId, { ...line });
@@ -80,7 +97,36 @@ export function mergeCarts(localCart: CartLine[], remoteCart: CartLine[]): CartL
       merged.set(line.menuItemId, { ...line });
       continue;
     }
-    existing.quantity = Math.max(existing.quantity, line.quantity);
+    if (!options?.preserveServerQuantities) {
+      existing.quantity = Math.max(existing.quantity, line.quantity);
+    }
+  }
+  return Array.from(merged.values());
+}
+
+/**
+ * Merges guest items into an authenticated user's cart when transitioning from guest to logged-in.
+ * Guest items that are already in the account cart have their quantities combined (capped at MAX_ITEM_QUANTITY).
+ * Guest items not in the account cart are added.
+ */
+export function mergeGuestCart(guestCart: CartLine[], accountCart: CartLine[]): CartLine[] {
+  if (guestCart.length === 0) {
+    return accountCart;
+  }
+  if (accountCart.length === 0) {
+    return guestCart;
+  }
+  const merged = new Map<string, CartLine>();
+  for (const line of accountCart) {
+    merged.set(line.menuItemId, { ...line });
+  }
+  for (const line of guestCart) {
+    const existing = merged.get(line.menuItemId);
+    if (!existing) {
+      merged.set(line.menuItemId, { ...line });
+    } else {
+      existing.quantity = Math.min(MAX_ITEM_QUANTITY, existing.quantity + line.quantity);
+    }
   }
   return Array.from(merged.values());
 }

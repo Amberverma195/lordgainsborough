@@ -23,6 +23,11 @@ export function getPickupStorageKey(email?: string | null): string {
   return `lgb.pickup.u.${namespace}.v2`;
 }
 
+export function getCartPendingStorageKey(email?: string | null): string {
+  const namespace = toAccountNamespace(email);
+  return `lgb.cart.pending.${namespace}.v2`;
+}
+
 export function getLegacyV1CartStorageKey(email?: string | null): string {
   if (!email || !email.trim()) {
     return LEGACY_GUEST_CART_KEY;

@@ -11,6 +11,7 @@ export interface UseOrderRealtimeOptions {
   trackingToken?: string | null;
   enabled?: boolean;
   onConnect?: () => void;
+  onDisconnect?: () => void;
   onOrderUpdated?: (order: CustomerOrderView) => void;
 }
 
@@ -20,14 +21,20 @@ export function useOrderRealtime({
   trackingToken,
   enabled = true,
   onConnect,
+  onDisconnect,
   onOrderUpdated,
 }: UseOrderRealtimeOptions): void {
   const onConnectRef = useRef(onConnect);
+  const onDisconnectRef = useRef(onDisconnect);
   const onOrderUpdatedRef = useRef(onOrderUpdated);
 
   useEffect(() => {
     onConnectRef.current = onConnect;
   }, [onConnect]);
+
+  useEffect(() => {
+    onDisconnectRef.current = onDisconnect;
+  }, [onDisconnect]);
 
   useEffect(() => {
     onOrderUpdatedRef.current = onOrderUpdated;
@@ -78,6 +85,18 @@ export function useOrderRealtime({
         }
       };
 
+      const handleDisconnect = () => {
+        if (!cancelled) {
+          onDisconnectRef.current?.();
+        }
+      };
+
+      const handleConnectError = () => {
+        if (!cancelled) {
+          onDisconnectRef.current?.();
+        }
+      };
+
       const handleOrderUpdated = (payload: unknown) => {
         if (cancelled) {
           return;
@@ -89,6 +108,8 @@ export function useOrderRealtime({
       };
 
       socket.on('connect', handleConnect);
+      socket.on('disconnect', handleDisconnect);
+      socket.on('connect_error', handleConnectError);
       socket.on('order.updated', handleOrderUpdated);
     } catch {
       // Do not let socket connection failure crash the app.

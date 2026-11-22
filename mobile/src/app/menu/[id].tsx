@@ -44,7 +44,10 @@ export default function MenuItemScreen() {
             <DishImage image={item.image} title={item.name} height={260} />
           </View>
           <Text style={styles.name}>{item.name}</Text>
-          {item.category ? <Text style={styles.category}>{item.category}</Text> : null}
+          <View style={styles.badgeRow}>
+            {item.category ? <Text style={styles.category}>{item.category}</Text> : null}
+            {item.mostLoved ? <Text style={styles.loved}>★ Most loved</Text> : null}
+          </View>
           <Price amount={item.price} large />
           {item.description ? <Text style={styles.description}>{item.description}</Text> : null}
           <Text style={item.available ? styles.available : styles.unavailable}>
@@ -91,6 +94,18 @@ const styles = StyleSheet.create({
     color: colors.gold,
     fontFamily: type.label,
     letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+  },
+  loved: {
+    color: colors.gold,
+    fontFamily: type.label,
+    fontSize: 12,
+    letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
   description: {

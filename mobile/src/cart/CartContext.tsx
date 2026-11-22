@@ -23,6 +23,7 @@ import {
 import {
   addToCart,
   mergeCarts,
+  mergeGuestCart,
   parseStoredCart,
   reconcileWithCatalog,
   removeFromCart,
@@ -30,8 +31,10 @@ import {
 } from './operations';
 import { estimateTotals } from './money';
 import {
+  getCartPendingStorageKey,
   getCartStorageKey,
   getPickupStorageKey,
+  GUEST_CART_KEY,
   LEGACY_CART_KEY,
   LEGACY_GUEST_CART_KEY,
   LEGACY_GUEST_PICKUP_KEY,
@@ -196,16 +199,45 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
         if (authToken) {
           try {
-            const remote = await fetchServerCart(authToken);
+            const guestCartKey = GUEST_CART_KEY;
+            const pendingKey = getCartPendingStorageKey(accountKey);
+            const [remote, guestCartRaw, pendingRaw] = await Promise.all([
+              fetchServerCart(authToken),
+              AsyncStorage.getItem(guestCartKey),
+              AsyncStorage.getItem(pendingKey),
+            ]);
             if (cancelled) {
               return;
             }
             const remoteLines = fromServer(remote);
-            // Reconcile server cart with local lines saved specifically for this account
-            const resolved =
-              localLines.length > 0
-                ? mergeCarts(localLines, remoteLines)
-                : remoteLines;
+            let guestLines: CartLine[] = [];
+            if (guestCartRaw) {
+              try {
+                guestLines = parseStoredCart(JSON.parse(guestCartRaw) as unknown);
+              } catch {
+                guestLines = [];
+              }
+            }
+            const hasPendingEdits = pendingRaw === '1';
+
+            let resolved: CartLine[];
+            if (guestLines.length > 0) {
+              // User had guest items prior to login: merge guest items into account cart
+              const base = remoteLines.length > 0 ? remoteLines : localLines;
+              resolved = mergeGuestCart(guestLines, base);
+              void AsyncStorage.removeItem(guestCartKey).catch(() => undefined);
+              setServerSync((val) => val + 1);
+            } else if (hasPendingEdits) {
+              // Local cart had pending edits before restart: preserve them
+              resolved = mergeCarts(localLines, remoteLines);
+            } else if (remoteLines.length > 0) {
+              // Server is authoritative; avoids resurrecting stale items deleted on another device
+              resolved = remoteLines;
+            } else {
+              // Remote empty: keep localLines if any
+              resolved = localLines;
+            }
+
             linesRef.current = resolved;
             setLines(resolved);
             setPickupDate(initialPickupDate);
@@ -314,9 +346,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
-      void saveServerCart(authToken, toServer(linesRef.current)).catch(
-        () => undefined,
-      );
+      void saveServerCart(authToken, toServer(linesRef.current))
+        .then(() => {
+          if (currentAccountRef.current) {
+            void AsyncStorage.removeItem(
+              getCartPendingStorageKey(currentAccountRef.current),
+            ).catch(() => undefined);
+          }
+        })
+        .catch(() => undefined);
     }, 800);
 
     return () => {
@@ -327,27 +365,43 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     };
   }, [lines, ready, serverSync, authToken]);
 
+  const markPending = useCallback(() => {
+    if (currentAccountRef.current) {
+      void AsyncStorage.setItem(
+        getCartPendingStorageKey(currentAccountRef.current),
+        '1',
+      ).catch(() => undefined);
+    }
+  }, []);
+
   const addItem = useCallback((item: MenuItem, quantity = 1) => {
     const result = addToCart(linesRef.current, item, quantity);
     linesRef.current = result.cart;
     setLines(result.cart);
     setNotice(result.error);
+    if (!result.error) {
+      markPending();
+    }
     return result.error;
-  }, []);
+  }, [markPending]);
 
   const updateQuantity = useCallback((menuItemId: string, quantity: number) => {
     const result = setQuantity(linesRef.current, menuItemId, quantity);
     linesRef.current = result.cart;
     setLines(result.cart);
     setNotice(result.error);
+    if (!result.error) {
+      markPending();
+    }
     return result.error;
-  }, []);
+  }, [markPending]);
 
   const removeItem = useCallback((menuItemId: string) => {
     const next = removeFromCart(linesRef.current, menuItemId);
     linesRef.current = next;
     setLines(next);
-  }, []);
+    markPending();
+  }, [markPending]);
 
   const clear = useCallback(() => {
     if (debounceTimerRef.current) {
@@ -360,7 +414,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setPickupTime('');
     const cartKey = getCartStorageKey(currentAccountRef.current);
     const pickupKey = getPickupStorageKey(currentAccountRef.current);
-    void AsyncStorage.multiRemove([cartKey, pickupKey]).catch(() => undefined);
+    const pendingKey = getCartPendingStorageKey(currentAccountRef.current);
+    void AsyncStorage.multiRemove([cartKey, pickupKey, pendingKey]).catch(() => undefined);
     if (authToken) {
       void saveServerCart(authToken, []).catch(() => undefined);
     }
