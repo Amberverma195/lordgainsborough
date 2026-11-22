@@ -141,12 +141,15 @@ export function formatTime(value?: string | null): string {
     return '';
   }
 
-  const parsed = new Date(value);
+  // Backend LocalDateTime values are Toronto wall times, with no UTC offset.
+  // Parse those as UTC solely to retain the supplied clock fields on every device.
+  const wallTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value);
+  const parsed = new Date(wallTime ? `${value}Z` : value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
 
-  return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: wallTime ? 'UTC' : RESTAURANT_TIMEZONE });
 }
 
 export const ORDER_TRACKING_TOKEN_HEADER = 'X-Order-Tracking-Token';

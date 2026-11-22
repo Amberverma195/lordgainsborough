@@ -714,6 +714,56 @@ class PostgresOnlyApplicationIntegrationTest {
         String ticket = context.getBean(JwtUtil.class).generateKdsSocketTicket();
         return client("role=KDS", Map.of("token", ticket));
     }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,30})
+    void checkoutPickupIsPersistedListedAndDeliveredToKitchen(int daysAhead) throws Exception {
+        var staff=account("kitchen-staff","kitchen@example.com","5195551222","STAFF");
+        var customer=account("pickup-customer","pickup@example.com","5195551333","MEMBER");
+        String staffAuth="Bearer "+token(staff), customerAuth="Bearer "+token(customer);
+        String today=java.time.LocalDate.now(OrderSchedulingValidator.RESTAURANT_ZONE).toString();
+        String date=java.time.LocalDate.parse(today).plusDays(daysAhead).toString();
+        String ticket=response(get("/api/kds/socket-ticket").header("Authorization",staffAuth),200).get("ticket").asText();
+        var kitchen=client("role=KDS",Map.of("token",ticket));
+        var createdEvents=new LinkedBlockingQueue<String>();var updatedEvents=new LinkedBlockingQueue<String>();
+        kitchen.on("order.created",args->createdEvents.add(args[0].toString()));
+        kitchen.on("order.updated",args->updatedEvents.add(args[0].toString()));
+        connect(kitchen);await(()->socketServer.getRoomOperations("kds").getClients().size()==1,3000);
+        String dish=jdbc.queryForObject("SELECT id FROM menu_items ORDER BY id LIMIT 1",String.class);
+        var created=response(post("/api/orders").header("Authorization",customerAuth).contentType("application/json")
+                .content(json.writeValueAsString(Map.of("pickupDate",date,"pickupTime",daysAhead==0?"asap":"12:00 PM",
+                        "items",List.of(Map.of("menuItemId",dish,"quantity",1))))),200);
+        String id=created.get("order").get("id").asText();
+        assertThat(created.get("order").get("pickupDate").asText()).isEqualTo(date);
+        assertThat(created.get("order").get("status").asText()).isEqualTo("NEW");
+        assertThat(jdbc.queryForObject("SELECT pickup_date FROM customer_orders WHERE id=?",String.class,id)).isEqualTo(date);
+        var matching=response(get("/api/kds/orders").param("date",date).header("Authorization",staffAuth),200);
+        assertThat(matching.size()).isEqualTo(1);assertThat(matching.get(0).get("id").asText()).isEqualTo(id);
+        var todayOnly=response(get("/api/kds/orders").param("date",today).header("Authorization",staffAuth),200);
+        assertThat(todayOnly.size()).isEqualTo(daysAhead==0?1:0);
+        var board=response(get("/api/kds/orders").param("date",today).param("includeOutstanding","true").header("Authorization",staffAuth),200);
+        assertThat(board.size()).isEqualTo(1);assertThat(board.get(0).get("id").asText()).isEqualTo(id);
+        assertThat(json.readTree(createdEvents.poll(5,TimeUnit.SECONDS)).get("id").asText()).isEqualTo(id);
+        response(patch("/api/kds/orders/"+id+"/status").header("Authorization",staffAuth)
+                .contentType("application/json").content("{\"status\":\"ACCEPTED\"}"),200);
+        assertThat(json.readTree(updatedEvents.poll(5,TimeUnit.SECONDS)).get("status").asText()).isEqualTo("ACCEPTED");
+        kitchen.disconnect();await(()->socketServer.getRoomOperations("kds").getClients().isEmpty(),3000);
+        response(patch("/api/kds/orders/"+id+"/status").header("Authorization",staffAuth)
+                .contentType("application/json").content("{\"status\":\"READY\"}"),200);
+        connect(kitchen);await(()->socketServer.getRoomOperations("kds").getClients().size()==1,3000);
+        var reconnected=response(get("/api/kds/orders").param("date",today).param("includeOutstanding","true").header("Authorization",staffAuth),200);
+        assertThat(reconnected.get(0).get("status").asText()).isEqualTo("READY");
+        mvc.perform(get("/api/kds/orders").param("date",date).param("includeOutstanding","true")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/kds/orders").param("date",date).param("includeOutstanding","true").header("Authorization",customerAuth)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/kds/socket-ticket").header("Authorization",customerAuth)).andExpect(status().isNotFound());
+        denied(client("role=KDS",Map.of("token",token(customer))));
+        for(String terminal:List.of("NO_SHOW","READY","PICKED_UP")) {
+            response(patch("/api/kds/orders/"+id+"/status").header("Authorization",staffAuth)
+                    .contentType("application/json").content(json.writeValueAsString(Map.of("status",terminal))),200);
+        }
+        var finalBoard=response(get("/api/kds/orders").param("date",today).param("includeOutstanding","true").header("Authorization",staffAuth),200);
+        assertThat(finalBoard.size()).isEqualTo(daysAhead==0?1:0);
+    }
     void connect(Socket socket) throws Exception {
         var connected=new CountDownLatch(1);socket.on(Socket.EVENT_CONNECT,args->connected.countDown());socket.connect();
         assertThat(connected.await(5,TimeUnit.SECONDS)).as("live Socket.IO connection").isTrue();

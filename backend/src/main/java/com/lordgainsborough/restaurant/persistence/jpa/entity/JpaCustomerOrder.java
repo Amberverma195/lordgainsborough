@@ -107,7 +107,7 @@ public class JpaCustomerOrder {
             this.id = UUID.randomUUID().toString();
         }
         if (this.createdAt == null) {
-            this.createdAt = LocalDateTime.now();
+            this.createdAt = LocalDateTime.now(java.time.ZoneId.of("America/Toronto"));
         }
         if (this.subtotal == null) {
             this.subtotal = BigDecimal.ZERO.setScale(2);

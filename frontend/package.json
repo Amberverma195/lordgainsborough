@@ -31,6 +31,7 @@
     "bcryptjs": "^3.0.3",
     "eslint": "^9",
     "eslint-config-next": "^16.4.6",
+    "jsdom": "^29.1.1",
     "pg": "^8.23.1",
     "smtp-server": "^3.21.1",
     "typescript": "^5",

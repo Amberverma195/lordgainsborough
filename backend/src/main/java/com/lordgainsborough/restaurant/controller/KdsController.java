@@ -71,9 +71,12 @@ public class KdsController {
                 .body(Map.of("ticket", jwtUtil.generateKdsSocketTicket()));
     }
     @GetMapping("/orders")
-    public List<CustomerOrder> getOrders(@RequestParam(required=false) String date) {
-        return orders.byPickupDate(date == null || date.isBlank() ? LocalDate.now(clock).toString() : date);
+    public List<CustomerOrder> getOrders(@RequestParam(required=false) String date,
+            @RequestParam(defaultValue="false") boolean includeOutstanding) {
+        String selected = date == null || date.isBlank() ? LocalDate.now(clock).toString() : date;
+        return includeOutstanding ? orders.board(selected) : orders.byPickupDate(selected);
     }
+    public List<CustomerOrder> getOrders(String date) { return getOrders(date, false); }
     @GetMapping("/orders/all")
     public List<CustomerOrder> getAllOrders() { return orders.all(); }
     @PatchMapping("/orders/{id}/status")

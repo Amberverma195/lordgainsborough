@@ -246,7 +246,7 @@ public class OrderController {
         order.setIdempotencyKey(idempotencyKey);
         order.setStatus("NEW");
         order.setAverageReadyMinutes(normalizeReadyMinutes(orderStore.settings().getDefaultReadyMinutes()));
-        order.setCreatedAt(LocalDateTime.now());
+        order.setCreatedAt(LocalDateTime.now(OrderSchedulingValidator.RESTAURANT_ZONE));
         order.setAcceptedAt(null);
         order.setReadyAt(null);
         order.setPickedUpAt(null);
@@ -434,7 +434,7 @@ public class OrderController {
         message.setSenderRole("CUSTOMER");
         message.setSenderName("Customer");
         message.setText(text.trim());
-        message.setCreatedAt(LocalDateTime.now());
+        message.setCreatedAt(LocalDateTime.now(OrderSchedulingValidator.RESTAURANT_ZONE));
         return orderStore.appendMessage(id, order -> canAccess(order, authHeader, trackingToken), message,
                 saved -> {
                     realtimeService.chatMessage(saved, message);

@@ -8,6 +8,7 @@ import java.util.function.IntUnaryOperator;
 
 public interface KdsOrderStore {
     List<CustomerOrder> byPickupDate(String date);
+    List<CustomerOrder> board(String date);
     List<CustomerOrder> all();
     Optional<CustomerOrder> status(String id, String status, IntUnaryOperator readyMinutes, Consumer<CustomerOrder> afterCommit);
     Optional<CustomerOrder> readyTime(String id, int minutes, Consumer<CustomerOrder> afterCommit);

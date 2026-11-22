@@ -27,6 +27,11 @@ public interface JpaCustomerOrderRepository extends JpaRepository<JpaCustomerOrd
     @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where o.pickupDate = :date order by o.createdAt desc, o.id asc")
     List<JpaCustomerOrder> findKdsWithItemsByPickupDate(@org.springframework.data.repository.query.Param("date") String date);
 
+    /** Keep selected-date history and every outstanding pickup discoverable, without loading all history. */
+    @EntityGraph(attributePaths = {"items"})
+    @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o where o.pickupDate = :date or o.status in ('NEW', 'ACCEPTED', 'READY') order by o.createdAt desc, o.id asc")
+    List<JpaCustomerOrder> findKdsBoardWithItems(@org.springframework.data.repository.query.Param("date") String date);
+
     @EntityGraph(attributePaths = {"items"})
     @org.springframework.data.jpa.repository.Query("select o from JpaCustomerOrder o order by o.createdAt desc, o.id asc")
     List<JpaCustomerOrder> findAllKdsWithItems();

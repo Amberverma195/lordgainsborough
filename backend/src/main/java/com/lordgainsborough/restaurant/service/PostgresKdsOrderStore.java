@@ -28,7 +28,7 @@ public class PostgresKdsOrderStore implements KdsOrderStore {
             CustomerOrderPresentationService presentation, JpaTransactionManager manager, Clock clock) {
         if (noShows.getTransactionManager() != manager) throw new IllegalArgumentException("KDS and no-show writes must use the same transaction manager");
         this.orders = orders; this.noShows = noShows; this.presentation = presentation; this.manager = manager;
-        this.clock = clock.withZone(ZoneId.systemDefault());
+        this.clock = clock.withZone(ZoneId.of("America/Toronto"));
         transactions = new TransactionTemplate(manager);
         transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -46,6 +46,9 @@ public class PostgresKdsOrderStore implements KdsOrderStore {
     }
     public List<CustomerOrder> byPickupDate(String date) {
         return transactions.execute(status -> materialize(orders.findKdsWithItemsByPickupDate(date)));
+    }
+    public List<CustomerOrder> board(String date) {
+        return transactions.execute(status -> materialize(orders.findKdsBoardWithItems(date)));
     }
     public List<CustomerOrder> all() { return transactions.execute(status -> materialize(orders.findAllKdsWithItems())); }
 

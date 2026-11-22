@@ -121,9 +121,9 @@ describe('KDS Order Workflow and Terminal Statuses', () => {
     expect(active.map(o => o.id)).toEqual(['ord-new', 'ord-ready']);
   });
 
-  it('configures automatic fallback polling for disconnected state to 5 minutes', async () => {
-    const { KDS_DISCONNECTED_POLL_INTERVAL_MS } = await import('@/app/kds/page');
-    expect(KDS_DISCONNECTED_POLL_INTERVAL_MS).toBe(5 * 60 * 1000);
+  it('configures automatic fallback polling for disconnected state to 20 seconds', async () => {
+    const { KDS_DISCONNECTED_POLL_INTERVAL_MS } = await import('./kdsOrderSync');
+    expect(KDS_DISCONNECTED_POLL_INTERVAL_MS).toBe(20_000);
   });
 
   describe('Restaurant Timezone (America/Toronto) and Date Sync', () => {

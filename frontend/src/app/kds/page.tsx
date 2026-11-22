@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useRequireKdsAccess } from '@/hooks/useRequireKdsAccess';
 import { kdsSocketAuth } from '@/lib/kdsSocketAuth';
+import { KdsOrderSync, otherPickupDates, KDS_DISCONNECTED_POLL_INTERVAL_MS } from '@/lib/kdsOrderSync';
 // import OrderMessages from '@/components/OrderMessages';
 import {
   KDS_API_BASE,
@@ -40,13 +41,11 @@ import {
   formatPickupDateLabel,
   getTodayString,
   orderStatusLabel,
-  sortOrders,
 } from '@/lib/orders';
 import styles from './kds.module.css';
 
 const MIN_READY_MINUTES = 5;
 const MAX_READY_MINUTES = 120;
-export const KDS_DISCONNECTED_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes polling fallback while disconnected
 
 function clampReadyMinutes(minutes: number): number {
   return Math.min(MAX_READY_MINUTES, Math.max(MIN_READY_MINUTES, minutes));
@@ -86,7 +85,12 @@ function playNewOrderChime() {
 export default function KdsPage() {
   const access = useRequireKdsAccess();
   const [selectedDate, setSelectedDate] = useState(getTodayString());
-  const [orders, setOrders] = useState<CustomerOrder[]>([]);
+  const [allOrders, setAllOrders] = useState<CustomerOrder[]>([]);
+  const [apiError, setApiError] = useState('');
+  const [synchronized, setSynchronized] = useState(false);
+  const syncRef = useRef(new KdsOrderSync());
+  const orders = useMemo(() => allOrders.filter(order => order.pickupDate === selectedDate), [allOrders, selectedDate]);
+  const otherDates = useMemo(() => otherPickupDates(allOrders, selectedDate), [allOrders, selectedDate]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [connected, setConnected] = useState(false);
@@ -96,16 +100,11 @@ export default function KdsPage() {
   const [confirmNoShowOrder, setConfirmNoShowOrder] = useState<CustomerOrder | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
-  const selectedDateRef = useRef(selectedDate);
   const soundEnabledRef = useRef(soundEnabled);
   const modalDateInputRef = useRef<HTMLInputElement>(null);
   const fetchOrdersRef = useRef<() => void>(() => {});
   const updatingRef = useRef<string | null>(null);
   const connectedRef = useRef(connected);
-
-  useEffect(() => {
-    selectedDateRef.current = selectedDate;
-  }, [selectedDate]);
 
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
@@ -146,41 +145,32 @@ export default function KdsPage() {
     setSelectedDate(value);
   };
 
-  const orderMatchesView = useCallback(
-    (order: CustomerOrder) => (order.pickupDate || '').trim() === selectedDateRef.current,
-    [],
-  );
-
   const upsertOrder = useCallback((payload: CustomerOrder | CustomerOrder[]) => {
     const order = Array.isArray(payload) ? payload[0] : payload;
     if (!order?.id) return;
 
-    setOrders(prev => {
-      const withoutOrder = prev.filter(item => item.id !== order.id);
-      if (!orderMatchesView(order)) {
-        return withoutOrder;
-      }
-      return sortOrders([order, ...withoutOrder]);
-    });
-  }, [orderMatchesView]);
+    syncRef.current.receive(order);
+    setAllOrders(syncRef.current.values());
+  }, []);
 
   const handleNewOrder = useCallback((payload: CustomerOrder | CustomerOrder[]) => {
     const order = Array.isArray(payload) ? payload[0] : payload;
     if (!order?.id) return;
 
-    if (soundEnabledRef.current) {
+    const duplicate = syncRef.current.has(order.id);
+    if (!duplicate && soundEnabledRef.current) {
       playNewOrderChime();
     }
-    upsertOrder(order);
-  }, [upsertOrder]);
+    syncRef.current.receive(order, true);
+    setAllOrders(syncRef.current.values());
+  }, []);
 
   const fetchOrders = useCallback(async () => {
-    if (updatingRef.current) return;
+    const request = syncRef.current.begin();
     setLoading(true);
-    setNotice('');
     try {
-      const url = `${KDS_API_BASE}/kds/orders?date=${encodeURIComponent(selectedDate)}`;
-      const res = await apiFetch(url, { cache: 'no-store' });
+      const url = `${KDS_API_BASE}/kds/orders?date=${encodeURIComponent(selectedDate)}&includeOutstanding=true`;
+      const res = await apiFetch(url, { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
 
       if (!res.ok) {
         console.warn(`[KDS Orders] Fetch failed with status ${res.status}`);
@@ -188,11 +178,19 @@ export default function KdsPage() {
       }
 
       const data = await res.json();
-      setOrders(sortOrders(Array.isArray(data) ? data : []));
+      if (!Array.isArray(data)) throw new Error('Invalid KDS order list');
+      if (syncRef.current.complete(request, data)) {
+        setAllOrders(syncRef.current.values());
+        setApiError('');
+        setSynchronized(true);
+      }
     } catch {
-      setNotice('Orders could not be loaded from the kitchen server.');
+      if (syncRef.current.isCurrent(request)) {
+        setApiError('API failure: orders could not be loaded. Displayed tickets may be out of date. Refresh to retry.');
+        setSynchronized(false);
+      }
     } finally {
-      setLoading(false);
+      if (syncRef.current.isCurrent(request)) setLoading(false);
     }
   }, [selectedDate]);
 
@@ -207,16 +205,16 @@ export default function KdsPage() {
     }
   }, [fetchOrders, access.authorized]);
 
-  // Modest fallback: automatic polling every 5 minutes while disconnected from Socket.IO
+  // Poll while disconnected or recovering an API failure; stop once both are healthy.
   useEffect(() => {
-    if (!access.authorized || connected) return;
+    if (!access.authorized || (connected && !apiError)) return;
 
     const interval = window.setInterval(() => {
       fetchOrdersRef.current();
     }, KDS_DISCONNECTED_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [access.authorized, connected]);
+  }, [access.authorized, connected, apiError]);
 
   useEffect(() => {
     if (!access.authorized) return;
@@ -248,18 +246,23 @@ export default function KdsPage() {
 
     const handleConnect = () => {
       setConnected(true);
-      setNotice('');
+      connectedRef.current = true;
+      setSynchronized(false);
       fetchOrdersRef.current();
     };
 
     const handleDisconnect = (reason?: string) => {
       setConnected(false);
+      connectedRef.current = false;
+      setSynchronized(false);
       if (process.env.NODE_ENV !== 'production' && reason) {
         console.warn(`[KDS Socket] Disconnected: ${reason}`);
       }
     };
     const handleConnectError = (error?: Error) => {
       setConnected(false);
+      connectedRef.current = false;
+      setSynchronized(false);
       const msg = error?.message || 'Connection error';
       if (msg.includes('Order access denied') || msg.includes('denied')) {
         console.warn('[KDS Socket] Socket connection rejected: Order access denied');
@@ -269,7 +272,8 @@ export default function KdsPage() {
     };
 
     const removeDeletedOrder = ({ id }: { id: string }) => {
-      setOrders(previous => previous.filter(order => order.id !== id));
+      syncRef.current.remove(id);
+      setAllOrders(syncRef.current.values());
     };
 
     socket.on('connect', handleConnect);
@@ -505,10 +509,10 @@ export default function KdsPage() {
             type="button"
             className={`${styles.statPill} ${styles.statPillClickable}`}
             onClick={() => setOrdersModalOpen(true)}
-            title="View today's order history"
+            title="View selected date's order history"
           >
             <ShoppingBag size={15} />
-            <span>Total Today</span>
+            <span>Total for {selectedDate}</span>
             <strong>{orders.length}</strong>
           </button>
         </div>
@@ -527,10 +531,10 @@ export default function KdsPage() {
 
           <span
             className={`${styles.connPill} ${connected ? styles.connOnline : styles.connOffline}`}
-            title={connected ? 'Live Socket.IO order stream connected' : 'Disconnected — attempting reconnect with 5-minute fallback polling…'}
+            title={connected ? 'Socket.IO connected; API synchronization is checked separately' : 'Socket.IO disconnected; retrying with 20-second fallback polling'}
           >
             {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            <span>{connected ? 'Live' : 'Offline'}</span>
+            <span>{connected ? (apiError ? 'Connected · API failure' : synchronized && !loading ? 'Live · synchronized' : 'Connected · synchronizing') : 'Disconnected · polling every 20s'}</span>
           </span>
 
           <button
@@ -546,6 +550,32 @@ export default function KdsPage() {
           </button>
         </div>
       </header>
+
+      <div className={styles.queueToolbar}>
+        <label>
+          Pickup date (America/Toronto):{' '}
+          <input type="date" value={selectedDate} onChange={event => handleDateChange(event.target.value)} aria-label="Board pickup date" />
+          <strong> {selectedDate}{selectedDate === getTodayString() ? ' · Today' : ' · Scheduled pickup queue'}</strong>
+        </label>
+        <button type="button" className={styles.toolbarBtn} onClick={() => handleDateChange(getTodayString())}>Today</button>
+      </div>
+
+      {apiError && <div className={styles.noticeBanner} role="alert">{apiError}</div>}
+
+      {otherDates.length > 0 && (
+        <div className={styles.queueToolbar} aria-label="Orders awaiting pickup on other dates">
+          <span>Orders awaiting pickup on other dates:</span>
+          {otherDates.map(([date, count]) => (
+            <button key={date} type="button" className={styles.toolbarBtn} onClick={() => handleDateChange(date)}>
+              {date}: {count} order{count === 1 ? '' : 's'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!loading && !apiError && orders.length === 0 && (
+        <div className={styles.queueToolbar} role="status">No orders for selected date {selectedDate}.</div>
+      )}
 
       {notice && (
         <div className={styles.noticeBanner} role="alert">
@@ -659,7 +689,7 @@ export default function KdsPage() {
               );
             })}
 
-            {!loading && newOrders.length === 0 && (
+            {!loading && !apiError && newOrders.length === 0 && (
               <div className={styles.emptyColumn}>
                 <Clock3 size={28} color="rgba(255,255,255,0.2)" />
                 <p>No new orders</p>
@@ -776,7 +806,7 @@ export default function KdsPage() {
               );
             })}
 
-            {!loading && preparingOrders.length === 0 && (
+            {!loading && !apiError && preparingOrders.length === 0 && (
               <div className={styles.emptyColumn}>
                 <ChefHat size={28} color="rgba(255,255,255,0.2)" />
                 <p>No orders in prep</p>
@@ -882,7 +912,7 @@ export default function KdsPage() {
               );
             })}
 
-            {!loading && readyOrders.length === 0 && (
+            {!loading && !apiError && readyOrders.length === 0 && (
               <div className={styles.emptyColumn}>
                 <PackageCheck size={28} color="rgba(255,255,255,0.2)" />
                 <p>No orders waiting for pickup</p>
@@ -989,7 +1019,7 @@ export default function KdsPage() {
             <div className={styles.ordersModalList}>
               {orders.length === 0 ? (
                 <p style={{ textAlign: 'center', color: 'var(--text-light)', margin: '2rem 0' }}>
-                  No orders found for this date.
+                  {apiError ? 'Orders unavailable: API request failed.' : loading ? 'Loading orders…' : 'No orders found for this date.'}
                 </p>
               ) : (
                 orders.map(order => (
