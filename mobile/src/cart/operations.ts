@@ -5,6 +5,40 @@ function totalQuantity(cart: CartLine[]): number {
   return cart.reduce((sum, line) => sum + line.quantity, 0);
 }
 
+/**
+ * Enforces strict order limits on a cart:
+ * - At most MAX_CART_LINES (30) distinct dishes
+ * - At most MAX_ITEM_QUANTITY (20) per dish line
+ * - At most MAX_TOTAL_QUANTITY (50) total items across all lines
+ */
+export function enforceCartLimits(cart: CartLine[]): CartLine[] {
+  const result: CartLine[] = [];
+  let currentTotalQuantity = 0;
+
+  for (const line of cart) {
+    if (!line || !line.menuItemId || typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0) {
+      continue;
+    }
+    if (result.length >= MAX_CART_LINES) {
+      break;
+    }
+    if (currentTotalQuantity >= MAX_TOTAL_QUANTITY) {
+      break;
+    }
+    const availableQuota = MAX_TOTAL_QUANTITY - currentTotalQuantity;
+    const cappedQuantity = Math.min(Math.floor(line.quantity), MAX_ITEM_QUANTITY, availableQuota);
+    if (cappedQuantity > 0) {
+      result.push({
+        ...line,
+        quantity: cappedQuantity,
+      });
+      currentTotalQuantity += cappedQuantity;
+    }
+  }
+
+  return result;
+}
+
 export function addToCart(cart: CartLine[], item: MenuItem, quantity = 1): CartMutation {
   if (!item.available) {
     return { cart, error: `${item.name} is currently unavailable.` };
@@ -81,24 +115,41 @@ export function mergeCarts(
   remoteCart: CartLine[],
   options?: { preserveServerQuantities?: boolean },
 ): CartLine[] {
-  if (remoteCart.length === 0) {
-    return localCart;
-  }
+  const baseRemote = enforceCartLimits(remoteCart);
   if (localCart.length === 0) {
-    return remoteCart;
+    return baseRemote;
   }
+  const remoteTotal = baseRemote.reduce((sum, line) => sum + line.quantity, 0);
+  let remainingQuota = Math.max(0, MAX_TOTAL_QUANTITY - remoteTotal);
+
   const merged = new Map<string, CartLine>();
-  for (const line of remoteCart) {
+  for (const line of baseRemote) {
     merged.set(line.menuItemId, { ...line });
   }
+
   for (const line of localCart) {
+    if (!line || !line.menuItemId || typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0) {
+      continue;
+    }
     const existing = merged.get(line.menuItemId);
     if (!existing) {
-      merged.set(line.menuItemId, { ...line });
+      if (merged.size < MAX_CART_LINES && remainingQuota > 0) {
+        const toAdd = Math.min(Math.floor(line.quantity), MAX_ITEM_QUANTITY, remainingQuota);
+        if (toAdd > 0) {
+          merged.set(line.menuItemId, { ...line, quantity: toAdd });
+          remainingQuota -= toAdd;
+        }
+      }
       continue;
     }
     if (!options?.preserveServerQuantities) {
-      existing.quantity = Math.max(existing.quantity, line.quantity);
+      const targetQuantity = Math.min(MAX_ITEM_QUANTITY, Math.max(existing.quantity, Math.floor(line.quantity)));
+      const delta = targetQuantity - existing.quantity;
+      const allowedDelta = Math.min(delta, remainingQuota);
+      if (allowedDelta > 0) {
+        existing.quantity += allowedDelta;
+        remainingQuota -= allowedDelta;
+      }
     }
   }
   return Array.from(merged.values());
@@ -106,28 +157,44 @@ export function mergeCarts(
 
 /**
  * Merges guest items into an authenticated user's cart when transitioning from guest to logged-in.
- * Guest items that are already in the account cart have their quantities combined (capped at MAX_ITEM_QUANTITY).
- * Guest items not in the account cart are added.
+ * - Account cart items are preserved with priority.
+ * - Overlapping items have their quantities combined (capped at MAX_ITEM_QUANTITY).
+ * - New guest items are added up to MAX_CART_LINES (30 dishes).
+ * - The merged total quantity across all items is strictly capped at MAX_TOTAL_QUANTITY (50 items).
  */
 export function mergeGuestCart(guestCart: CartLine[], accountCart: CartLine[]): CartLine[] {
-  if (guestCart.length === 0) {
-    return accountCart;
-  }
-  if (accountCart.length === 0) {
-    return guestCart;
-  }
+  const baseAccountCart = enforceCartLimits(accountCart);
+  const accountTotal = baseAccountCart.reduce((sum, line) => sum + line.quantity, 0);
+  let remainingQuota = Math.max(0, MAX_TOTAL_QUANTITY - accountTotal);
+
   const merged = new Map<string, CartLine>();
-  for (const line of accountCart) {
+  for (const line of baseAccountCart) {
     merged.set(line.menuItemId, { ...line });
   }
+
   for (const line of guestCart) {
+    if (!line || !line.menuItemId || typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0) {
+      continue;
+    }
     const existing = merged.get(line.menuItemId);
-    if (!existing) {
-      merged.set(line.menuItemId, { ...line });
+    if (existing) {
+      const maxAddable = Math.max(0, MAX_ITEM_QUANTITY - existing.quantity);
+      const toAdd = Math.min(Math.floor(line.quantity), maxAddable, remainingQuota);
+      if (toAdd > 0) {
+        existing.quantity += toAdd;
+        remainingQuota -= toAdd;
+      }
     } else {
-      existing.quantity = Math.min(MAX_ITEM_QUANTITY, existing.quantity + line.quantity);
+      if (merged.size < MAX_CART_LINES && remainingQuota > 0) {
+        const toAdd = Math.min(Math.floor(line.quantity), MAX_ITEM_QUANTITY, remainingQuota);
+        if (toAdd > 0) {
+          merged.set(line.menuItemId, { ...line, quantity: toAdd });
+          remainingQuota -= toAdd;
+        }
+      }
     }
   }
+
   return Array.from(merged.values());
 }
 
@@ -135,7 +202,7 @@ export function parseStoredCart(value: unknown): CartLine[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((entry) => {
+  const lines: CartLine[] = value.flatMap((entry) => {
     if (!entry || typeof entry !== 'object') {
       return [];
     }
@@ -157,4 +224,5 @@ export function parseStoredCart(value: unknown): CartLine[] {
       available: line.available !== false,
     }];
   });
+  return enforceCartLimits(lines);
 }

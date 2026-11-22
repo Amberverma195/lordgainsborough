@@ -13,6 +13,10 @@ import {
   clearAccountCart,
   purgeLegacyGlobalCart,
   mergeCartItems,
+  enforceCartLimits,
+  MAX_ITEM_QUANTITY,
+  MAX_CART_LINES,
+  MAX_TOTAL_QUANTITY,
   CartItem,
 } from './cartStorage';
 import { clearAuth, persistAuth, signOut, validateServerSession } from './auth';
@@ -433,6 +437,92 @@ describe('Cart Persistence and Session Lifecycle Isolation', () => {
       // Clearing key for email1 does not clear key for email2
       clearCheckoutIdempotencyKey(email1);
       expect(getOrCreateCheckoutIdempotencyKey(cart, email2)).toBe(key2);
+    });
+  });
+
+  describe('Guest-Cart Merging Limit Checks', () => {
+    const makeItem = (id: string, qty = 1): CartItem => ({
+      id,
+      name: `Dish ${id}`,
+      description: '',
+      price: 15,
+      category: 'Mains',
+      image: '',
+      quantity: qty,
+    });
+
+    it('enforces MAX_CART_LINES (30) when combining two individually valid carts', () => {
+      // 20 account items (valid <= 30)
+      const accountCart: CartItem[] = Array.from({ length: 20 }, (_, i) => makeItem(`acc-${i + 1}`));
+      // 15 guest items (valid <= 30)
+      const guestCart: CartItem[] = Array.from({ length: 15 }, (_, i) => makeItem(`guest-${i + 1}`));
+
+      const merged = mergeCartItems(guestCart, accountCart, { combineQuantities: true });
+      expect(merged).toHaveLength(MAX_CART_LINES);
+
+      // Account items are preserved with priority
+      for (let i = 1; i <= 20; i++) {
+        expect(merged.some(item => item.id === `acc-${i}`)).toBe(true);
+      }
+      // Only 10 guest items fit before reaching 30 lines
+      const guestInMerged = merged.filter(item => item.id.startsWith('guest-'));
+      expect(guestInMerged).toHaveLength(10);
+    });
+
+    it('enforces MAX_TOTAL_QUANTITY (50) when combining two individually valid carts', () => {
+      // Account cart: 2 items with 20 each = 40 (valid <= 50)
+      const accountCart: CartItem[] = [
+        makeItem('acc-1', 20),
+        makeItem('acc-2', 20),
+      ];
+      // Guest cart: 2 items with 10 each = 20 (valid <= 50)
+      const guestCart: CartItem[] = [
+        makeItem('guest-1', 10),
+        makeItem('guest-2', 10),
+      ];
+
+      const merged = mergeCartItems(guestCart, accountCart, { combineQuantities: true });
+      const totalQty = merged.reduce((sum, item) => sum + item.quantity, 0);
+      expect(totalQty).toBe(MAX_TOTAL_QUANTITY);
+
+      expect(merged.find(i => i.id === 'acc-1')?.quantity).toBe(20);
+      expect(merged.find(i => i.id === 'acc-2')?.quantity).toBe(20);
+      // guest-1 gets remaining 10 units
+      expect(merged.find(i => i.id === 'guest-1')?.quantity).toBe(10);
+      // guest-2 cannot be added because 50 is reached
+      expect(merged.find(i => i.id === 'guest-2')).toBeUndefined();
+    });
+
+    it('caps overlapping dish quantity at MAX_ITEM_QUANTITY (20)', () => {
+      const accountCart: CartItem[] = [makeItem('pie', 15)];
+      const guestCart: CartItem[] = [makeItem('pie', 10)];
+
+      const merged = mergeCartItems(guestCart, accountCart, { combineQuantities: true });
+      expect(merged).toHaveLength(1);
+      expect(merged[0].quantity).toBe(MAX_ITEM_QUANTITY);
+    });
+
+    it('preserves account cart items without reduction when account cart is already at MAX_TOTAL_QUANTITY', () => {
+      const accountCart: CartItem[] = [
+        makeItem('acc-1', 20),
+        makeItem('acc-2', 20),
+        makeItem('acc-3', 10),
+      ]; // Total = 50
+      const guestCart: CartItem[] = [makeItem('guest-1', 5)];
+
+      const merged = mergeCartItems(guestCart, accountCart, { combineQuantities: true });
+      expect(merged).toHaveLength(3);
+      const totalQty = merged.reduce((sum, item) => sum + item.quantity, 0);
+      expect(totalQty).toBe(50);
+      expect(merged.find(i => i.id === 'guest-1')).toBeUndefined();
+    });
+
+    it('enforceCartLimits clamps oversized line count and total quantity', () => {
+      const oversized: CartItem[] = Array.from({ length: 40 }, (_, i) => makeItem(`dish-${i}`, 5));
+      const clamped = enforceCartLimits(oversized);
+      expect(clamped.length).toBeLessThanOrEqual(MAX_CART_LINES);
+      const total = clamped.reduce((sum, item) => sum + item.quantity, 0);
+      expect(total).toBe(MAX_TOTAL_QUANTITY);
     });
   });
 });

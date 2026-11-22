@@ -276,7 +276,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (serverRes.ok) {
             let finalCart: CartItem[];
             if (hasGuest && guestItems.length > 0) {
-              finalCart = mergeCartItems(guestItems, serverRes.items);
+              finalCart = mergeCartItems(guestItems, serverRes.items, { combineQuantities: true });
               clearGuestCart();
               await saveServerCart(finalCart, authenticatedUser);
             } else {
@@ -401,7 +401,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 let finalCart: CartItem[];
                 if (hasGuest && guestItems.length > 0) {
                   // Merge genuine guest items into this user's server cart
-                  finalCart = mergeCartItems(guestItems, serverRes.items);
+                  finalCart = mergeCartItems(guestItems, serverRes.items, { combineQuantities: true });
                   clearGuestCart();
                   await saveServerCart(finalCart, sessionKey);
                 } else {

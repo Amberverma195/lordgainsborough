@@ -53,22 +53,87 @@ export function fromServerItems(items: ServerCartItem[]): CartItem[] {
   }));
 }
 
-export function mergeCartItems(first: CartItem[], second: CartItem[]): CartItem[] {
-  const merged = new Map<string, CartItem>();
+export const MAX_ITEM_QUANTITY = 20;
+export const MAX_CART_LINES = 30;
+export const MAX_TOTAL_QUANTITY = 50;
 
-  for (const item of second) {
-    if (item && item.id && item.quantity > 0) {
-      merged.set(item.id, { ...item });
+/**
+ * Enforces strict order limits on a cart:
+ * - At most MAX_CART_LINES (30) distinct dishes
+ * - At most MAX_ITEM_QUANTITY (20) per dish line
+ * - At most MAX_TOTAL_QUANTITY (50) total items across all lines
+ */
+export function enforceCartLimits(items: CartItem[]): CartItem[] {
+  const result: CartItem[] = [];
+  let currentTotalQuantity = 0;
+
+  for (const item of items) {
+    if (!item || !item.id || typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity <= 0) {
+      continue;
+    }
+    if (result.length >= MAX_CART_LINES) {
+      break;
+    }
+    if (currentTotalQuantity >= MAX_TOTAL_QUANTITY) {
+      break;
+    }
+    const availableQuota = MAX_TOTAL_QUANTITY - currentTotalQuantity;
+    const cappedQuantity = Math.min(Math.floor(item.quantity), MAX_ITEM_QUANTITY, availableQuota);
+    if (cappedQuantity > 0) {
+      result.push({
+        ...item,
+        quantity: cappedQuantity,
+      });
+      currentTotalQuantity += cappedQuantity;
     }
   }
 
+  return result;
+}
+
+export function mergeCartItems(
+  first: CartItem[],
+  second: CartItem[],
+  options?: { combineQuantities?: boolean },
+): CartItem[] {
+  const baseCart = enforceCartLimits(second);
+  const accountTotal = baseCart.reduce((sum, item) => sum + item.quantity, 0);
+  let remainingQuota = Math.max(0, MAX_TOTAL_QUANTITY - accountTotal);
+
+  const merged = new Map<string, CartItem>();
+  for (const item of baseCart) {
+    merged.set(item.id, { ...item });
+  }
+
   for (const item of first) {
-    if (item && item.id && item.quantity > 0) {
-      const existing = merged.get(item.id);
-      if (existing) {
-        existing.quantity = Math.max(existing.quantity, item.quantity);
+    if (!item || !item.id || typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity <= 0) {
+      continue;
+    }
+    const existing = merged.get(item.id);
+    if (existing) {
+      if (options?.combineQuantities) {
+        const maxAddable = Math.max(0, MAX_ITEM_QUANTITY - existing.quantity);
+        const toAdd = Math.min(Math.floor(item.quantity), maxAddable, remainingQuota);
+        if (toAdd > 0) {
+          existing.quantity += toAdd;
+          remainingQuota -= toAdd;
+        }
       } else {
-        merged.set(item.id, { ...item });
+        const targetQuantity = Math.min(MAX_ITEM_QUANTITY, Math.max(existing.quantity, Math.floor(item.quantity)));
+        const delta = targetQuantity - existing.quantity;
+        const allowedDelta = Math.min(delta, remainingQuota);
+        if (allowedDelta > 0) {
+          existing.quantity += allowedDelta;
+          remainingQuota -= allowedDelta;
+        }
+      }
+    } else {
+      if (merged.size < MAX_CART_LINES && remainingQuota > 0) {
+        const toAdd = Math.min(Math.floor(item.quantity), MAX_ITEM_QUANTITY, remainingQuota);
+        if (toAdd > 0) {
+          merged.set(item.id, { ...item, quantity: toAdd });
+          remainingQuota -= toAdd;
+        }
       }
     }
   }
@@ -90,7 +155,8 @@ function safeParseCart(raw: string | null): CartItem[] {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(item => item && typeof item.id === 'string' && typeof item.quantity === 'number' && item.quantity > 0);
+    const valid = parsed.filter(item => item && typeof item.id === 'string' && typeof item.quantity === 'number' && item.quantity > 0);
+    return enforceCartLimits(valid);
   } catch {
     return [];
   }
