@@ -82,7 +82,7 @@ export function OrderProgressTracker({
         <View style={styles.noShowAlert}>
           <Text style={styles.noShowAlertTitle}>Order Marked as No-Show</Text>
           <Text style={styles.noShowAlertBody}>
-            This pickup was marked as a no-show by the kitchen. Please contact the restaurant at (905) 892-0700 if you have any questions.
+            This pickup was marked as a no-show by the kitchen. Please contact the restaurant at (519) 472-4168 if you have any questions.
           </Text>
         </View>
       ) : null}

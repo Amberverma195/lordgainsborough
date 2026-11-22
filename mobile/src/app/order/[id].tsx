@@ -264,7 +264,7 @@ export default function OrderDetailScreen() {
             <Text style={styles.pickupInfoBody}>
               All orders are prepared for in-person pickup. Payment is collected at the restaurant counter.
             </Text>
-            <Text style={styles.pickupContact}>Restaurant: (905) 892-0700</Text>
+            <Text style={styles.pickupContact}>Restaurant: (519) 472-4168</Text>
           </Card>
 
           {/* Action buttons */}

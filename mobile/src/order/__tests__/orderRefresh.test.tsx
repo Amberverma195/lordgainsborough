@@ -127,6 +127,7 @@ describe('Order refresh, focus, and realtime updates', () => {
     });
 
     expect(await utils.findByText('In progress')).toBeTruthy();
+    expect(await utils.findByText('Restaurant: (519) 472-4168')).toBeTruthy();
     expect(mockFocusEffect).toHaveBeenCalled();
     expect(mockUseOrderRealtime).toHaveBeenCalledWith(
       expect.objectContaining({

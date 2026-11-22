@@ -44,6 +44,7 @@ describe('OrderProgressTracker component', () => {
 
     expect(getByText('Order Marked as No-Show')).toBeTruthy();
     expect(getByText(/marked as a no-show by the kitchen/i)).toBeTruthy();
+    expect(getByText(/\(519\) 472-4168/)).toBeTruthy();
   });
 
   it('toggles activity history accordion and reveals milestones', async () => {
