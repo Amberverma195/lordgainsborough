@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   CheckCircle2,
   X,
-  RefreshCw,
 } from 'lucide-react';
 import styles from './signup.module.css';
 import { apiFetch } from '@/lib/apiFetch';
@@ -510,22 +509,6 @@ export default function SignupPage() {
     } finally {
       setResending(false);
     }
-  };
-
-  // --- Step 2: Change Email Address (Restart signup flow cleanly) ---
-  const handleChangeEmail = () => {
-    const prev = challengeRef.current || challenge;
-    clearAllSignupSession();
-    challengeRef.current = null;
-    setChallenge(null);
-    setPendingSignup(null);
-    setOtp(['', '', '', '', '', '']);
-    setError('');
-    setInfoMessage('');
-    if (prev) {
-      publishChallenge(prev, 'cleared');
-    }
-    setStep('signup-form');
   };
 
   // --- Step 2: Verify OTP & Create Account ---
@@ -1035,16 +1018,6 @@ export default function SignupPage() {
                     {challenge.resendsRemaining} resend{challenge.resendsRemaining === 1 ? '' : 's'} remaining
                   </p>
                 )}
-
-                <button
-                  type="button"
-                  className={styles.backLink}
-                  onClick={handleChangeEmail}
-                  disabled={loading}
-                >
-                  <RefreshCw size={14} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
-                  Change Email Address
-                </button>
               </div>
             </motion.div>
           )}
