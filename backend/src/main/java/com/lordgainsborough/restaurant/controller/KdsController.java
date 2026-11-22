@@ -78,9 +78,13 @@ public class KdsController {
     public ResponseEntity<CustomerOrder> updateStatus(@PathVariable String id, @RequestBody Map<String,Object> body) {
         String next = String.valueOf(body.getOrDefault("status","")).trim().toUpperCase(Locale.ROOT);
         if (!List.of("NEW","ACCEPTED","READY","PICKED_UP","NO_SHOW").contains(next)) return ResponseEntity.badRequest().build();
-        return orders.status(id,next,current -> body.containsKey("averageReadyMinutes")
-                ? readyMinutes(body.get("averageReadyMinutes"),current) : current,this::notifyUpdated)
-                .map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+        try {
+            return orders.status(id,next,current -> body.containsKey("averageReadyMinutes")
+                    ? readyMinutes(body.get("averageReadyMinutes"),current) : current,this::notifyUpdated)
+                    .map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+        } catch (IllegalStateException invalidTransition) {
+            return ResponseEntity.badRequest().build();
+        }
     }
     @PatchMapping("/orders/{id}/ready-time")
     public ResponseEntity<CustomerOrder> updateReadyTime(@PathVariable String id, @RequestBody Map<String,Object> body) {
