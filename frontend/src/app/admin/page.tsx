@@ -1,5 +1,7 @@
 'use client';
 
+import ReservationPolicyEditor from '@/components/ReservationPolicyEditor';
+
 import { apiFetch } from '@/lib/apiFetch';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -1641,6 +1643,7 @@ export default function AdminPage() {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <div className={styles.sectionHeader}>
             <h2>Store Settings</h2>
+            <ReservationPolicyEditor />
           </div>
 
           <form className={styles.formCard} onSubmit={handleSettingsSubmit}>

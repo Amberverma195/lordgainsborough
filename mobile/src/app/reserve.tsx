@@ -1,3 +1,5 @@
+import {useQuery} from '@tanstack/react-query';
+import {fetchSeatingPolicy} from '../reservations/policy';
 import { ReservationPicker } from '../components/ReservationPicker';
 import { useAuth } from '../auth/AuthContext';
 import {
@@ -8,7 +10,13 @@ import {
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
-import { Linking, Text, TextInput } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Linking,
+  Text,
+  TextInput,
+} from 'react-native';
 import { apiRequest } from '../api/client';
 import { ApiError } from '../api/errors';
 import { AppHeader } from '../components/AppHeader';
@@ -42,6 +50,7 @@ function requestReference(body: unknown): string {
 }
 export default function ReserveScreen() {
   const { user } = useAuth();
+  const policy=useQuery({queryKey:['reservation-policy'],queryFn:fetchSeatingPolicy,staleTime:30000});
   const keys = reservationKeys(user?.email);
   const KEY = keys.pending;
   const RESERVATION_REFERENCE_KEY = keys.reference;
@@ -62,6 +71,10 @@ export default function ReserveScreen() {
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
   const [reference, setReference] = useState<string | null>(null);
+  const [receiptDetails, setReceiptDetails] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const guard = useRef(false);
   useEffect(() => {
     let live = true;
@@ -70,11 +83,25 @@ export default function ReserveScreen() {
       SecureStore.getItemAsync(RESERVATION_REFERENCE_KEY),
     ])
       .then(([marker, saved]) => {
-        const id = saved ? requestReference(JSON.parse(saved)) : null;
+        const parsed = saved ? JSON.parse(saved) : null;
+        const id = parsed ? requestReference(parsed) : null;
+        const details =
+          parsed && parsed.request && typeof parsed.request === 'object'
+            ? parsed.request
+            : null;
         if (!live) return;
-        setForm({name:'',email:'',phone:'',date:'',time:'',partySize:'2',specialRequests:''});
+        setForm({
+          name: user?.name ?? '',
+          email: user?.email ?? '',
+          phone: user?.phone ?? '',
+          date: '',
+          time: '',
+          partySize: '2',
+          specialRequests: '',
+        });
         setError('');
         setLoadedFor(KEY);
+        setReceiptDetails(details);
         setReference(id);
         setState(marker === 'sent' ? 'sent' : marker ? 'uncertain' : 'ready');
         if (marker === 'sent' && !id)
@@ -95,15 +122,15 @@ export default function ReserveScreen() {
     return () => {
       live = false;
     };
-  }, [KEY, RESERVATION_REFERENCE_KEY]);
+  }, [KEY, RESERVATION_REFERENCE_KEY, user?.name, user?.email, user?.phone]);
   async function submit() {
-    if (guard.current || state !== 'ready' || loadedFor !== KEY) return;
+    if (guard.current || state !== 'ready' || loadedFor !== KEY || !policy.data) return;
     if (
       !form.name.trim() ||
       !isValidEmail(form.email) ||
       !isValidPhone(form.phone) ||
       !reservationDates().includes(form.date) ||
-      !reservationTimes(form.date).includes(form.time) ||
+      !reservationTimes(form.date,new Date(),policy.data).includes(form.time) ||
       !Number.isInteger(Number(form.partySize)) ||
       Number(form.partySize) < 1 ||
       Number(form.partySize) > 10
@@ -132,11 +159,16 @@ export default function ReserveScreen() {
       accepted = true;
       if (currentScope.current === KEY) {
         setReference(id);
+        setReceiptDetails({ ...form, partySize: Number(form.partySize) });
         setState('sent');
       }
       await SecureStore.setItemAsync(
         RESERVATION_REFERENCE_KEY,
-        JSON.stringify({ id, status: 'PENDING' }),
+        JSON.stringify({
+          id,
+          status: 'PENDING',
+          request: { ...form, partySize: Number(form.partySize) },
+        }),
       );
       await AsyncStorage.setItem(KEY, 'sent');
     } catch (failure) {
@@ -176,103 +208,124 @@ export default function ReserveScreen() {
       </Screen>
     );
   return (
-    <Screen scroll>
-      <AppHeader title="Book a Table" eyebrow="Reservations" showBack />
-      <Text style={{ color: colors.text }}>
-        Request a table. Submission is pending confirmation, not a guaranteed
-        reservation. All dates and times are America/Toronto.
-      </Text>
-      {restaurantFacts.diningHours.map((line) => (
-        <Text key={line} style={{ color: colors.textSecondary }}>
-          {line}
-        </Text>
-      ))}
-      {state === 'ready' || state === 'sending' ? (
-        <>
-          {(['name', 'email', 'phone', 'specialRequests'] as const).map(
-            (key) => (
-              <TextInput
-                key={key}
-                accessibilityLabel={labels[key]}
-                keyboardType={
-                  key === 'email'
-                    ? 'email-address'
-                    : key === 'phone'
-                      ? 'phone-pad'
-                      : 'default'
-                }
-                multiline={key === 'specialRequests'}
-                placeholder={labels[key]}
-                placeholderTextColor={colors.textMuted}
-                value={form[key]}
-                editable={state === 'ready'}
-                maxLength={key === 'specialRequests' ? 1000 : 255}
-                onChangeText={(value) =>
-                  setForm((old) => ({ ...old, [key]: value }))
-                }
-                style={{ color: colors.text, minHeight: 52 }}
-              />
-            ),
-          )}
-          <ReservationPicker
-            date={form.date}
-            time={form.time}
-            partySize={form.partySize}
-            disabled={state !== 'ready'}
-            onChange={(value) => setForm((old) => ({ ...old, ...value }))}
-          />
-          <Button
-            label="Submit reservation request"
-            loading={state === 'sending'}
-            onPress={() => void submit()}
-          />
-        </>
-      ) : null}
-      {state === 'loading' ? <Text>Checking saved requests...</Text> : null}
-      {state === 'sent' ? (
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <Screen scroll>
+        <AppHeader title="Book a Table" eyebrow="Reservations" showBack />
         <Text style={{ color: colors.text }}>
-          Request received - pending confirmation. The team will contact you.
+          Request a table. Submission is pending confirmation, not a guaranteed
+          reservation. All dates and times are America/Toronto.
         </Text>
-      ) : null}
-      {reference ? (
-        <Text
-          selectable
-          accessibilityLabel="Reservation request reference"
-          style={{ color: colors.text }}
-        >
-          Last received request reference: {reference}. Pending confirmation at
-          submission; call the restaurant for current status.
-        </Text>
-      ) : null}
-      {state === 'sent' || state === 'uncertain' ? (
-        <>
-          <Text style={{ color: colors.text }}>
-            Call to check your previous request before making another.
+        {policy.data?<Text style={{color:colors.textSecondary}}>Last seating is {policy.data.lastSeatingMinutes} minutes before closing. Request at least {policy.data.advanceNoticeMinutes} minutes ahead.{!policy.data.managementApproved?' Proposed policy awaiting restaurant management approval.':''}</Text>:<><Text style={{color:colors.danger}}>Reservation policy is loading or unavailable. Please retry or call.</Text><Button label="Retry reservation policy" onPress={()=>void policy.refetch()}/></>}
+      {restaurantFacts.diningHours.map((line) => (
+          <Text key={line} style={{ color: colors.textSecondary }}>
+            {line}
           </Text>
-          <Button
-            label="I checked with the restaurant - start another request"
-            variant="ghost"
-            onPress={() => {
-              void AsyncStorage.removeItem(KEY)
-                .then(() => setState('ready'))
-                .catch(() =>
-                  setError(
-                    'Device storage could not clear the previous request. Please call the restaurant.',
-                  ),
-                );
-            }}
-          />
-        </>
-      ) : null}
-      {error ? (
-        <Text accessibilityRole="alert" style={{ color: colors.danger }}>
-          {error}
-        </Text>
-      ) : null}
-      <Button
-        label={'Call ' + restaurantFacts.phoneDisplay}
-        onPress={() => void Linking.openURL('tel:' + restaurantFacts.phoneTel)}
-      />
-    </Screen>
+        ))}
+        {state === 'ready' || state === 'sending' ? (
+          <>
+            {(['name', 'email', 'phone', 'specialRequests'] as const).map(
+              (key) => (
+                <TextInput
+                  key={key}
+                  accessibilityLabel={labels[key]}
+                  keyboardType={
+                    key === 'email'
+                      ? 'email-address'
+                      : key === 'phone'
+                        ? 'phone-pad'
+                        : 'default'
+                  }
+                  multiline={key === 'specialRequests'}
+                  placeholder={labels[key]}
+                  placeholderTextColor={colors.textMuted}
+                  value={form[key]}
+                  editable={state === 'ready'}
+                  maxLength={key === 'specialRequests' ? 1000 : 255}
+                  onChangeText={(value) =>
+                    setForm((old) => ({ ...old, [key]: value }))
+                  }
+                  style={{ color: colors.text, minHeight: 52 }}
+                />
+              ),
+            )}
+            <ReservationPicker
+              date={form.date}
+              time={form.time}
+              partySize={form.partySize}
+              policy={policy.data}
+            disabled={state !== 'ready' || !policy.data}
+              onChange={(value) => setForm((old) => ({ ...old, ...value }))}
+            />
+            <Button
+              label="Submit reservation request"
+              loading={state === 'sending'}
+            disabled={!policy.data}
+              onPress={() => void submit()}
+            />
+          </>
+        ) : null}
+        {state === 'loading' ? <Text>Checking saved requests...</Text> : null}
+        {state === 'sent' ? (
+          <Text style={{ color: colors.text }}>
+            Request received - pending confirmation. The team will contact you.
+          </Text>
+        ) : null}
+        {reference ? (
+          <Text
+            selectable
+            accessibilityLabel="Reservation request reference"
+            style={{ color: colors.text }}
+          >
+            Last received request reference: {reference}. Pending confirmation
+            at submission; call the restaurant for current status.
+          </Text>
+        ) : null}
+        {reference && receiptDetails ? (
+          <Text selectable style={{ color: colors.text }}>
+            Submitted request: {String(receiptDetails.date ?? '')} at{' '}
+            {String(receiptDetails.time ?? '')} Toronto time,{' '}
+            {String(receiptDetails.partySize ?? '')} guests. Contact:{' '}
+            {String(receiptDetails.name ?? '')},{' '}
+            {String(receiptDetails.email ?? '')},{' '}
+            {String(receiptDetails.phone ?? '')}. Special requests:{' '}
+            {String(receiptDetails.specialRequests ?? 'None')}
+          </Text>
+        ) : null}
+        {state === 'sent' || state === 'uncertain' ? (
+          <>
+            <Text style={{ color: colors.text }}>
+              Call to check your previous request before making another.
+            </Text>
+            <Button
+              label="I checked with the restaurant - start another request"
+              variant="ghost"
+              onPress={() => {
+                void AsyncStorage.removeItem(KEY)
+                  .then(() => setState('ready'))
+                  .catch(() =>
+                    setError(
+                      'Device storage could not clear the previous request. Please call the restaurant.',
+                    ),
+                  );
+              }}
+            />
+          </>
+        ) : null}
+        {error ? (
+          <Text accessibilityRole="alert" style={{ color: colors.danger }}>
+            {error}
+          </Text>
+        ) : null}
+        <Button
+          label={'Call ' + restaurantFacts.phoneDisplay}
+          onPress={() =>
+            void Linking.openURL('tel:' + restaurantFacts.phoneTel)
+          }
+        />
+      </Screen>
+    </KeyboardAvoidingView>
   );
 }

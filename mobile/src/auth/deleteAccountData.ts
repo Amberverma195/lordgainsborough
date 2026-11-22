@@ -1,3 +1,5 @@
+import { pushDeviceKey } from '../notifications/orderAlerts';
+import { favouritesKey, flushFavouriteWrites } from '../menu/useFavourites';
 import { reservationKeys } from '../reservations/choices';
 import { toAccountNamespace } from './accountNamespace';
 import {
@@ -34,6 +36,7 @@ export async function clearDeletedAccountData(
   clearAllConfirmedOrders();
   const jobs: Promise<unknown>[] = [
     cancel,
+    SecureStore.deleteItemAsync(pushDeviceKey(email)),
     SecureStore.deleteItemAsync(reservationKeys(email).reference),
     SecureStore.deleteItemAsync(SESSION_TOKEN_KEY),
   ];
@@ -64,7 +67,9 @@ export async function clearDeletedAccountData(
   }
   jobs.push(
     (async () => {
+      await flushFavouriteWrites(email);
       await AsyncStorage.multiRemove([
+        favouritesKey(email),
         reservationKeys(email).pending,
         getCartStorageKey(email),
         getPickupStorageKey(email),

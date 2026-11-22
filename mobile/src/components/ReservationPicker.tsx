@@ -1,3 +1,4 @@
+import { ReservationCalendar } from './ReservationCalendar';
 import { useState } from 'react';
 import { FlatList, Modal, Pressable, Text, View } from 'react-native';
 import { reservationDates, reservationTimes } from '../reservations/choices';
@@ -12,7 +13,9 @@ export function ReservationPicker({
   partySize,
   disabled,
   onChange,
+  policy,
 }: {
+  policy?:import('../reservations/choices').SeatingPolicy;
   date: string;
   time: string;
   partySize: string;
@@ -24,7 +27,7 @@ export function ReservationPicker({
     open === 'date'
       ? reservationDates()
       : open === 'time'
-        ? reservationTimes(date)
+        ? reservationTimes(date, new Date(),policy)
         : Array.from({ length: 10 }, (_, i) => String(i + 1));
   const label = (value: string) =>
     open === 'date'
@@ -72,36 +75,44 @@ export function ReservationPicker({
           <Text style={{ color: colors.text }}>
             Toronto reservation choices
           </Text>
-          <FlatList
-            data={choices}
-            keyExtractor={(value) => value}
-            ListEmptyComponent={
-              <Text style={{ color: colors.text }}>
-                No upcoming slots. Choose another date or call the restaurant.
-              </Text>
-            }
-            renderItem={({ item }) => (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={'Select ' + item}
-                onPress={() => {
-                  if (open === 'date')
-                    onChange({ date: item, time: '', partySize });
-                  else if (
-                    open === 'time' &&
-                    reservationTimes(date).includes(item)
-                  )
-                    onChange({ date, time: item, partySize });
-                  else if (open === 'partySize')
-                    onChange({ date, time, partySize: item });
-                  setOpen(null);
-                }}
-                style={{ padding: 16 }}
-              >
-                <Text style={{ color: colors.text }}>{label(item)}</Text>
-              </Pressable>
-            )}
-          />
+          {open === 'date' ? (
+            <ReservationCalendar
+              selected={date}
+              onSelect={(value) => {
+                onChange({ date: value, time: '', partySize });
+                setOpen(null);
+              }}
+            />
+          ) : (
+            <FlatList
+              data={choices}
+              keyExtractor={(value) => value}
+              ListEmptyComponent={
+                <Text style={{ color: colors.text }}>
+                  No upcoming slots. Choose another date or call the restaurant.
+                </Text>
+              }
+              renderItem={({ item }) => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={'Select ' + item}
+                  onPress={() => {
+                    if (
+                      open === 'time' &&
+                      reservationTimes(date).includes(item)
+                    )
+                      onChange({ date, time: item, partySize });
+                    else if (open === 'partySize')
+                      onChange({ date, time, partySize: item });
+                    setOpen(null);
+                  }}
+                  style={{ padding: 16 }}
+                >
+                  <Text style={{ color: colors.text }}>{label(item)}</Text>
+                </Pressable>
+              )}
+            />
+          )}
           <Pressable accessibilityRole="button" onPress={() => setOpen(null)}>
             <Text style={{ color: colors.text, padding: 16 }}>
               Close choices

@@ -198,7 +198,7 @@ class ReservationMapperTest {
         r.setTime("18:30");
         assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
 
-        // 10:00, 14:00, 18:00 -> accepted
+        // Opening and daytime slots are accepted; closing is excluded.
         r.setTime("10:00");
         assertThat(mapper.toJpa(r).getTime()).isEqualTo("10:00");
 
@@ -206,7 +206,7 @@ class ReservationMapperTest {
         assertThat(mapper.toJpa(r).getTime()).isEqualTo("14:30");
 
         r.setTime("18:00");
-        assertThat(mapper.toJpa(r).getTime()).isEqualTo("18:00");
+        assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
     }
 
     @Test
@@ -223,12 +223,12 @@ class ReservationMapperTest {
         r.setTime("20:30");
         assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
 
-        // 09:00 and 20:00 -> accepted
+        // Opening is accepted; closing is excluded.
         r.setTime("09:00");
         assertThat(mapper.toJpa(r).getTime()).isEqualTo("09:00");
 
         r.setTime("20:00");
-        assertThat(mapper.toJpa(r).getTime()).isEqualTo("20:00");
+        assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
     }
 
     @Test
@@ -245,9 +245,9 @@ class ReservationMapperTest {
         r.setTime("21:00");
         assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
 
-        // 20:30 -> accepted on Friday
+        // Closing is excluded on Friday.
         r.setTime("20:30");
-        assertThat(mapper.toJpa(r).getTime()).isEqualTo("20:30");
+        assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
     }
 
     @Test
@@ -285,5 +285,31 @@ class ReservationMapperTest {
             body.put("status", null);
             ReservationMapper.validateStatus(body);
         }).isInstanceOf(ResponseStatusException.class);
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "2026-11-05,19:00,20:00", "2026-11-06,19:30,20:30",
+        "2026-11-07,19:30,20:30", "2026-11-08,17:00,18:00"
+    })
+    void lastSlotPrecedesClosing(String date, String lastSlot, String closing) {
+        Reservation r = validReservation();
+        r.setDate(date);
+        r.setTime(lastSlot);
+        assertThat(mapper.toJpa(r).getTime()).isEqualTo(lastSlot);
+        r.setTime(closing);
+        assertThatThrownBy(() -> mapper.toJpa(r)).isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test void configuredSeatingBufferAndAdvanceNoticeAreEnforced() {
+        var policy=new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy();
+        policy.setLastSeatingBeforeClose(Duration.ofHours(1));
+        policy.setMinimumAdvanceNotice(Duration.ofMinutes(30));
+        var configured=new ReservationMapper(clock,policy);
+        var r=validReservation();r.setTime("19:00");assertThat(configured.toJpa(r)).isNotNull();
+        r.setTime("19:30");assertThatThrownBy(()->configured.toJpa(r)).isInstanceOf(ResponseStatusException.class);
+        r.setDate("2026-11-04");r.setTime("12:00");assertThatThrownBy(()->configured.toJpa(r)).isInstanceOf(ResponseStatusException.class);
+        r.setTime("12:30");assertThat(configured.toJpa(r)).isNotNull();
+        assertThatThrownBy(()->policy.setMinimumAdvanceNotice(Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
     }
 }

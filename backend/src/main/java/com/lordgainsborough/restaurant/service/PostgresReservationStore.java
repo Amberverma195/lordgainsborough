@@ -12,9 +12,10 @@ public class PostgresReservationStore implements ReservationStore {
     private final ReservationMapper mapper;
     private final Clock clock;
     private final JpaTransactionManager manager;
-    public PostgresReservationStore(JpaReservationRepository repository,JpaTransactionManager manager,Clock clock) {
+    public PostgresReservationStore(JpaReservationRepository repository,JpaTransactionManager manager,Clock clock) { this(repository,manager,clock,new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy()); }
+    public PostgresReservationStore(JpaReservationRepository repository,JpaTransactionManager manager,Clock clock,com.lordgainsborough.restaurant.config.ReservationSeatingPolicy seating) {
         this.manager=manager; this.repository=repository; this.clock=clock.withZone(ZoneId.systemDefault());
-        this.mapper=new ReservationMapper(this.clock);
+        this.mapper=new ReservationMapper(this.clock,seating);
         transactions=new TransactionTemplate(manager); transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
     public jakarta.persistence.EntityManagerFactory getEntityManagerFactory() { return manager.getEntityManagerFactory(); }

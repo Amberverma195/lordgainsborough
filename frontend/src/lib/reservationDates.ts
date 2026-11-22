@@ -31,6 +31,7 @@ export function getCalendarDayOfWeek(dateStr: string): number {
   }
   // Construct date at local noon to completely prevent any boundary or daylight-saving shift
   const dateObj = new Date(year, month - 1, day, 12, 0, 0);
+  if(dateObj.getFullYear()!==year||dateObj.getMonth()!==month-1||dateObj.getDate()!==day)return -1;
   return dateObj.getDay();
 }
 
@@ -108,9 +109,12 @@ export function getOperatingHours(dayOfWeek: number): OperatingHours {
  */
 export function getAvailableTimesForDate(
   dateStr: string,
-  referenceDate: Date = new Date()
+  referenceDate: Date = new Date(),
+  policy:SeatingPolicy=proposedSeatingPolicy
 ): Array<{ value: string; label: string }> {
   if (!dateStr) return [];
+  const today=getRestaurantTodayDateString(referenceDate);const max=new Date(today+'T12:00:00Z');max.setUTCFullYear(max.getUTCFullYear()+1);
+  if(dateStr<today||dateStr>max.toISOString().slice(0,10))return [];
 
   const dayOfWeek = getCalendarDayOfWeek(dateStr);
   if (dayOfWeek === -1) return [];
@@ -128,6 +132,10 @@ export function getAvailableTimesForDate(
       // Don't go past closing time (e.g. 20:30 on Fri/Sat, or 18:00 on Sun)
       if (hour === hours.endHour && min > hours.endMinutes) break;
 
+      const minutes=hour*60+min,close=hours.endHour*60+hours.endMinutes;
+      if(minutes>=close||minutes>close-policy.lastSeatingMinutes)continue;
+      const localTime=String(hour).padStart(2,'0')+':'+String(min).padStart(2,'0');
+      if(torontoSeatingInstant(dateStr,localTime)<referenceDate.getTime()+policy.advanceNoticeMinutes*60000)continue;
       // Filter past time slots if booking for today
       if (isToday) {
         if (hour < nowInRestaurant.hour || (hour === nowInRestaurant.hour && min <= nowInRestaurant.minute)) {
@@ -164,7 +172,7 @@ export function validateReservationDateTime(
     return { valid: false, reason: 'Reservation date cannot be in the past.' };
   }
 
-  const availableSlots = getAvailableTimesForDate(dateStr, referenceDate);
+  const availableSlots = getAvailableTimesForDate(dateStr, referenceDate, policy);
   const isAvailable = availableSlots.some((slot) => slot.value === timeStr);
 
   if (!isAvailable) {
@@ -178,4 +186,12 @@ export function validateReservationDateTime(
   }
 
   return { valid: true };
+}
+
+export interface SeatingPolicy {lastSeatingMinutes:number;advanceNoticeMinutes:number;managementApproved?:boolean;}
+export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:false};
+export function torontoSeatingInstant(date:string,time:string):number {
+ const wanted=Date.parse(date+'T'+time+':00Z');let instant=wanted;
+ for(let i=0;i<3;i++){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));const read=(type:string)=>Number(parts.find(part=>part.type===type)?.value);instant+=wanted-Date.UTC(read('year'),read('month')-1,read('day'),read('hour'),read('minute'));}
+ return instant;
 }

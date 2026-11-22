@@ -25,12 +25,15 @@ public class ReservationMapper {
             .withResolverStyle(ResolverStyle.STRICT);
 
     private final Clock clock;
+    private final com.lordgainsborough.restaurant.config.ReservationSeatingPolicy seating;
 
     public ReservationMapper() {
         this(Clock.system(RESTAURANT_ZONE));
     }
 
-    public ReservationMapper(Clock clock) {
+    public ReservationMapper(Clock clock) { this(clock, new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy()); }
+    public ReservationMapper(Clock clock, com.lordgainsborough.restaurant.config.ReservationSeatingPolicy seating) {
+        this.seating = java.util.Objects.requireNonNull(seating);
         this.clock = clock != null ? clock : Clock.system(RESTAURANT_ZONE);
     }
 
@@ -38,7 +41,9 @@ public class ReservationMapper {
         validate(source, Clock.system(RESTAURANT_ZONE));
     }
 
-    public static void validate(Reservation source, Clock clock) {
+    public static void validate(Reservation source, Clock clock) { validate(source, clock, new com.lordgainsborough.restaurant.config.ReservationSeatingPolicy()); }
+    public static void validate(Reservation source, Clock clock, com.lordgainsborough.restaurant.config.ReservationSeatingPolicy seating) {
+        seating=seating.current();
         if (source == null) PostgresInput.invalid();
 
         PostgresInput.text(source.getName(), 255, true);
@@ -122,9 +127,12 @@ public class ReservationMapper {
             closeTime = LocalTime.of(20, 0);
         }
 
-        if (resTime.isBefore(openTime) || resTime.isAfter(closeTime)) {
+        if (resTime.isBefore(openTime) || !resTime.isBefore(closeTime)) {
             PostgresInput.invalid();
         }
+
+        if (resTime.isAfter(closeTime.minus(seating.getLastSeatingBeforeClose()))) PostgresInput.invalid();
+        if (LocalDateTime.of(resDate,resTime).atZone(RESTAURANT_ZONE).toInstant().isBefore(effectiveClock.instant().plus(seating.getMinimumAdvanceNotice()))) PostgresInput.invalid();
 
         // If reservation is for today, time slot must be strictly in the future
         if (resDate.equals(today)) {
@@ -136,7 +144,7 @@ public class ReservationMapper {
     }
 
     public JpaReservation toJpa(Reservation source) {
-        validate(source, clock);
+        validate(source, clock, seating);
         var row = new JpaReservation(source.getName(), source.getEmail(), source.getPhone(), source.getDate(), source.getTime(), source.getPartySize());
         row.setSpecialRequests(source.getSpecialRequests());
         return row;

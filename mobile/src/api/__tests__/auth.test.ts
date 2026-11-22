@@ -2,8 +2,6 @@ import {
   completePasswordReset,
   deleteAccount,
   logout,
-  fetchCurrentUser,
-  login,
   resendPasswordResetOtp,
   sendPasswordResetOtp,
   sendSignupOtp,

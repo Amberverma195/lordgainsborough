@@ -1,6 +1,6 @@
 import { revokeAndClearSession } from './signOut';
 import { clearDeletedAccountData } from './deleteAccountData';
-import { accountWillChange } from './lifecycle';
+import { accountWillChange, onAccountChange } from './lifecycle';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
   createContext,
@@ -9,6 +9,7 @@ import React, {
   useEffect,
   useMemo,
   useState,
+  useRef,
 } from 'react';
 
 import { fetchCurrentUser, login } from '../api/auth';
@@ -47,6 +48,14 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading');
   const [user, setUser] = useState<SessionUser | null>(null);
+  const epoch = useRef(0);
+  useEffect(
+    () =>
+      onAccountChange(() => {
+        epoch.current++;
+      }),
+    [],
+  );
 
   const clearLocalSession = useCallback(async () => {
     accountWillChange();
@@ -69,7 +78,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user?.email]);
 
   const refresh = useCallback(async () => {
+    const version = epoch.current;
     const token = await readSessionToken();
+    if (version !== epoch.current) return;
     if (!token) {
       setUser(null);
       setStatus('signedOut');
@@ -77,9 +88,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const current = await fetchCurrentUser(token);
+      if (version !== epoch.current) return;
       setUser(current);
       setStatus('signedIn');
     } catch (error) {
+      if (version !== epoch.current) return;
       if (shouldClearStoredSession(error, true)) {
         await clearLocalSession();
         return;
@@ -91,9 +104,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const version = epoch.current;
     void (async () => {
       const token = await readSessionToken();
-      if (cancelled) {
+      if (cancelled || version !== epoch.current) {
         return;
       }
       if (!token) {
@@ -103,13 +117,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       try {
         const current = await fetchCurrentUser(token);
-        if (cancelled) {
+        if (cancelled || version !== epoch.current) {
           return;
         }
         setUser(current);
         setStatus('signedIn');
       } catch (error) {
-        if (cancelled) {
+        if (cancelled || version !== epoch.current) {
           return;
         }
         if (shouldClearStoredSession(error, true)) {
@@ -137,7 +151,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (emailOrPhone: string, password: string) => {
       try {
         const priorEmail = user?.email;
+        const version = epoch.current;
         const session = await login({ emailOrPhone, password });
+        if (version !== epoch.current)
+          throw new ApiError({
+            status: 409,
+            code: 'SESSION_CHANGED',
+            message: 'The account session changed. Sign in again.',
+          });
         clearAllConfirmedOrders();
         queryClient.clear();
         try {
@@ -209,8 +230,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await revokeAndClearSession(clearLocalSession);
-  }, [clearLocalSession]);
+    await revokeAndClearSession(clearLocalSession, user?.email);
+  }, [clearLocalSession, user?.email]);
 
   const finishAccountDeletion = useCallback(async (email: string) => {
     await clearDeletedAccountData(email, () => {

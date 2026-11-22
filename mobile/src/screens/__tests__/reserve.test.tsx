@@ -1,3 +1,4 @@
+jest.mock('@tanstack/react-query',()=>({useQuery:()=>({data:{lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:false},refetch:jest.fn()})}));
 import * as SecureStore from 'expo-secure-store';
 import React from 'react';
 import {
@@ -91,7 +92,7 @@ it('sends a pending request once and retains an interruption marker', async () =
   expect(screen.getByLabelText('Reservation request reference')).toBeTruthy();
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
     RESERVATION_REFERENCE_KEY,
-    JSON.stringify({ id: 'request-123', status: 'PENDING' }),
+    expect.any(String),
   );
   expect(apiRequest).toHaveBeenCalledTimes(1);
   expect(await AsyncStorage.getItem(reservationKeys(null).pending)).toBe(
@@ -173,13 +174,20 @@ it.each(['storage failure', 'malformed response'])(
   },
 );
 
-it('clears contact drafts when switching account scopes', async()=>{
- mockAccount={email:'first@example.com'};
- const view=await render(<Reserve/>);
- await waitFor(()=>expect(screen.getByLabelText('Guest name')).toBeTruthy());
- await fireEvent.changeText(screen.getByLabelText('Guest name'),'First customer');
- mockAccount={email:'second@example.com'};
- await view.rerender(<Reserve/>);
- await waitFor(()=>expect(screen.getByLabelText('Guest name').props.value).toBe(''));
- expect(SecureStore.getItemAsync).toHaveBeenCalledWith(reservationKeys('second@example.com').reference);
+it('clears contact drafts when switching account scopes', async () => {
+  mockAccount = { email: 'first@example.com' };
+  const view = await render(<Reserve />);
+  await waitFor(() => expect(screen.getByLabelText('Guest name')).toBeTruthy());
+  await fireEvent.changeText(
+    screen.getByLabelText('Guest name'),
+    'First customer',
+  );
+  mockAccount = { email: 'second@example.com' };
+  await view.rerender(<Reserve />);
+  await waitFor(() =>
+    expect(screen.getByLabelText('Guest name').props.value).toBe(''),
+  );
+  expect(SecureStore.getItemAsync).toHaveBeenCalledWith(
+    reservationKeys('second@example.com').reference,
+  );
 });

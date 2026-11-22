@@ -3,7 +3,7 @@ import { sessionCookieConfig } from '@/lib/sessionConfig';
 import { newCsrfToken, trustedClientIp, upstreamOrigin, validCsrf } from '@/lib/server/sessionSecurity';
 
 export const runtime = 'nodejs';
-const allowedRoots = new Set(['auth', 'orders', 'cart', 'categories', 'menu', 'reservations', 'store-settings', 'admin', 'kds']);
+const allowedRoots = new Set(['auth', 'orders', 'cart', 'categories', 'menu', 'reservations', 'reservation-policy', 'store-settings', 'admin', 'kds']);
 const forwardedHeaders = ['content-type', 'idempotency-key', 'x-signup-attempt-token', 'x-order-tracking-token'];
 
 async function boundedBody(request: NextRequest, maxBytes: number): Promise<Uint8Array | undefined> {

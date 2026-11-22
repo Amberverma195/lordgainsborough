@@ -23,6 +23,7 @@ public class SessionRevocationStore {
         return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM revoked_account_sessions WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP)", Boolean.class, digest(token)));
     }
     public void revoke(String token, Instant expiresAt) {
+        jdbc.update("DELETE FROM customer_push_devices WHERE session_hash=?", digest(token));
         jdbc.update("INSERT INTO revoked_account_sessions (token_hash, expires_at) VALUES (?, ?) ON CONFLICT (token_hash) DO NOTHING", digest(token), Timestamp.from(expiresAt));
     }
     @Scheduled(initialDelay = 60000, fixedDelay = 60000)

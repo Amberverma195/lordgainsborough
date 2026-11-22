@@ -21,19 +21,27 @@ export function reservationDates(now = new Date()) {
     result.push(cursor.toISOString().slice(0, 10));
   return result;
 }
-export function reservationTimes(date: string, now = new Date()) {
+export function reservationTimes(date: string, now = new Date(), policy:SeatingPolicy=proposedSeatingPolicy) {
   if (!reservationDates(now).includes(date)) return [];
   const today = restaurantNow(now);
   const day = new Date(date + 'T12:00:00Z').getUTCDay();
   const open = day === 0 ? 600 : 540;
   const close = day === 0 ? 1080 : day === 5 || day === 6 ? 1230 : 1200;
   const times: string[] = [];
-  for (let minute = open; minute < close; minute += 30)
-    if (date !== today.date || minute > today.minutes)
+  for (let minute = open; minute < close && minute <= close-policy.lastSeatingMinutes; minute += 30)
+    if ((date !== today.date || minute > today.minutes) && torontoSeatingInstant(date,String(Math.floor(minute / 60)).padStart(2, '0')+':'+String(minute % 60).padStart(2, '0'))>=now.getTime()+policy.advanceNoticeMinutes*60000)
       times.push(
         String(Math.floor(minute / 60)).padStart(2, '0') +
           ':' +
           String(minute % 60).padStart(2, '0'),
       );
   return times;
+}
+
+export interface SeatingPolicy {lastSeatingMinutes:number;advanceNoticeMinutes:number;managementApproved?:boolean;}
+export const proposedSeatingPolicy:SeatingPolicy={lastSeatingMinutes:60,advanceNoticeMinutes:30,managementApproved:false};
+export function torontoSeatingInstant(date:string,time:string):number {
+ const wanted=Date.parse(date+'T'+time+':00Z');let instant=wanted;
+ for(let i=0;i<3;i++){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant));const read=(type:string)=>Number(parts.find(part=>part.type===type)?.value);instant+=wanted-Date.UTC(read('year'),read('month')-1,read('day'),read('hour'),read('minute'));}
+ return instant;
 }

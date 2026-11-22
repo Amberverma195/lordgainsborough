@@ -1,7 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
-import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import {
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { fetchOrderHistory } from '../../api/orders';
 import { ApiError } from '../../api/errors';
@@ -13,7 +19,10 @@ import { Price } from '../../components/Price';
 import { Screen } from '../../components/Screen';
 import { ErrorState, LoadingState } from '../../components/States';
 import { StatusBadge } from '../../components/StatusBadge';
-import { formatPickupDateLabel, formatPickupTimeLabel } from '../../checkout/pickup';
+import {
+  formatPickupDateLabel,
+  formatPickupTimeLabel,
+} from '../../checkout/pickup';
 import { formatOrderReference } from '../../format/display';
 import { isActiveOrderStatus } from '../../order/status';
 import { colors, space, type } from '../../theme/tokens';
@@ -26,7 +35,8 @@ export default function OrdersScreen() {
     enabled: status === 'signedIn' && !!user,
     refetchInterval: (query) => {
       const list = query.state.data;
-      const hasActive = list?.some((o) => isActiveOrderStatus(o.status)) ?? false;
+      const hasActive =
+        list?.some((o) => isActiveOrderStatus(o.status)) ?? false;
       return hasActive ? 10_000 : 30_000;
     },
     refetchIntervalInBackground: false,
@@ -58,13 +68,21 @@ export default function OrdersScreen() {
       }
     >
       <AppHeader title="Orders" eyebrow="Pickup" />
-      {status === 'loading' ? <LoadingState label="Restoring your session" /> : null}
+      {status === 'loading' ? (
+        <LoadingState label="Restoring your session" />
+      ) : null}
       {status === 'unreachable' ? (
-        <ErrorState title="Session unavailable" message="We could not confirm your sign-in. Your saved session was kept." onRetry={() => void refresh()} />
+        <ErrorState
+          title="Session unavailable"
+          message="We could not confirm your sign-in. Your saved session was kept."
+          onRetry={() => void refresh()}
+        />
       ) : null}
       {status === 'signedOut' ? (
         <View style={styles.gap}>
-          <Text style={styles.copy}>Sign in to see pickup orders placed with your account.</Text>
+          <Text style={styles.copy}>
+            Sign in to see pickup orders placed with your account.
+          </Text>
           <Button label="Sign in" onPress={() => router.push('/auth/login')} />
         </View>
       ) : null}
@@ -72,7 +90,11 @@ export default function OrdersScreen() {
       {orders.isError ? (
         <ErrorState
           title="Orders unavailable"
-          message={orders.error instanceof ApiError ? orders.error.message : 'Your orders could not be loaded.'}
+          message={
+            orders.error instanceof ApiError
+              ? orders.error.message
+              : 'Your orders could not be loaded.'
+          }
           onRetry={() => void orders.refetch()}
         />
       ) : null}
@@ -81,16 +103,31 @@ export default function OrdersScreen() {
       ) : null}
       <View style={styles.list}>
         {orders.data?.map((order) => (
-          <Pressable key={order.id} accessibilityRole="button" onPress={() => router.push(`/order/${order.id}`)}>
-            <Card>
-              <Text style={styles.reference}>{formatOrderReference(order.id)}</Text>
-              <StatusBadge status={order.status} />
-              <Text style={styles.copy}>
-                {formatPickupDateLabel(order.pickupDate)} · {formatPickupTimeLabel(order.pickupTime)}
-              </Text>
-              <Price amount={order.total} />
-            </Card>
-          </Pressable>
+          <View key={order.id}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push(`/order/${order.id}`)}
+            >
+              <Card>
+                <Text style={styles.reference}>
+                  {formatOrderReference(order.id)}
+                </Text>
+                <StatusBadge status={order.status} />
+                <Text style={styles.copy}>
+                  {formatPickupDateLabel(order.pickupDate)} ·{' '}
+                  {formatPickupTimeLabel(order.pickupTime)}
+                </Text>
+                <Price amount={order.total} />
+              </Card>
+            </Pressable>
+            {order.status === 'PICKED_UP' ? (
+              <Button
+                label="Reorder"
+                variant="secondary"
+                onPress={() => router.push('/reorder/' + order.id)}
+              />
+            ) : null}
+          </View>
         ))}
       </View>
     </Screen>

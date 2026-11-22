@@ -53,6 +53,8 @@ public class JwtUtil {
                 .compact();
     }
 
+    public java.time.Instant getSessionExpiresAt(String token) { return claims(token).getExpiration().toInstant(); }
+
     public String getEmailFromToken(String token) {
         return claims(token).getSubject();
     }

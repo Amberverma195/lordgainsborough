@@ -813,4 +813,30 @@ class PostgresOnlyApplicationIntegrationTest {
         mvc.perform(post("/api/auth/logout")).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+jwt.generateOrderSocketTicket("any-order"))).andExpect(status().isUnauthorized());
     }
+
+    @Test void readinessUsesPublicApiPortAndDoesNotExposeConfiguration() throws Exception {
+        mvc.perform(get("/api/health/readiness")).andExpect(status().isOk()).andExpect(content().json("{\"status\":\"UP\"}"));
+    }
+
+    @Test void pushRegistrationOwnershipOptOutAndOutboxAreTransactional() throws Exception {
+        var member=account("push-member","push@example.com","5195551179","MEMBER");
+        String session=token(member);
+        var service=new CustomerPushService(jdbc.getDataSource(),context.getBean(org.springframework.transaction.PlatformTransactionManager.class),context.getBean(PasswordResetQueuePayloadEncryptor.class),true,true,"test-only-access-key");
+        service.register(member.getId(),session,"device-test","ExpoPushToken[test-token]",java.time.Instant.now().plusSeconds(3600));
+        assertThat(jdbc.queryForObject("SELECT encrypted_token FROM customer_push_devices WHERE device_id='device-test'",String.class)).doesNotContain("ExpoPushToken");
+        var another=account("push-other","other.push@example.com","5195551178","MEMBER");
+        assertThatThrownBy(()->service.register(another.getId(),token(another),"device-test","ExpoPushToken[test-token]",java.time.Instant.now().plusSeconds(3600))).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        var created=order(member.getEmail(),member.getPhone());String id=created.getOrder().getId();
+        jdbc.update("UPDATE customer_orders SET status='ACCEPTED' WHERE id=?",id);
+        jdbc.update("UPDATE customer_orders SET status='ACCEPTED' WHERE id=?",id);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM order_push_outbox WHERE device_id='device-test'",Integer.class)).isEqualTo(1);
+        var disabled=context.getBean(CustomerPushService.class);disabled.deliver();
+        assertThat(jdbc.queryForObject("SELECT state FROM order_push_outbox WHERE device_id='device-test'",String.class)).isEqualTo("PENDING");
+        service.remove(another.getId(),"device-test");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM customer_push_devices WHERE device_id='device-test'",Integer.class)).isEqualTo(1);
+        mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+session)).andExpect(status().isNoContent());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM customer_push_devices WHERE device_id='device-test'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM order_push_outbox WHERE device_id='device-test'",Integer.class)).isZero();
+        mvc.perform(post("/api/auth/push-devices").contentType("application/json").content("{\"deviceId\":\"x\",\"pushToken\":\"ExpoPushToken[x]\"}")).andExpect(status().isUnauthorized());
+    }
 }

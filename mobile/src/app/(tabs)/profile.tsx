@@ -1,3 +1,8 @@
+import {
+  orderAlertsAvailable,
+  enableOrderAlerts,
+  disableOrderAlerts,
+} from '../../notifications/orderAlerts';
 import { useState } from 'react';
 import { router } from 'expo-router';
 import { Linking, StyleSheet, Text, View } from 'react-native';
@@ -15,6 +20,29 @@ import { colors, space, type } from '../../theme/tokens';
 export default function ProfileScreen() {
   const { status, user, signOut, refresh } = useAuth();
 
+  const [alertMessage, setAlertMessage] = useState('');
+  const [alertBusy, setAlertBusy] = useState(false);
+  async function alerts(enabled: boolean) {
+    if (!user || alertBusy) return;
+    setAlertBusy(true);
+    try {
+      if (enabled) await enableOrderAlerts(user.email, user.token);
+      else await disableOrderAlerts(user.email, user.token);
+      setAlertMessage(
+        enabled
+          ? 'Order alerts enabled for this device.'
+          : 'Order alerts disabled for this device.',
+      );
+    } catch (failure) {
+      setAlertMessage(
+        failure instanceof Error
+          ? failure.message
+          : 'Unable to update order alerts.',
+      );
+    } finally {
+      setAlertBusy(false);
+    }
+  }
   const [signingOut, setSigningOut] = useState(false);
   const [logoutError, setLogoutError] = useState('');
   async function logoutHere() {
@@ -78,6 +106,30 @@ export default function ProfileScreen() {
             <Text style={styles.note}>
               The administrator dashboard and kitchen display stay on the
               website. This app is the customer pickup experience.
+            </Text>
+          ) : null}
+          {orderAlertsAvailable ? (
+            <>
+              <Button
+                label="Enable order alerts"
+                loading={alertBusy}
+                onPress={() => void alerts(true)}
+              />
+              <Button
+                label="Disable order alerts"
+                disabled={alertBusy}
+                onPress={() => void alerts(false)}
+              />
+            </>
+          ) : (
+            <Text style={styles.copy}>
+              Order push notifications are not enabled yet. Live order updates
+              remain available in the app.
+            </Text>
+          )}
+          {alertMessage ? (
+            <Text accessibilityRole="alert" style={styles.copy}>
+              {alertMessage}
             </Text>
           ) : null}
           <Button

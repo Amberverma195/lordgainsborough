@@ -6,26 +6,68 @@ import { Card } from './Card';
 import { DishImage } from './DishImage';
 import { Price } from './Price';
 
-export function MenuItemCard({ item, onPress }: { item: MenuItem; onPress: () => void }) {
+export function MenuItemCard({
+  item,
+  onPress,
+  favourite,
+  onToggleFavourite,
+}: {
+  item: MenuItem;
+  onPress: () => void;
+  favourite?: boolean;
+  onToggleFavourite?: () => void;
+}) {
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}, ${item.available ? 'available' : 'unavailable'}`} onPress={onPress}>
-      <Card style={styles.card}>
-        <DishImage image={item.image} title={item.name} height={168} />
-        <View style={styles.body}>
-          <View style={styles.titleRow}>
-            <Text style={styles.name}>{item.name}</Text>
-            {item.mostLoved ? <Text style={styles.loved}>Most loved</Text> : null}
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${item.name}, ${item.available ? 'available' : 'unavailable'}`}
+        onPress={onPress}
+      >
+        <Card style={styles.card}>
+          <DishImage image={item.image} title={item.name} height={168} />
+          <View style={styles.body}>
+            <View style={styles.titleRow}>
+              <Text style={styles.name}>{item.name}</Text>
+              {item.mostLoved ? (
+                <Text style={styles.loved}>Most loved</Text>
+              ) : null}
+            </View>
+            {item.description ? (
+              <Text style={styles.description} numberOfLines={2}>
+                {item.description}
+              </Text>
+            ) : null}
+            <View style={styles.footer}>
+              <Price amount={item.price} />
+              <Text
+                style={item.available ? styles.available : styles.unavailable}
+              >
+                {item.available ? 'Available' : 'Unavailable'}
+              </Text>
+            </View>
           </View>
-          {item.description ? <Text style={styles.description} numberOfLines={2}>{item.description}</Text> : null}
-          <View style={styles.footer}>
-            <Price amount={item.price} />
-            <Text style={item.available ? styles.available : styles.unavailable}>
-              {item.available ? 'Available' : 'Unavailable'}
-            </Text>
-          </View>
-        </View>
-      </Card>
-    </Pressable>
+        </Card>
+      </Pressable>
+      {onToggleFavourite ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            (favourite ? 'Remove favourite ' : 'Add favourite ') + item.name
+          }
+          accessibilityState={{ selected: !!favourite }}
+          onPress={(event) => {
+            event.stopPropagation();
+            onToggleFavourite();
+          }}
+          style={{ minHeight: 44, justifyContent: 'center' }}
+        >
+          <Text style={{ color: colors.gold }}>
+            {favourite ? '\u2665 Saved' : '\u2661 Favourite'}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 

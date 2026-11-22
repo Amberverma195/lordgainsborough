@@ -2,3 +2,5 @@
 # Railpack's Java provider copies only target/ into the runtime image.
 # Maven places the wrapper at target/railway-start.sh, and it execs the Java arguments unchanged.
 startCommand = "sh target/railway-start.sh java ${JAVA_OPTS:-} -jar target/restaurant-api-0.0.1-SNAPSHOT.jar"
+healthcheckPath = "/api/health/readiness"
+healthcheckTimeout = 180

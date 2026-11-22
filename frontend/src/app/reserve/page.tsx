@@ -2,7 +2,7 @@
 
 import { apiFetch } from '@/lib/apiFetch';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Calendar, Clock, Users, User, Mail, Phone, MessageSquare, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import styles from './reserve.module.css';
@@ -10,12 +10,17 @@ import Link from 'next/link';
 import { API_BASE } from '@/lib/orders';
 import {
   getCalendarDayOfWeek,
+  SeatingPolicy, proposedSeatingPolicy,
   getRestaurantTodayDateString,
   getAvailableTimesForDate,
   validateReservationDateTime,
 } from '@/lib/reservationDates';
 
 export default function ReservePage() {
+  const [policy,setPolicy]=useState<SeatingPolicy|null>(null);
+  const [policyVersion,setPolicyVersion]=useState(0);
+  const [policyError,setPolicyError]=useState(false);
+  useEffect(()=>{let active=true;void apiFetch('/api/reservation-policy').then(async response=>{if(!response.ok)throw new Error('Policy unavailable');const value=await response.json();if(active){setPolicy(value);setPolicyError(false);}}).catch(()=>{if(active)setPolicyError(true);});return()=>{active=false;};},[policyVersion]);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [formData, setFormData] = useState({
@@ -33,7 +38,7 @@ export default function ReservePage() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     if (name === 'date') {
-      const newSlots = getAvailableTimesForDate(value);
+      const newSlots = getAvailableTimesForDate(value,new Date(),policy??proposedSeatingPolicy);
       const isCurrentTimeValid = newSlots.some((s) => s.value === formData.time);
       setFormData((prev) => ({
         ...prev,
@@ -48,7 +53,8 @@ export default function ReservePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const validation = validateReservationDateTime(formData.date, formData.time);
+    if(!policy){alert('Reservation policy is unavailable. Please retry or call the restaurant.');return;}
+    const validation = validateReservationDateTime(formData.date, formData.time,new Date(),policy);
     if (!validation.valid) {
       alert(validation.reason || 'Please select a valid reservation date and time.');
       return;
@@ -158,7 +164,7 @@ export default function ReservePage() {
     );
   }
 
-  const availableTimes = getAvailableTimesForDate(formData.date);
+  const availableTimes = getAvailableTimesForDate(formData.date,new Date(),policy??proposedSeatingPolicy);
   const dayOfWeek = getCalendarDayOfWeek(formData.date);
   const dayScheduleHint = formData.date && dayOfWeek >= 0
     ? dayOfWeek === 0
@@ -185,7 +191,8 @@ export default function ReservePage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
       >
-        <form onSubmit={handleSubmit} className={styles.form}>
+        <div role="status">{policy?<>Last seating: {policy.lastSeatingMinutes} minutes before closing. Minimum notice: {policy.advanceNoticeMinutes} minutes. {!policy.managementApproved?'Proposed policy pending restaurant management approval.':''}</>:policyError?'Reservation policy unavailable. Please retry or call.':'Loading reservation policy...'}{policyError?<button type="button" onClick={()=>setPolicyVersion(value=>value+1)}>Retry policy</button>:null}</div>
+            <form onSubmit={handleSubmit} className={styles.form}>
           
           <div className={styles.formSection}>
             <h3>Reservation Details</h3>

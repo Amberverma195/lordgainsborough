@@ -12,13 +12,14 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import java.time.Clock;
+@org.springframework.boot.context.properties.EnableConfigurationProperties(ReservationSeatingPolicy.class)
 @Configuration(proxyBeanMethods=false)
 @org.springframework.context.annotation.Import(PostgresTransactionConfiguration.class)
 public class PostgresReservationPersistenceConfiguration {
 
     @Bean @Primary PostgresReservationStore postgresReservationStore(JpaReservationRepository repository, Clock clock,
-            @Qualifier("reservationJpaTransactionManager") JpaTransactionManager manager) {
-        return new PostgresReservationStore(repository,manager,clock);
+            @Qualifier("reservationJpaTransactionManager") JpaTransactionManager manager, ReservationSeatingPolicy seating) {
+        return new PostgresReservationStore(repository,manager,clock,seating);
     }
     @Bean static BeanFactoryPostProcessor guardReservationIdentities() {
         return factory -> {
