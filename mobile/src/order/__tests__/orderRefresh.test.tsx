@@ -160,6 +160,39 @@ describe('Order refresh, focus, and realtime updates', () => {
     expect(await utils.findByText('Ready for pickup')).toBeTruthy();
   });
 
+  it('OrderDetailScreen updates immediately via socket onOrderUpdated when user has mixed-case email', async () => {
+    mockUseAuth.mockReturnValue({
+      status: 'signedIn',
+      user: {
+        email: 'Jane.Doe@Example.COM',
+        token: 'user-jwt',
+        name: 'Jane Doe',
+      },
+    });
+
+    mockFetchOrder.mockResolvedValue({
+      ...activeOrder,
+      customerEmail: 'Jane.Doe@Example.COM',
+    });
+
+    const utils = await render(
+      <SafeAreaProvider initialMetrics={initialMetrics}>
+        <QueryClientProvider client={queryClient}>
+          <OrderDetailScreen />
+        </QueryClientProvider>
+      </SafeAreaProvider>,
+    );
+
+    expect(await utils.findByText('In progress')).toBeTruthy();
+
+    const realtimeOptions = mockUseOrderRealtime.mock.calls[mockUseOrderRealtime.mock.calls.length - 1][0];
+    await act(async () => {
+      realtimeOptions.onOrderUpdated({ ...activeOrder, customerEmail: 'Jane.Doe@Example.COM', status: 'READY' });
+    });
+
+    expect(await utils.findByText('Ready for pickup')).toBeTruthy();
+  });
+
   it('OrdersScreen registers focus effect and displays active orders', async () => {
     mockFetchOrderHistory.mockResolvedValue([activeOrder]);
 

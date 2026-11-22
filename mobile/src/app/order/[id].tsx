@@ -58,7 +58,7 @@ export default function OrderDetailScreen() {
   // or Socket.IO; the backend validates account ownership directly via the JWT.
   const requestTrackingToken = authToken ? null : effectiveTrackingToken;
 
-  const cached = orderId ? readConfirmedOrder(orderId, user?.email) : null;
+  const cached = orderId ? readConfirmedOrder(orderId, currentAccount) : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -123,10 +123,10 @@ export default function OrderDetailScreen() {
 
   const handleOrderUpdated = useCallback(
     (updatedOrder: CustomerOrderView) => {
-      queryClient.setQueryData(['order', orderId, user?.email], updatedOrder);
-      void queryClient.invalidateQueries({ queryKey: ['orders', user?.email] });
+      queryClient.setQueryData(['order', orderId, currentAccount], updatedOrder);
+      void queryClient.invalidateQueries({ queryKey: ['orders', currentAccount] });
     },
-    [orderId, queryClient, user?.email],
+    [currentAccount, orderId, queryClient],
   );
 
   useOrderRealtime({

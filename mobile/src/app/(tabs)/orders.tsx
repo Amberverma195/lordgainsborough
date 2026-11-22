@@ -29,8 +29,9 @@ import { colors, space, type } from '../../theme/tokens';
 
 export default function OrdersScreen() {
   const { status, user, refresh } = useAuth();
+  const currentAccount = status === 'signedIn' && user?.email ? user.email.trim().toLowerCase() : null;
   const orders = useQuery({
-    queryKey: ['orders', user?.email],
+    queryKey: ['orders', currentAccount],
     queryFn: () => fetchOrderHistory(user!.token),
     enabled: status === 'signedIn' && !!user,
     refetchInterval: (query) => {
