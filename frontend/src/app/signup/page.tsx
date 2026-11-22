@@ -50,13 +50,6 @@ import { CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from '@/lib/legalConse
 
 type SignupStep = 'signup-form' | 'signup-verify';
 
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return email;
-  const visible = local.slice(0, 2);
-  return `${visible}${'*'.repeat(Math.max(local.length - 2, 1))}@${domain}`;
-}
-
 interface ToastState {
   id: string;
   message: string;
@@ -674,7 +667,7 @@ export default function SignupPage() {
               <>
                 We sent a 6-digit confirmation code to<br />
                 <span className={styles.emailHighlight}>
-                  <Mail size={14} /> {pendingSignup ? maskEmail(pendingSignup.email) : formData.email}
+                  <Mail size={14} /> {pendingSignup?.email || formData.email}
                 </span>
               </>
             ) : (
@@ -1012,12 +1005,6 @@ export default function SignupPage() {
                 >
                   {resendLabel}
                 </button>
-
-                {challenge?.resendsRemaining !== undefined && (
-                  <p className={styles.resendHint}>
-                    {challenge.resendsRemaining} resend{challenge.resendsRemaining === 1 ? '' : 's'} remaining
-                  </p>
-                )}
               </div>
             </motion.div>
           )}
