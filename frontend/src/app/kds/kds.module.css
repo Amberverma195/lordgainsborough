@@ -773,9 +773,15 @@
   transition: var(--transition-smooth);
 }
 
-.btnCancel:hover {
+.btnCancel:hover:not(:disabled) {
   border-color: var(--secondary);
   color: var(--primary);
+}
+
+.btnCancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .btnConfirmDanger {
@@ -790,8 +796,14 @@
   transition: var(--transition-smooth);
 }
 
-.btnConfirmDanger:hover {
+.btnConfirmDanger:hover:not(:disabled) {
   background: #bb2d3b;
+}
+
+.btnConfirmDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* --------------------------------------------------------------------------

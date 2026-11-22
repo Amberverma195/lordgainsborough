@@ -99,6 +99,7 @@ export default function KdsPage() {
   const soundEnabledRef = useRef(soundEnabled);
   const modalDateInputRef = useRef<HTMLInputElement>(null);
   const fetchOrdersRef = useRef<() => void>(() => {});
+  const updatingRef = useRef<string | null>(null);
 
   useEffect(() => {
     selectedDateRef.current = selectedDate;
@@ -114,13 +115,14 @@ export default function KdsPage() {
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (updatingRef.current || updatingId) return;
         setOrdersModalOpen(false);
         setConfirmNoShowOrder(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [ordersModalOpen, confirmNoShowOrder]);
+  }, [ordersModalOpen, confirmNoShowOrder, updatingId]);
 
   const openModalDatePicker = () => {
     const input = modalDateInputRef.current;
@@ -268,7 +270,8 @@ export default function KdsPage() {
   );
 
   const updateOrderStatus = async (order: CustomerOrder, status: OrderStatus) => {
-    if (updatingId) return;
+    if (updatingRef.current || updatingId) return;
+    updatingRef.current = order.id;
     setUpdatingId(order.id);
     setNotice('');
     try {
@@ -286,20 +289,22 @@ export default function KdsPage() {
       }
 
       upsertOrder(await res.json());
+      setConfirmNoShowOrder(null);
     } catch {
       setNotice(`Could not update order #${formatOrderId(order.id)}. Please try again.`);
     } finally {
+      updatingRef.current = null;
       setUpdatingId(null);
-      setConfirmNoShowOrder(null);
     }
   };
 
   const adjustReadyTime = async (order: CustomerOrder, delta: number) => {
-    if (updatingId) return;
+    if (updatingRef.current || updatingId) return;
     const current = order.averageReadyMinutes || 25;
     const next = clampReadyMinutes(current + delta);
     if (next === current) return;
 
+    updatingRef.current = order.id;
     setUpdatingId(order.id);
     setNotice('');
     try {
@@ -317,6 +322,7 @@ export default function KdsPage() {
     } catch {
       setNotice(`Could not update ready time for order #${formatOrderId(order.id)}.`);
     } finally {
+      updatingRef.current = null;
       setUpdatingId(null);
     }
   };
@@ -597,8 +603,8 @@ export default function KdsPage() {
                       type="button"
                       className={styles.btnAccept}
                       onClick={() => updateOrderStatus(order, 'ACCEPTED')}
-                      disabled={isBusy}
-                      aria-label="Accept"
+                      disabled={Boolean(updatingId)}
+                      aria-label="Accept order"
                     >
                       <Check size={18} />
                       <span>{isBusy ? 'Accepting…' : 'Accept Order'}</span>
@@ -662,7 +668,7 @@ export default function KdsPage() {
                         type="button"
                         className={styles.prepBtn}
                         onClick={() => adjustReadyTime(order, -5)}
-                        disabled={!canDecrease || isBusy}
+                        disabled={!canDecrease || Boolean(updatingId)}
                         title="Reduce prep time by 5 minutes"
                         aria-label="Decrease ready time by 5 minutes"
                       >
@@ -673,7 +679,7 @@ export default function KdsPage() {
                         type="button"
                         className={styles.prepBtn}
                         onClick={() => adjustReadyTime(order, 5)}
-                        disabled={!canIncrease || isBusy}
+                        disabled={!canIncrease || Boolean(updatingId)}
                         title="Increase prep time by 5 minutes"
                         aria-label="Increase ready time by 5 minutes"
                       >
@@ -714,7 +720,7 @@ export default function KdsPage() {
                       type="button"
                       className={styles.btnMarkReady}
                       onClick={() => updateOrderStatus(order, 'READY')}
-                      disabled={isBusy}
+                      disabled={Boolean(updatingId)}
                       aria-label="Mark ready"
                     >
                       <PackageCheck size={18} />
@@ -809,8 +815,8 @@ export default function KdsPage() {
                       type="button"
                       className={styles.btnPickedUp}
                       onClick={() => updateOrderStatus(order, 'PICKED_UP')}
-                      disabled={isBusy}
-                      aria-label="Picked up"
+                      disabled={Boolean(updatingId)}
+                      aria-label="Mark picked up"
                     >
                       <ShoppingBag size={18} />
                       <span>{isBusy ? 'Saving…' : 'Picked Up'}</span>
@@ -819,8 +825,8 @@ export default function KdsPage() {
                       type="button"
                       className={styles.btnNoShow}
                       onClick={() => setConfirmNoShowOrder(order)}
-                      disabled={isBusy}
-                      aria-label="No show"
+                      disabled={Boolean(updatingId)}
+                      aria-label="Mark customer as no-show"
                       title="Mark customer as no-show"
                     >
                       <UserX size={16} />
@@ -845,7 +851,11 @@ export default function KdsPage() {
       {confirmNoShowOrder && (
         <div
           className={styles.modalBackdrop}
-          onClick={() => setConfirmNoShowOrder(null)}
+          onClick={() => {
+            if (!updatingRef.current && !updatingId) {
+              setConfirmNoShowOrder(null);
+            }
+          }}
           role="presentation"
         >
           <div
@@ -853,21 +863,23 @@ export default function KdsPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="confirm-no-show-title"
+            aria-describedby="confirm-no-show-desc"
             onClick={event => event.stopPropagation()}
           >
             <div className={styles.confirmHeader}>
               <UserX size={24} />
               <h3 id="confirm-no-show-title">Confirm No-Show</h3>
             </div>
-            <p className={styles.confirmBody}>
+            <p id="confirm-no-show-desc" className={styles.confirmBody}>
               Are you sure you want to mark order <strong>#{formatOrderId(confirmNoShowOrder.id)}</strong> as a
-              no-show? This records a customer no-show against {confirmNoShowOrder.customerName} ({confirmNoShowOrder.customerPhone}) and removes the ticket from the active kitchen board.
+              no-show? This records a customer no-show against <strong>{confirmNoShowOrder.customerName}</strong> ({confirmNoShowOrder.customerPhone}) and removes the ticket from the active kitchen board.
             </p>
             <div className={styles.confirmActions}>
               <button
                 type="button"
                 className={styles.btnCancel}
                 onClick={() => setConfirmNoShowOrder(null)}
+                disabled={Boolean(updatingId)}
               >
                 Cancel
               </button>
