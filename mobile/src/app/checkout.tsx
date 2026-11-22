@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 
 import { fetchStoreSettings } from '../api/catalog';
-import { createOrder, fetchOrderHistory } from '../api/orders';
+import { createOrder, fetchOrderHistory, fetchOrderByIdempotencyKey } from '../api/orders';
 import { ApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { writeTrackingToken } from '../auth/secureSession';
@@ -25,6 +25,7 @@ import {
   checkoutFingerprint,
   clearCheckoutIdempotencyKey,
   createSubmitGuard,
+  getCheckoutIdempotencyStorageKey,
   getOrCreateCheckoutIdempotencyKey,
 } from '../checkout/idempotency';
 import {
@@ -107,26 +108,57 @@ export default function CheckoutScreen() {
     reconciliationGuard.current = true;
     setReconciling(true);
     try {
-      // Refresh authenticated history; a failed refresh must not unlock checkout.
-      const orders = await fetchOrderHistory(account.token);
-      if (currentToken.current !== account.token) return;
       const marker = await AsyncStorage.getItem(pendingKey);
       if (marker?.startsWith('confirmed:')) {
         const id = marker.slice('confirmed:'.length);
+        const orders = await fetchOrderHistory(account.token);
         if (!orders.some((order) => order.id === id))
           throw new Error(
             'Your previous order could not be verified. Check your orders or contact the restaurant.',
           );
         await AsyncStorage.removeItem(pendingKey);
-        if ((await AsyncStorage.getItem(pendingKey)) !== null)
-          throw new Error(
-            'Device storage could not clear the previous order marker.',
-          );
+        await clearCheckoutIdempotencyKey(storage, account.email);
+        clear();
         if (currentToken.current !== account.token) return;
         router.replace('/order/' + id);
         return;
       }
-      // History alone cannot prove absence. Preserve the original idempotency key for safe replay.
+
+      // Resolve the original idempotency key from the pending marker or storage.
+      let activeIdempotencyKey: string | null = null;
+      if (marker?.startsWith('pending:')) {
+        activeIdempotencyKey = marker.slice('pending:'.length).trim();
+      } else if (marker === 'pending') {
+        activeIdempotencyKey = await storage.getItem(
+          getCheckoutIdempotencyStorageKey(account.email),
+        );
+      }
+
+      if (activeIdempotencyKey) {
+        // Query backend directly by the original idempotency key before permitting any new submission.
+        const existingOrder = await fetchOrderByIdempotencyKey(
+          activeIdempotencyKey,
+          account.token,
+        );
+        if (currentToken.current !== account.token) return;
+
+        if (existingOrder) {
+          // The previous order succeeded on the server. Recover it without allowing duplicate submission.
+          rememberConfirmedOrder(existingOrder);
+          await AsyncStorage.removeItem(pendingKey);
+          await clearCheckoutIdempotencyKey(storage, account.email);
+          clear();
+          router.replace('/order/' + existingOrder.id + '?confirmed=1');
+          return;
+        }
+      }
+
+      // Refresh authenticated history as a second check; a failed refresh must not unlock checkout.
+      await fetchOrderHistory(account.token);
+      if (currentToken.current !== account.token) return;
+
+      // Backend confirmed that the original idempotency key did not create an order,
+      // and order history was successfully verified. Clear marker safely.
       await AsyncStorage.removeItem(pendingKey);
       if ((await AsyncStorage.getItem(pendingKey)) !== null)
         throw new Error('Device storage could not clear the retry marker.');
@@ -188,7 +220,7 @@ export default function CheckoutScreen() {
         () => Crypto.randomUUID(),
         user.email,
       );
-      await AsyncStorage.setItem(pendingKey, 'pending');
+      await AsyncStorage.setItem(pendingKey, 'pending:' + idempotencyKey);
       const created = await createOrder(user.token, {
         customerName: user.name,
         customerEmail: user.email,

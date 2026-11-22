@@ -38,6 +38,7 @@ jest.mock('../../api/catalog', () => ({
 jest.mock('../../api/orders', () => ({
   createOrder: jest.fn(),
   fetchOrderHistory: jest.fn().mockResolvedValue([]),
+  fetchOrderByIdempotencyKey: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../auth/AuthContext', () => ({
@@ -351,8 +352,9 @@ describe('Checkout uncertain order submission recovery', () => {
     await waitFor(() =>
       expect(screen.getByText("I've checked, try again")).toBeTruthy(),
     );
-    const removal = jest
-      .spyOn(AsyncStorage, 'removeItem')
+    const originalRemoveItem = AsyncStorage.removeItem;
+    AsyncStorage.removeItem = jest
+      .fn()
       .mockRejectedValueOnce(new Error('Storage unavailable'));
     try {
       await fireEvent.press(screen.getByText("I've checked, try again"));
@@ -362,7 +364,82 @@ describe('Checkout uncertain order submission recovery', () => {
       expect(await AsyncStorage.getItem(key)).toBe('pending');
       expect(screen.queryByText('Place pickup order')).toBeNull();
     } finally {
-      removal.mockRestore();
+      AsyncStorage.removeItem = originalRemoveItem;
     }
+  });
+
+  it('reconciles via backend idempotency lookup when order succeeded on server', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    const idempotencyKey = 'saved-key-12345';
+    await AsyncStorage.setItem(key, 'pending:' + idempotencyKey);
+
+    const mockOrder = {
+      id: 'order-recovered-99',
+      pickupDate: '2026-11-21',
+      pickupTime: '18:00',
+      status: 'NEW',
+      items: [
+        {
+          menuItemId: 'fish-chips',
+          name: 'Fish & Chips',
+          quantity: 1,
+          unitPrice: 22,
+          total: 22,
+        },
+      ],
+      subtotal: 22,
+      tax: 2.86,
+      total: 24.86,
+    };
+    (ordersApi.fetchOrderByIdempotencyKey as jest.Mock).mockResolvedValueOnce(
+      mockOrder,
+    );
+
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(
+        '/order/order-recovered-99?confirmed=1',
+      );
+    });
+
+    expect(ordersApi.fetchOrderByIdempotencyKey).toHaveBeenCalledWith(
+      idempotencyKey,
+      user.token,
+    );
+    expect(await AsyncStorage.getItem(key)).toBeNull();
+  });
+
+  it('keeps checkout blocked when backend idempotency lookup fails with network error', async () => {
+    const user = (useAuth as jest.Mock)().user;
+    const key = 'lgb.checkout.pending.' + toAccountNamespace(user.email);
+    const idempotencyKey = 'saved-key-12345';
+    await AsyncStorage.setItem(key, 'pending:' + idempotencyKey);
+
+    (ordersApi.fetchOrderByIdempotencyKey as jest.Mock).mockRejectedValueOnce(
+      new Error('Connection timed out connecting to restaurant'),
+    );
+
+    await renderScreen();
+    await waitFor(() =>
+      expect(screen.getByText("I've checked, try again")).toBeTruthy(),
+    );
+
+    await fireEvent.press(screen.getByText("I've checked, try again"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Connection timed out connecting to restaurant'),
+      ).toBeTruthy();
+    });
+
+    expect(await AsyncStorage.getItem(key)).toBe('pending:' + idempotencyKey);
+    expect(screen.queryByText('Place pickup order')).toBeNull();
   });
 });

@@ -380,6 +380,33 @@ public class OrderController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/by-idempotency/{idempotencyKey}")
+    public ResponseEntity<?> getOrderByIdempotencyKey(
+            @PathVariable String idempotencyKey,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestHeader(value = OrderAccessService.TRACKING_TOKEN_HEADER, required = false) String trackingToken) {
+        if (authHeader == null && (trackingToken == null || trackingToken.isBlank())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                    "code", "AUTHENTICATION_REQUIRED",
+                    "message", "Authentication required to query order by idempotency key."));
+        }
+        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 128) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "code", "INVALID_IDEMPOTENCY_KEY",
+                    "message", "Idempotency key is invalid."));
+        }
+        Optional<CustomerOrder> found = orderStore.findByIdempotencyKey(idempotencyKey.trim())
+                .filter(order -> canAccess(order, authHeader, trackingToken));
+        if (found.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "code", "ORDER_NOT_FOUND",
+                    "message", "No order found for this idempotency key."));
+        }
+        CustomerOrder order = found.get();
+        applyReviewState(order);
+        return ResponseEntity.ok(OrderStatusResponse.from(order));
+    }
+
     @GetMapping("/{id}/socket-ticket")
     public ResponseEntity<Map<String, String>> getSocketTicket(
             @PathVariable String id,

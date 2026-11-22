@@ -88,6 +88,32 @@ export async function fetchOrder(
   return parsed.value;
 }
 
+export async function fetchOrderByIdempotencyKey(
+  idempotencyKey: string,
+  token: string,
+): Promise<CustomerOrderView | null> {
+  try {
+    const response = await apiRequest(
+      `/api/orders/by-idempotency/${encodeURIComponent(idempotencyKey)}`,
+      { token },
+    );
+    const parsed = parseCustomerOrder(response.body);
+    if (!parsed.ok) {
+      throw new ApiError({
+        status: response.status,
+        code: 'MALFORMED_RESPONSE',
+        message: parsed.message,
+      });
+    }
+    return parsed.value;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function fetchOrderSocketTicket(
   id: string,
   token?: string | null,

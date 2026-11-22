@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -629,5 +630,71 @@ class OrderControllerIdempotencyUnitTest {
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 
         verify(orderStore, never()).create(any(), any());
+    }
+
+    @Test
+    @DisplayName("Lookup by idempotency key: returns 200 with order details for owner")
+    void testGetOrderByIdempotencyKey_Success() throws Exception {
+        String idempotencyKey = UUID.randomUUID().toString();
+        CustomerOrder order = sampleOrder();
+        order.setId("order-found-123");
+        order.setIdempotencyKey(idempotencyKey);
+        order.setStatus("CONFIRMED");
+
+        when(orderStore.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.of(order));
+
+        mvc.perform(get("/api/orders/by-idempotency/" + idempotencyKey)
+                        .header("Authorization", "Bearer owner-jwt"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("order-found-123"))
+                .andExpect(jsonPath("$.status").value("CONFIRMED"));
+    }
+
+    @Test
+    @DisplayName("Lookup by idempotency key: returns 404 when no order exists")
+    void testGetOrderByIdempotencyKey_NotFound() throws Exception {
+        String idempotencyKey = UUID.randomUUID().toString();
+        when(orderStore.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
+
+        mvc.perform(get("/api/orders/by-idempotency/" + idempotencyKey)
+                        .header("Authorization", "Bearer owner-jwt"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ORDER_NOT_FOUND"));
+    }
+
+    @Test
+    @DisplayName("Lookup by idempotency key: returns 404 when order belongs to different user")
+    void testGetOrderByIdempotencyKey_ForbiddenUserGets404() throws Exception {
+        String idempotencyKey = UUID.randomUUID().toString();
+        CustomerOrder order = sampleOrder();
+        order.setId("order-found-123");
+        order.setCustomerEmail("jane@example.com");
+        order.setIdempotencyKey(idempotencyKey);
+
+        when(orderStore.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.of(order));
+
+        mvc.perform(get("/api/orders/by-idempotency/" + idempotencyKey)
+                        .header("Authorization", "Bearer attacker-jwt"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ORDER_NOT_FOUND"));
+    }
+
+    @Test
+    @DisplayName("Lookup by idempotency key: returns 401 when unauthenticated")
+    void testGetOrderByIdempotencyKey_Unauthenticated() throws Exception {
+        String idempotencyKey = UUID.randomUUID().toString();
+
+        mvc.perform(get("/api/orders/by-idempotency/" + idempotencyKey))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("Lookup by idempotency key: returns 400 when key is invalid")
+    void testGetOrderByIdempotencyKey_InvalidKey() throws Exception {
+        mvc.perform(get("/api/orders/by-idempotency/" + "a".repeat(129))
+                        .header("Authorization", "Bearer owner-jwt"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_IDEMPOTENCY_KEY"));
     }
 }
