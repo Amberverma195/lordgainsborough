@@ -1,3 +1,4 @@
+/* Shared KDS Kitchen styles (DO NOT ALTER - used by Kitchen Display System) */
 .panel { margin-block: 1rem; padding: 1rem; border: 1px solid #c5cbd3; border-radius: 10px; background: #fff; color: #17202a; }
 .panel summary { cursor: pointer; font-weight: 600; }
 .messages { max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
@@ -6,3 +7,201 @@
 .form textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: .6rem; color: #17202a; background: white; border: 1px solid #8a929c; border-radius: 6px; }
 .form button { padding: .65rem; border: 0; border-radius: 6px; background: #17202a; color: white; cursor: pointer; }
 .form button:disabled { opacity: .55; cursor: default; }
+
+/* Customer-facing Luxury Dark Theme styles */
+.panelCustomer {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.25s ease;
+}
+
+.panelCustomer:hover {
+  border-color: rgba(212, 175, 55, 0.25);
+}
+
+.panelCustomer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.35), transparent);
+  pointer-events: none;
+}
+
+.summaryCustomer {
+  cursor: pointer;
+  font-family: 'Outfit', serif;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  outline: none;
+  transition: color 0.2s ease;
+}
+
+.summaryCustomer:hover {
+  color: var(--secondary);
+}
+
+.summaryCustomer:focus-visible {
+  outline: 2px solid var(--secondary);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.messagesCustomer {
+  max-height: 18rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  margin-top: 1rem;
+  padding-right: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.messageStaff {
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 0.85rem 1.1rem;
+  border-radius: 14px 14px 14px 2px;
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+}
+
+.messageStaff .msgSender {
+  color: var(--secondary);
+  font-weight: 700;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.messageCustomer {
+  align-self: flex-end;
+  max-width: 90%;
+  padding: 0.85rem 1.1rem;
+  border-radius: 14px 14px 2px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--glass-border);
+}
+
+.messageCustomer .msgSender {
+  color: var(--text-light);
+  font-weight: 700;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.messageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.msgTime {
+  font-size: 0.75rem;
+  color: var(--text-light);
+}
+
+.msgBody {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.noMessages {
+  color: var(--text-light);
+  font-size: 0.9rem;
+  font-style: italic;
+  padding: 0.75rem 0;
+  text-align: center;
+}
+
+.formCustomer {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--glass-border);
+}
+
+.formLabel {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--secondary);
+}
+
+.textareaCustomer {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.85rem 1rem;
+  background: rgba(10, 10, 10, 0.8);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  resize: vertical;
+  transition: var(--transition-smooth);
+}
+
+.textareaCustomer:focus {
+  outline: none;
+  border-color: var(--secondary);
+  box-shadow: 0 0 16px rgba(212, 175, 55, 0.15);
+}
+
+.buttonCustomer {
+  padding: 0.75rem 1.4rem;
+  border: 1px solid var(--secondary);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #d4af37 0%, #aa8924 100%);
+  color: #080808;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  transition: var(--transition-smooth);
+}
+
+.buttonCustomer:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.35);
+}
+
+.buttonCustomer:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.errorAlert {
+  margin: 0;
+  color: #ff6b6b;
+  font-size: 0.85rem;
+}

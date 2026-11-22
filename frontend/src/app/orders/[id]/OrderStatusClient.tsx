@@ -1,12 +1,28 @@
 'use client';
 
 import { apiFetch } from '@/lib/apiFetch';
-
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { io } from 'socket.io-client';
 import { orderSocketAuth } from '@/lib/orderSocketAuth';
-import { ChevronDown, Clock3, LifeBuoy, NotebookPen, Phone, RotateCcw, Star, X } from 'lucide-react';
+import {
+  AlertCircle,
+  Calendar,
+  Check,
+  ChevronDown,
+  Clock3,
+  Copy,
+  LifeBuoy,
+  MapPin,
+  NotebookPen,
+  Phone,
+  ReceiptText,
+  RotateCcw,
+  ShoppingBag,
+  Star,
+  X,
+} from 'lucide-react';
 import { CartItem, useCart } from '@/context/CartContext';
 import {
   API_BASE,
@@ -21,16 +37,25 @@ import {
   orderStatusLabel,
 } from '@/lib/orders';
 import { RESTAURANT_PHONE_DISPLAY, RESTAURANT_PHONE_TEL } from '@/lib/phone';
+import { getAuthHeadersOnly } from '@/lib/auth';
+import OrderMessages from '@/components/OrderMessages';
+import styles from './order-status.module.css';
 
 function statusBadgeClass(status: CustomerOrder['status'], styleMap: Record<string, string>): string {
   if (status === 'NEW') return styleMap.statusNew;
   if (status === 'ACCEPTED') return styleMap.statusAccepted;
   if (status === 'READY') return styleMap.statusReady;
+  if (status === 'NO_SHOW') return styleMap.statusNoShow;
   return styleMap.statusPickedUp;
 }
-import { getAuthHeadersOnly } from '@/lib/auth';
-import styles from './order-status.module.css';
-import OrderMessages from '@/components/OrderMessages';
+
+const STATUS_DESCRIPTIONS: Record<CustomerOrder['status'], string> = {
+  NEW: 'Your order has been received and is waiting for kitchen confirmation.',
+  ACCEPTED: 'The kitchen is preparing your dishes to perfection.',
+  READY: 'Your order is freshly prepared and ready for pickup at the counter!',
+  PICKED_UP: 'Order completed. Thank you for dining with Lord Gainsborough!',
+  NO_SHOW: 'This order was marked as not picked up. If you have questions, please reach out to us.',
+};
 
 function buildOrderAccessHeaders(orderId: string): HeadersInit {
   const headers: Record<string, string> = {};
@@ -106,6 +131,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const applyOrder = useCallback((nextOrder: CustomerOrder) => {
     if (nextOrder.id === orderId) {
@@ -156,8 +182,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     });
 
     const handleConnect = () => {
-      // Re-fetch after every connection so status changes missed while offline
-      // are reflected immediately without a browser refresh.
       void loadOrder();
     };
 
@@ -183,6 +207,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
       { label: 'Picked up', value: order.pickedUpAt },
     ];
   }, [order]);
+
   const hasReviewInput = useMemo(
     () => Object.values(reviewItems).some(item => item.rating > 0 || item.description.trim().length > 0),
     [reviewItems],
@@ -258,11 +283,27 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
     }
   };
 
+  const handleCopyId = () => {
+    if (!order) return;
+    const formatted = formatOrderId(order.id);
+    void navigator.clipboard.writeText(formatted);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   if (missing) notFound();
+
   if (loading) {
     return (
       <main className={styles.container}>
-        <div className={styles.loading}>Loading order...</div>
+        <div className={styles.loadingContainer}>
+          <div className={styles.skeletonHero} />
+          <div className={styles.skeletonGrid}>
+            <div className={styles.skeletonCard} />
+            <div className={styles.skeletonCard} />
+          </div>
+          <div className={styles.loadingText}>Loading order details...</div>
+        </div>
       </main>
     );
   }
@@ -270,7 +311,11 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   if (!order) {
     return (
       <main className={styles.container}>
-        <div className={styles.loading}>{notice || 'Order not found.'}</div>
+        <div className={styles.errorCard}>
+          <h2>Order Not Found</h2>
+          <p>{notice || 'The requested order could not be found or you do not have permission to view it.'}</p>
+          <Link href="/" className={styles.backHomeBtn}>Return to Home</Link>
+        </div>
       </main>
     );
   }
@@ -286,139 +331,341 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
   const isPickedUp = order.status === 'PICKED_UP';
   const pickedUpTimeLabel = formatPickedUpTimeLabel(order.pickedUpAt);
 
+  const progressSteps = [
+    { title: 'Order Placed', time: order.createdAt },
+    { title: 'In Kitchen', time: order.acceptedAt },
+    { title: 'Ready for Pickup', time: order.readyAt },
+    { title: 'Picked Up', time: order.pickedUpAt },
+  ];
+
   return (
     <main className={styles.container}>
-      <header className={styles.header}>
-        <p className={styles.eyebrow}>Order Status</p>
-        <h1>#{formatOrderId(order.id)}</h1>
-        <div className={styles.orderMeta}>
-          {isPickedUp ? (
-            <>
-              <span>Picked up</span>
-              <span>{formatPickedUpDateLabel(order.pickupDate)}</span>
-              {pickedUpTimeLabel && <span>{pickedUpTimeLabel}</span>}
-            </>
-          ) : (
-            <>
-              <span>{formatPickupDateLabel(order.pickupDate)}</span>
-              <span>{formatPickupTimeLabel(order.pickupTime)}</span>
-              {isAsap && <span>About {order.averageReadyMinutes} min</span>}
-            </>
-          )}
+      {notice && (
+        <div className={styles.noticeBanner} role="alert">
+          <AlertCircle size={18} />
+          <span>{notice}</span>
         </div>
-        {!isPickedUp && (
-          <div className={styles.statusRow}>
-            <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
-              {orderStatusLabel(order.status)}
-            </span>
-          </div>
-        )}
-      </header>
-
-      <section className={styles.actionBar}>
-        <button type="button" onClick={() => setHelpOpen(true)}>
-          <LifeBuoy size={18} /> Help
-        </button>
-        {order.status === 'PICKED_UP' && (
-          <>
-            <button type="button" onClick={reorderItems}>
-              <RotateCcw size={18} /> Reorder
-            </button>
-            {!order.reviewed && (
-              <button type="button" onClick={() => initializeReview(order)}>
-                <Star size={18} /> Review items
-              </button>
-            )}
-          </>
-        )}
-      </section>
-
-      {notice && <p className={styles.notice}>{notice}</p>}
-
-      {order.specialInstructions && order.specialInstructions.trim().length > 0 && (
-        <section className={styles.specialPanel}>
-          <h2><NotebookPen size={18} /> Special Instructions</h2>
-          <p>{order.specialInstructions}</p>
-        </section>
       )}
 
-      <section className={styles.summary}>
-        <h2>Order Summary</h2>
-        <ul className={styles.itemList}>
-          {order.items.map((item, index) => (
-            <li key={`${item.menuItemId}-${index}`}>
-              <div className={styles.itemDetails}>
-                <span>{item.quantity}x {item.name}</span>
-                <small>{formatMoney(item.unitPrice)} each</small>
-              </div>
-              <strong>{formatMoney(item.total)}</strong>
-            </li>
-          ))}
-        </ul>
-        <div className={styles.totals}>
-          <div><span>Subtotal</span><strong>{formatMoney(order.subtotal)}</strong></div>
-          <div><span>Tax</span><strong>{formatMoney(order.tax)}</strong></div>
-          <div className={styles.grandTotal}><span>Total</span><strong>{formatMoney(order.total)}</strong></div>
+      {/* Hero Section */}
+      <section className={styles.heroCard} aria-label="Order Status Header">
+        <div className={styles.heroTopRow}>
+          <div className={styles.eyebrowWrap}>
+            <span
+              className={order.status === 'READY' ? styles.liveDotReady : styles.liveDot}
+              aria-hidden
+            />
+            <p className={styles.eyebrow}>Order Tracking</p>
+          </div>
+          <span className={`${styles.statusBadge} ${statusBadgeClass(order.status, styles)}`}>
+            {orderStatusLabel(order.status)}
+          </span>
+        </div>
+
+        <div className={styles.heroTitleRow}>
+          <h1 className={styles.orderHeading}>#{formatOrderId(order.id)}</h1>
+          <button
+            type="button"
+            className={styles.copyIdBtn}
+            onClick={handleCopyId}
+            aria-label="Copy order ID"
+            title="Copy order ID"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+
+        <p className={styles.heroDescription}>
+          {STATUS_DESCRIPTIONS[order.status]}
+        </p>
+
+        <div className={styles.heroMetaPills}>
+          <div className={styles.metaPill}>
+            <Calendar size={15} />
+            <span>{isPickedUp ? formatPickedUpDateLabel(order.pickupDate) : formatPickupDateLabel(order.pickupDate)}</span>
+          </div>
+          <div className={styles.metaPill}>
+            <Clock3 size={15} />
+            <span>{isPickedUp ? (pickedUpTimeLabel || 'Completed') : formatPickupTimeLabel(order.pickupTime)}</span>
+          </div>
+          {isAsap && !isPickedUp && (
+            <div className={`${styles.metaPill} ${styles.metaPillHighlight}`}>
+              <Clock3 size={15} />
+              <span>Estimated {order.averageReadyMinutes} mins</span>
+            </div>
+          )}
         </div>
       </section>
 
-      <section className={styles.timelinePanel} aria-live="polite">
-        <button
-          type="button"
-          className={styles.timelineToggle}
-          onClick={() => setTimelineOpen(open => !open)}
-          aria-expanded={timelineOpen}
-        >
-          <span><Clock3 size={18} /> Order updates</span>
-          <ChevronDown className={timelineOpen ? styles.chevronOpen : ''} size={18} />
-        </button>
-        {timelineOpen && (
-          <div className={styles.timeline}>
-            {timeline.map((step, index) => (
-              <div
-                key={step.label}
-                className={[
-                  styles.timelineStep,
-                  index <= currentStepIndex ? styles.timelineStepComplete : '',
-                  index === currentStepIndex ? styles.timelineStepActive : '',
-                ].filter(Boolean).join(' ')}
-              >
-                <span className={styles.timelineMarker} aria-hidden />
-                <div>
-                  <strong>{step.label}</strong>
-                  <span>
-                    {step.value
-                      ? formatTimestamp(step.value)
-                      : index === currentStepIndex
-                        ? 'In progress'
-                        : 'Waiting'}
-                  </span>
-                </div>
-              </div>
-            ))}
+      {/* 2-Column Responsive Layout */}
+      <div className={styles.layoutGrid}>
+        {/* Main Column */}
+        <div className={styles.mainColumn}>
+          {/* Tracker Card */}
+          <section className={styles.card} aria-label="Order Progress">
+            <div className={styles.cardHeader}>
+              <h2><Clock3 size={18} /> Order Progress</h2>
+              <span className={styles.headerBadge}>{orderStatusLabel(order.status)}</span>
+            </div>
+
             {order.status === 'NO_SHOW' && (
-              <div className={`${styles.timelineStep} ${styles.timelineStepNoShow}`}>
-                <span className={styles.timelineMarker} aria-hidden />
-                <div>
-                  <strong>Marked as no-show</strong>
-                  <span>{formatTimestamp(order.noShowAt)}</span>
-                </div>
+              <div className={styles.noShowAlert}>
+                <h3>Order Marked as No-Show</h3>
+                <p>
+                  This order was marked as no-show at {formatTimestamp(order.noShowAt)}. If you believe this is an error or need your order prepared, please contact our team.
+                </p>
               </div>
             )}
-          </div>
-        )}
-      </section>
 
-      <OrderMessages orderId={orderId} messages={order.messages || []} onSent={() => { void loadOrder(); }} />
+            <div className={styles.trackerFlow}>
+              {progressSteps.map((step, idx) => {
+                const isCompleted = isPickedUp ? true : idx < currentStepIndex;
+                const isActive = !isPickedUp && idx === currentStepIndex && order.status !== 'NO_SHOW';
+                const isFirst = idx === 0;
+                const isLast = idx === progressSteps.length - 1;
+
+                return (
+                  <div key={step.title} className={styles.trackerStep}>
+                    <div className={styles.trackerMarkerWrap}>
+                      {!isFirst && (
+                        <span
+                          className={`${styles.trackerLineLeft} ${idx <= currentStepIndex || isPickedUp ? styles.lineDone : ''}`}
+                          aria-hidden
+                        />
+                      )}
+                      {!isLast && (
+                        <span
+                          className={`${styles.trackerLineRight} ${idx < currentStepIndex || isPickedUp ? styles.lineDone : ''}`}
+                          aria-hidden
+                        />
+                      )}
+                      <span
+                        className={[
+                          styles.trackerMarker,
+                          isCompleted ? styles.markerCompleted : '',
+                          isActive ? styles.markerActive : '',
+                        ].filter(Boolean).join(' ')}
+                        aria-hidden
+                      >
+                        {isCompleted ? <Check size={18} /> : idx + 1}
+                      </span>
+                    </div>
+                    <div>
+                      <div
+                        className={[
+                          styles.stepTitle,
+                          isActive ? styles.stepTitleActive : '',
+                          isCompleted ? styles.stepTitleDone : '',
+                        ].filter(Boolean).join(' ')}
+                      >
+                        {step.title}
+                      </div>
+                      <div className={`${styles.stepTime} ${isActive ? styles.stepTimeActive : ''}`}>
+                        {step.time ? formatTimestamp(step.time) : (isActive ? 'In progress' : 'Waiting')}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              className={styles.timelineToggle}
+              onClick={() => setTimelineOpen(open => !open)}
+              aria-expanded={timelineOpen}
+            >
+              <span><Clock3 size={16} /> Activity History</span>
+              <ChevronDown className={timelineOpen ? styles.chevronOpen : ''} size={16} />
+            </button>
+            {timelineOpen && (
+              <div className={styles.timelineDetails}>
+                {timeline.map(step => (
+                  <div key={step.label} className={styles.timelineDetailRow}>
+                    <strong>{step.label}</strong>
+                    <span>{step.value ? formatTimestamp(step.value) : '—'}</span>
+                  </div>
+                ))}
+                {order.status === 'NO_SHOW' && (
+                  <div className={styles.timelineDetailRow}>
+                    <strong style={{ color: '#ff8585' }}>Marked as no-show</strong>
+                    <span>{formatTimestamp(order.noShowAt)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Receipt / Order Summary Card */}
+          <section className={styles.card} aria-label="Order Summary">
+            <div className={styles.cardHeader}>
+              <h2><ReceiptText size={18} /> Order Summary</h2>
+              <span className={styles.headerBadge}>
+                {order.items.reduce((acc, it) => acc + it.quantity, 0)} {order.items.reduce((acc, it) => acc + it.quantity, 0) === 1 ? 'item' : 'items'}
+              </span>
+            </div>
+
+            <ul className={styles.itemsList}>
+              {order.items.map((item, index) => (
+                <li key={`${item.menuItemId}-${index}`} className={styles.itemRow}>
+                  <div className={styles.itemMain}>
+                    <span className={styles.itemQty}>{item.quantity}x</span>
+                    <div className={styles.itemMeta}>
+                      <span className={styles.itemName}>{item.name}</span>
+                      <span className={styles.itemUnitPrice}>{formatMoney(item.unitPrice)} each</span>
+                    </div>
+                  </div>
+                  <strong className={styles.itemPrice}>{formatMoney(item.total)}</strong>
+                </li>
+              ))}
+            </ul>
+
+            <div className={styles.totalsDivider} />
+
+            <div className={styles.totalsSection}>
+              <div className={styles.totalsRow}>
+                <span>Subtotal</span>
+                <strong>{formatMoney(order.subtotal)}</strong>
+              </div>
+              <div className={styles.totalsRow}>
+                <span>Tax</span>
+                <strong>{formatMoney(order.tax)}</strong>
+              </div>
+              <div className={styles.grandTotalRow}>
+                <span>Total Paid</span>
+                <strong>{formatMoney(order.total)}</strong>
+              </div>
+            </div>
+          </section>
+
+          {/* Special Instructions */}
+          {order.specialInstructions && order.specialInstructions.trim().length > 0 && (
+            <section className={styles.specialCard} aria-label="Special Instructions">
+              <h2><NotebookPen size={18} /> Special Instructions</h2>
+              <p>{order.specialInstructions}</p>
+            </section>
+          )}
+
+          {/* Kitchen Messages */}
+          <OrderMessages
+            orderId={orderId}
+            messages={order.messages || []}
+            onSent={() => { void loadOrder(); }}
+          />
+        </div>
+
+        {/* Secondary / Sidebar Column */}
+        <div className={styles.sideColumn}>
+          {/* Pickup Details Card */}
+          <section className={styles.card} aria-label="Pickup Details">
+            <div className={styles.cardHeader}>
+              <h2><ShoppingBag size={18} /> Pickup Details</h2>
+            </div>
+
+            <div className={styles.sidebarDetailsList}>
+              <div className={styles.sidebarDetailItem}>
+                <div className={styles.sidebarIconWrap}>
+                  <Calendar size={18} />
+                </div>
+                <div className={styles.sidebarDetailText}>
+                  <span>Pickup Date</span>
+                  <strong>{isPickedUp ? formatPickedUpDateLabel(order.pickupDate) : formatPickupDateLabel(order.pickupDate)}</strong>
+                </div>
+              </div>
+
+              <div className={styles.sidebarDetailItem}>
+                <div className={styles.sidebarIconWrap}>
+                  <Clock3 size={18} />
+                </div>
+                <div className={styles.sidebarDetailText}>
+                  <span>Pickup Time</span>
+                  <strong>{isPickedUp ? (pickedUpTimeLabel || 'Completed') : formatPickupTimeLabel(order.pickupTime)}</strong>
+                  {isAsap && !isPickedUp && <p>Estimated prep time ~{order.averageReadyMinutes} mins</p>}
+                </div>
+              </div>
+
+              <div className={styles.sidebarDetailItem}>
+                <div className={styles.sidebarIconWrap}>
+                  <MapPin size={18} />
+                </div>
+                <div className={styles.sidebarDetailText}>
+                  <span>Location & Instructions</span>
+                  <strong>Lord Gainsborough Restaurant</strong>
+                  <p>1800 Hyde Park Rd, London, ON N6H 0K1</p>
+                  <p style={{ marginTop: '0.45rem', color: 'var(--secondary)' }}>
+                    Pick up at counter. Show order number <strong>#{formatOrderId(order.id)}</strong> to staff.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Actions & Support Card */}
+          <section className={styles.card} aria-label="Order Actions">
+            <div className={styles.cardHeader}>
+              <h2><LifeBuoy size={18} /> Actions & Support</h2>
+            </div>
+
+            <div className={styles.actionList}>
+              {order.status === 'PICKED_UP' && (
+                <>
+                  <button
+                    type="button"
+                    className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
+                    onClick={reorderItems}
+                  >
+                    <RotateCcw size={17} /> Reorder These Items
+                  </button>
+                  {!order.reviewed ? (
+                    <button
+                      type="button"
+                      className={styles.actionBtn}
+                      onClick={() => initializeReview(order)}
+                    >
+                      <Star size={17} /> Leave a Review
+                    </button>
+                  ) : (
+                    <div className={styles.reviewedBadge}>
+                      <Star size={16} fill="currentColor" /> You reviewed this order
+                    </div>
+                  )}
+                </>
+              )}
+
+              <button
+                type="button"
+                className={styles.actionBtn}
+                onClick={() => setHelpOpen(true)}
+              >
+                <LifeBuoy size={17} /> Need Help with Order?
+              </button>
+            </div>
+
+            <div className={styles.callBox}>
+              <a className={styles.callLink} href={`tel:${RESTAURANT_PHONE_TEL}`}>
+                <Phone size={16} /> Call {RESTAURANT_PHONE_DISPLAY}
+              </a>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {/* Review Modal */}
       {reviewOpen && (
         <div className={styles.modalBackdrop} onClick={() => setReviewOpen(false)}>
           <form className={styles.modal} onSubmit={submitReview} onClick={event => event.stopPropagation()}>
             <div className={styles.modalHeader}>
               <div>
-                <p className={styles.eyebrow}>Review</p>
+                <p className={styles.modalEyebrow}>Your Feedback</p>
                 <h2>Review Items</h2>
               </div>
-              <button type="button" className={styles.closeButton} onClick={() => setReviewOpen(false)} aria-label="Close review">
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={() => setReviewOpen(false)}
+                aria-label="Close review"
+              >
                 <X size={18} />
               </button>
             </div>
@@ -426,7 +673,7 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
             <div className={styles.reviewList}>
               {order.items.map(item => (
                 <div className={styles.reviewItem} key={item.menuItemId}>
-                  <div>
+                  <div className={styles.reviewItemTitle}>
                     <strong>{item.name}</strong>
                     <span>{item.quantity} ordered</span>
                   </div>
@@ -452,35 +699,47 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
                       ...prev,
                       [item.menuItemId]: { rating: prev[item.menuItemId]?.rating || 0, description: event.target.value },
                     }))}
-                    placeholder="Optional description"
+                    placeholder="What did you think of this dish? (Optional)"
                     rows={2}
                   />
                 </div>
               ))}
             </div>
 
-            <button className={styles.modalSubmit} type="submit" disabled={submittingReview || !hasReviewInput}>
+            <button
+              className={styles.modalSubmit}
+              type="submit"
+              disabled={submittingReview || !hasReviewInput}
+            >
               {submittingReview ? 'Publishing...' : 'Publish review'}
             </button>
           </form>
         </div>
       )}
 
+      {/* Help Modal */}
       {helpOpen && (
         <div className={styles.modalBackdrop} onClick={() => setHelpOpen(false)}>
           <div className={styles.modal} onClick={event => event.stopPropagation()}>
             <div className={styles.modalHeader}>
               <div>
-                <p className={styles.eyebrow}>Need a hand?</p>
+                <p className={styles.modalEyebrow}>Need assistance?</p>
                 <h2>Contact the Restaurant</h2>
               </div>
-              <button type="button" className={styles.closeButton} onClick={() => setHelpOpen(false)} aria-label="Close help">
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={() => setHelpOpen(false)}
+                aria-label="Close help"
+              >
                 <X size={18} />
               </button>
             </div>
 
             <div className={styles.helpBody}>
-              <p>Questions about your order? Give us a call and reference order <strong>#{formatOrderId(order.id)}</strong>.</p>
+              <p>
+                Have questions or need modifications for order <strong>#{formatOrderId(order.id)}</strong>? Give our team a call directly and we will be delighted to assist you.
+              </p>
               <a className={styles.callButton} href={`tel:${RESTAURANT_PHONE_TEL}`}>
                 <Phone size={18} /> Call {RESTAURANT_PHONE_DISPLAY}
               </a>
@@ -488,7 +747,6 @@ export default function OrderStatusClient({ orderId }: OrderStatusClientProps) {
           </div>
         </div>
       )}
-
     </main>
   );
 }
