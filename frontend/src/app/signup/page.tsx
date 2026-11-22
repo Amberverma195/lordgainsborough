@@ -31,6 +31,7 @@ import {
   cooldownSecondsFromServerClocks,
   fetchSignupOtpStatus,
   fetchWithIdempotentRetry,
+  hasAuthoritativeCooldownTiming,
   isChallengeExpiredState,
   isResendExhausted,
   loadPendingSignupCredentials,
@@ -99,7 +100,6 @@ export default function SignupPage() {
     () => initialStored.chal
   );
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [hasResent, setHasResent] = useState(false);
 
   // Common UI states
   const [loading, setLoading] = useState(false);
@@ -250,6 +250,13 @@ export default function SignupPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, [pendingSignup, step, syncChallengeStatus]);
 
+  // If in verification step and challenge lacks authoritative timing, query backend for status
+  useEffect(() => {
+    if (step === 'signup-verify' && pendingSignup && !hasAuthoritativeCooldownTiming(challenge) && !loading && !resending) {
+      void syncChallengeStatus(pendingSignup);
+    }
+  }, [step, pendingSignup, challenge, loading, resending, syncChallengeStatus]);
+
   // Countdown timer tick
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -367,14 +374,7 @@ export default function SignupPage() {
       if (res.ok || res.status === 202) {
         const body = await readSignupOtpResponse(res);
         clearAllSignupSession();
-        const initialChallengeBody = {
-          ...body,
-          nextResendAt:
-            body.nextResendAt && Date.parse(body.nextResendAt) <= Date.parse(body.serverTime || '')
-              ? body.nextResendAt
-              : body.serverTime,
-        };
-        const challengeState = applyBackendChallengeState(existingChallenge, initialChallengeBody, cleanEmail);
+        const challengeState = applyBackendChallengeState(existingChallenge, body, cleanEmail);
         saveSignupOtpChallengeState(challengeState);
         const credentials: PendingSignupCredentials = {
           name: formData.name.trim(),
@@ -441,13 +441,18 @@ export default function SignupPage() {
 
   // --- Step 2: Resend OTP Code ---
   const handleResend = async () => {
-    if (!pendingSignup || resending || loading) return;
-    if (activeCooldownSeconds > 0 || isResendExhausted(challenge) || isChallengeExpiredState(challenge, nowTick)) {
+    if (!pendingSignup || resending || loading || requestInFlight.current) return;
+    if (
+      !hasReliableTiming ||
+      activeCooldownSeconds > 0 ||
+      isResendExhausted(challenge) ||
+      isChallengeExpiredState(challenge, nowTick)
+    ) {
       return;
     }
 
+    requestInFlight.current = true;
     syncSeqRef.current++;
-    setHasResent(true);
     setResending(true);
     setError('');
     setInfoMessage('');
@@ -477,6 +482,14 @@ export default function SignupPage() {
 
       const body = await readSignupOtpResponse(res);
       syncSeqRef.current++;
+
+      // HTTP 429 cooldown extraction: if body lacks nextResendAt, check Retry-After header
+      const retryAfter = Number(res.headers.get('Retry-After'));
+      if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0 && !body.nextResendAt) {
+        const baseServerTime = body.serverTime || new Date().toISOString();
+        body.nextResendAt = new Date(Date.parse(baseServerTime) + retryAfter * 1000).toISOString();
+      }
+
       applyChallengeFromBackend(body, pendingSignup.email);
 
       if (res.status === 202 || res.status === 200) {
@@ -501,6 +514,7 @@ export default function SignupPage() {
     } catch {
       setError('Unable to connect to the server. Please try again.');
     } finally {
+      requestInFlight.current = false;
       setResending(false);
     }
   };
@@ -623,20 +637,26 @@ export default function SignupPage() {
   const challengeExpired = isChallengeExpiredState(challenge, nowTick);
   const canVerify = otp.every(Boolean);
 
-  const cooldownSeconds = challenge
+  const hasReliableTiming = hasAuthoritativeCooldownTiming(challenge);
+
+  const cooldownSeconds = hasReliableTiming
     ? cooldownSecondsFromServerClocks(
-        challenge.serverTime,
-        challenge.nextResendAt,
+        challenge!.serverTime,
+        challenge!.nextResendAt,
         nowTick,
-        challenge.receivedAtMs
+        challenge!.receivedAtMs
       )
     : 0;
 
-  const resendConsumed = challenge?.resendsRemaining !== undefined && challenge.resendsRemaining < 5;
-  const activeCooldownSeconds = hasResent || resendConsumed ? cooldownSeconds : 0;
+  const activeCooldownSeconds = cooldownSeconds;
 
   const resendDisabled =
-    resending || loading || activeCooldownSeconds > 0 || exhausted || challengeExpired;
+    resending ||
+    loading ||
+    !hasReliableTiming ||
+    activeCooldownSeconds > 0 ||
+    exhausted ||
+    challengeExpired;
 
   let resendLabel = 'Resend Code';
   if (resending) {

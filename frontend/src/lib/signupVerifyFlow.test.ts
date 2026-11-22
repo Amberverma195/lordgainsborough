@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  cooldownSecondsFromServerClocks,
   fetchSignupOtpStatus,
+  hasAuthoritativeCooldownTiming,
+  isChallengeExpiredState,
+  isResendExhausted,
   loadPendingSignupCredentials,
   loadSignupOtpChallengeState,
   savePendingSignupCredentials,
   saveSignupOtpChallengeState,
+  SignupOtpChallengeState,
 } from './signupOtp';
 import { suggestEmailDomainTypo } from './email';
 
@@ -197,25 +202,95 @@ describe('Signup and Verify Flow UX & Mechanics', () => {
       expect(getResendLabel(0, false, false, true)).toBe('Resend limit reached');
     });
 
-    it('does not start resend timer right away on initial verify page load and starts only after resend', () => {
-      const computeActiveCooldown = (
-        rawCooldown: number,
-        hasResent: boolean,
-        resendsRemaining: number | undefined
+    it('enforces resend cooldown immediately upon initial OTP delivery without suppression', () => {
+      const getResendState = (
+        challenge: SignupOtpChallengeState | null,
+        nowTick: number,
+        loading = false,
+        resending = false,
+        requestInFlight = false
       ) => {
-        const resendConsumed = resendsRemaining !== undefined && resendsRemaining < 5;
-        return (hasResent || resendConsumed) ? rawCooldown : 0;
+        const hasReliableTiming = hasAuthoritativeCooldownTiming(challenge);
+        const cooldownSeconds = hasReliableTiming
+          ? cooldownSecondsFromServerClocks(
+              challenge!.serverTime,
+              challenge!.nextResendAt,
+              nowTick,
+              challenge!.receivedAtMs
+            )
+          : 0;
+        const activeCooldownSeconds = cooldownSeconds;
+        const exhausted = isResendExhausted(challenge);
+        const challengeExpired = isChallengeExpiredState(challenge, nowTick);
+        const resendDisabled =
+          resending ||
+          loading ||
+          requestInFlight ||
+          !hasReliableTiming ||
+          activeCooldownSeconds > 0 ||
+          exhausted ||
+          challengeExpired;
+
+        let resendLabel = 'Resend Code';
+        if (resending) {
+          resendLabel = 'Sending...';
+        } else if (challengeExpired) {
+          resendLabel = 'Session expired';
+        } else if (exhausted) {
+          resendLabel = 'Resend limit reached';
+        } else if (activeCooldownSeconds > 0) {
+          resendLabel = `Resend available in ${activeCooldownSeconds}s`;
+        }
+
+        return { activeCooldownSeconds, resendDisabled, resendLabel };
       };
 
-      // 1. Initial page load (no resend clicked yet, 5 resends remaining)
-      expect(computeActiveCooldown(30, false, 5)).toBe(0);
-      expect(computeActiveCooldown(30, false, undefined)).toBe(0);
+      const now = 1720872000000;
+      const initialChallenge: SignupOtpChallengeState = {
+        email: 'user@example.test',
+        challengeId: 'c-init',
+        serverTime: new Date(now).toISOString(),
+        nextResendAt: new Date(now + 60000).toISOString(),
+        receivedAtMs: now,
+        resendsRemaining: 5,
+      };
 
-      // 2. User clicks resend (hasResent becomes true)
-      expect(computeActiveCooldown(30, true, 5)).toBe(30);
+      // 1. Initial visit immediately after signup: 60s cooldown enforced, button disabled
+      const state0 = getResendState(initialChallenge, now);
+      expect(state0.activeCooldownSeconds).toBe(60);
+      expect(state0.resendDisabled).toBe(true);
+      expect(state0.resendLabel).toBe('Resend available in 60s');
 
-      // 3. Resend consumed from prior request / refreshed page (4 resends remaining)
-      expect(computeActiveCooldown(25, false, 4)).toBe(25);
+      // 2. 1 second elapsed: 59s
+      const state1 = getResendState(initialChallenge, now + 1000);
+      expect(state1.activeCooldownSeconds).toBe(59);
+      expect(state1.resendDisabled).toBe(true);
+      expect(state1.resendLabel).toBe('Resend available in 59s');
+
+      // 3. 59 seconds elapsed: 1s
+      const state59 = getResendState(initialChallenge, now + 59000);
+      expect(state59.activeCooldownSeconds).toBe(1);
+      expect(state59.resendDisabled).toBe(true);
+      expect(state59.resendLabel).toBe('Resend available in 1s');
+
+      // 4. Cooldown expired (60s elapsed): enabled with 'Resend Code'
+      const state60 = getResendState(initialChallenge, now + 60000);
+      expect(state60.activeCooldownSeconds).toBe(0);
+      expect(state60.resendDisabled).toBe(false);
+      expect(state60.resendLabel).toBe('Resend Code');
+
+      // 5. Unreliable/missing timing information: kept safely disabled without inventing countdown
+      const invalidTimingChallenge: SignupOtpChallengeState = {
+        email: 'user@example.test',
+        challengeId: 'c-init',
+        serverTime: undefined,
+        nextResendAt: undefined,
+        resendsRemaining: 5,
+      };
+      const unreliablestate = getResendState(invalidTimingChallenge, now);
+      expect(unreliablestate.activeCooldownSeconds).toBe(0);
+      expect(unreliablestate.resendDisabled).toBe(true);
+      expect(unreliablestate.resendLabel).toBe('Resend Code');
     });
 
     it('blocks resend attempts while cooldown is active', async () => {

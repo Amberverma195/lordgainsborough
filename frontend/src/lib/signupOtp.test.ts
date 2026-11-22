@@ -4,6 +4,7 @@ import {
   cooldownSecondsFromServerClocks,
   fetchWithIdempotentRetry,
   fetchSignupOtpStatus,
+  hasAuthoritativeCooldownTiming,
   isChallengeExpiredState,
   isResendExhausted,
   loadPendingSignupCredentials,
@@ -369,5 +370,77 @@ describe('signupOtp challenge state', () => {
     // Must NOT inherit old attemptToken
     expect(result.challengeId).toBe('c-new-challenge');
     expect(result.attemptToken).toBeUndefined();
+  });
+
+  describe('Authoritative Cooldown Timing & Parity', () => {
+    it('hasAuthoritativeCooldownTiming returns true for valid timestamps and false for missing/invalid', () => {
+      expect(hasAuthoritativeCooldownTiming(null)).toBe(false);
+      expect(hasAuthoritativeCooldownTiming({ email: 'a@b.com' })).toBe(false);
+      expect(hasAuthoritativeCooldownTiming({
+        email: 'a@b.com',
+        serverTime: '2026-11-21T12:00:00Z',
+      })).toBe(false);
+      expect(hasAuthoritativeCooldownTiming({
+        email: 'a@b.com',
+        serverTime: 'invalid-date',
+        nextResendAt: '2026-11-21T12:01:00Z',
+      })).toBe(false);
+      expect(hasAuthoritativeCooldownTiming({
+        email: 'a@b.com',
+        serverTime: '2026-11-21T12:00:00Z',
+        nextResendAt: '2026-11-21T12:01:00Z',
+      })).toBe(true);
+    });
+
+    it('initial OTP response preserves backend nextResendAt without suppression', () => {
+      const now = 1720872000000;
+      const initialResponse = {
+        code: 'OTP_SENT' as const,
+        challengeId: 'c-init',
+        serverTime: new Date(now).toISOString(),
+        nextResendAt: new Date(now + 60000).toISOString(),
+        resendsRemaining: 5,
+        attemptToken: 'token-abc',
+      };
+
+      const state = applyBackendChallengeState(null, initialResponse, 'amber@example.com', now);
+
+      expect(state.serverTime).toBe(initialResponse.serverTime);
+      expect(state.nextResendAt).toBe(initialResponse.nextResendAt);
+      expect(hasAuthoritativeCooldownTiming(state)).toBe(true);
+
+      const cooldown = cooldownSecondsFromServerClocks(state.serverTime, state.nextResendAt, now, state.receivedAtMs);
+      expect(cooldown).toBe(60);
+    });
+
+    it('HTTP 429 response updates timing correctly when Retry-After is supplied', () => {
+      const now = 1720872000000;
+      const existingState: SignupOtpChallengeState = {
+        email: 'amber@example.com',
+        challengeId: 'c-1',
+        serverTime: new Date(now).toISOString(),
+        nextResendAt: new Date(now).toISOString(),
+        resendsRemaining: 4,
+      };
+
+      // 429 response body with fresh nextResendAt
+      const rateLimitResponse = {
+        code: 'OTP_RESEND_COOLDOWN' as const,
+        serverTime: new Date(now + 5000).toISOString(),
+        nextResendAt: new Date(now + 35000).toISOString(),
+        resendsRemaining: 4,
+      };
+
+      const updated = applyBackendChallengeState(existingState, rateLimitResponse, 'amber@example.com', now + 5000);
+      expect(updated.nextResendAt).toBe(rateLimitResponse.nextResendAt);
+
+      const cooldown = cooldownSecondsFromServerClocks(
+        updated.serverTime,
+        updated.nextResendAt,
+        now + 5000,
+        updated.receivedAtMs
+      );
+      expect(cooldown).toBe(30);
+    });
   });
 });

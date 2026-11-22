@@ -177,6 +177,20 @@ export function isResendExhausted(state: SignupOtpChallengeState | null): boolea
     || state.resendsRemaining === 0;
 }
 
+/**
+ * Checks whether the challenge state contains authoritative and valid timing information from the backend.
+ */
+export function hasAuthoritativeCooldownTiming(
+  state: SignupOtpChallengeState | null
+): boolean {
+  if (!state?.serverTime || !state?.nextResendAt) {
+    return false;
+  }
+  const server = Date.parse(state.serverTime);
+  const next = Date.parse(state.nextResendAt);
+  return Number.isFinite(server) && Number.isFinite(next);
+}
+
 export function savePendingSignupCredentials(credentials: PendingSignupCredentials): void {
   if (typeof sessionStorage === 'undefined') return;
   const safe: PendingSignupCredentials = {
