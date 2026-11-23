@@ -26,6 +26,7 @@ import {
 } from '@/lib/orders';
 import { BarChart3, CalendarDays, Eye, EyeOff, MessageSquareText, MonitorCog, Search, Store, Trash2, UserRoundSearch, X } from 'lucide-react';
 import { filterAdminMenuItems } from '@/lib/adminMenuSearch';
+import { sortMenuItems } from '@/lib/menuSort';
 
 const MAX_KDS_ALLOWED_IPS = 3;
 
@@ -193,7 +194,7 @@ export default function AdminPage() {
     onConfirm: () => {},
   });
 
-  // Menu form state
+  // Menu modal & form state
   const [menuForm, setMenuForm] = useState({
     name: '',
     description: '',
@@ -202,6 +203,19 @@ export default function AdminPage() {
     image: '',
     available: true,
   });
+  const [menuFormError, setMenuFormError] = useState('');
+  const [menuSaving, setMenuSaving] = useState(false);
+  const editTriggerRef = useRef<HTMLElement | null>(null);
+  const initialMenuFormRef = useRef({
+    name: '',
+    description: '',
+    price: '',
+    category: '',
+    image: '',
+    available: true,
+  });
+  const menuModalRef = useRef<HTMLDivElement>(null);
+  const menuItemNameInputRef = useRef<HTMLInputElement>(null);
 
   // Category form state
   const [categoryForm, setCategoryForm] = useState({
@@ -258,9 +272,15 @@ export default function AdminPage() {
     try {
       const res = await apiFetch(`${API_BASE}/menu`);
       const data = await res.json();
-      setMenuItems(data);
+      setMenuItems(sortMenuItems(Array.isArray(data) ? data : [], categories));
     } catch { showNotification('Failed to load menu items', 'error'); }
-  }, []);
+  }, [categories]);
+
+  useEffect(() => {
+    if (categories.length > 0) {
+      setMenuItems(prev => sortMenuItems(prev, categories));
+    }
+  }, [categories]);
 
   const fetchReservations = useCallback(async () => {
     try {
@@ -490,44 +510,244 @@ export default function AdminPage() {
     }
   };
 
-  // --- Menu Item CRUD ---
+  // --- Menu Item CRUD & Modal ---
+  const isMenuFormDirty = useCallback(() => {
+    const init = initialMenuFormRef.current;
+    return (
+      menuForm.name !== init.name ||
+      menuForm.description !== init.description ||
+      menuForm.price !== init.price ||
+      menuForm.category !== init.category ||
+      menuForm.available !== init.available ||
+      menuForm.image !== init.image
+    );
+  }, [menuForm]);
+
+  const handleCloseMenuModal = useCallback(() => {
+    setShowMenuForm(false);
+    setEditingItem(null);
+    setMenuFormError('');
+    setTimeout(() => {
+      editTriggerRef.current?.focus();
+    }, 0);
+  }, []);
+
+  const handleMenuBackdropClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target !== e.currentTarget) return;
+      if (isMenuFormDirty()) {
+        if (window.confirm('You have unsaved changes. Are you sure you want to discard them?')) {
+          handleCloseMenuModal();
+        }
+      } else {
+        handleCloseMenuModal();
+      }
+    },
+    [isMenuFormDirty, handleCloseMenuModal]
+  );
+
+  const handleAddNewItem = useCallback(
+    (triggerEl?: HTMLElement) => {
+      if (triggerEl) {
+        editTriggerRef.current = triggerEl;
+      }
+      const initialCat = filterCategory !== 'All' ? filterCategory : (categories[0]?.name || '');
+      const emptyForm = {
+        name: '',
+        description: '',
+        price: '',
+        category: initialCat,
+        image: '',
+        available: true,
+      };
+      setEditingItem(null);
+      setMenuForm(emptyForm);
+      initialMenuFormRef.current = emptyForm;
+      setMenuFormError('');
+      setShowMenuForm(true);
+    },
+    [filterCategory, categories]
+  );
+
+  const startEditItem = useCallback((item: MenuItem, triggerEl?: HTMLElement) => {
+    if (triggerEl) {
+      editTriggerRef.current = triggerEl;
+    }
+    setEditingItem(item);
+    const formValues = {
+      name: item.name,
+      description: item.description,
+      price: item.price.toString(),
+      category: item.category,
+      image: item.image,
+      available: item.available,
+    };
+    setMenuForm(formValues);
+    initialMenuFormRef.current = formValues;
+    setMenuFormError('');
+    setShowMenuForm(true);
+  }, []);
+
+  // Lock background scroll when menu modal is open without layout shift
+  useEffect(() => {
+    if (showMenuForm) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [showMenuForm]);
+
+  // Auto-focus first input field when modal opens
+  useEffect(() => {
+    if (showMenuForm) {
+      const timer = window.setTimeout(() => {
+        menuItemNameInputRef.current?.focus();
+      }, 50);
+      return () => window.clearTimeout(timer);
+    }
+  }, [showMenuForm]);
+
+  // Modal keyboard accessibility: Escape to close, Tab to trap focus
+  useEffect(() => {
+    if (!showMenuForm) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCloseMenuModal();
+      } else if (e.key === 'Tab') {
+        if (!menuModalRef.current) return;
+        const focusable = menuModalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showMenuForm, handleCloseMenuModal]);
+
   const handleMenuSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (menuSaving) return;
+
+    const trimmedName = menuForm.name.trim();
+    if (!trimmedName) {
+      setMenuFormError('Please enter a dish name.');
+      return;
+    }
+    const parsedPrice = parseFloat(menuForm.price);
+    if (isNaN(parsedPrice) || parsedPrice < 0) {
+      setMenuFormError('Please enter a valid non-negative price.');
+      return;
+    }
+    if (!menuForm.category) {
+      setMenuFormError('Please select a category.');
+      return;
+    }
+    if (!menuForm.description.trim()) {
+      setMenuFormError('Please enter a description.');
+      return;
+    }
+
+    setMenuSaving(true);
+    setMenuFormError('');
+
     const payload = {
-      name: menuForm.name,
-      description: menuForm.description,
-      price: parseFloat(menuForm.price),
+      name: trimmedName,
+      description: menuForm.description.trim(),
+      price: parsedPrice,
       category: menuForm.category,
-      image: menuForm.image,
+      image: menuForm.image.trim(),
       available: menuForm.available,
     };
 
     try {
       if (editingItem) {
-        await apiFetch(`${API_BASE}/menu/${editingItem.id}`, {
+        const res = await apiFetch(`${API_BASE}/menu/${editingItem.id}`, {
           method: 'PUT',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
         });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.message || `Failed to update menu item (${res.status})`);
+        }
+        const updatedItem = await res.json();
+        setMenuItems(prev =>
+          sortMenuItems(
+            prev.map(item => (item.id === editingItem.id ? { ...item, ...updatedItem } : item)),
+            categories
+          )
+        );
         showNotification('Menu item updated', 'success');
       } else {
-        await apiFetch(`${API_BASE}/menu`, {
+        const res = await apiFetch(`${API_BASE}/menu`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify(payload),
         });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.message || `Failed to create menu item (${res.status})`);
+        }
+        const createdItem = await res.json();
+        setMenuItems(prev => sortMenuItems([...prev, createdItem], categories));
         showNotification('Menu item created', 'success');
       }
-      resetMenuForm();
-      fetchMenuItems();
-    } catch { showNotification('Failed to save menu item', 'error'); }
+      handleCloseMenuModal();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save menu item';
+      setMenuFormError(message);
+      showNotification(message, 'error');
+    } finally {
+      setMenuSaving(false);
+    }
   };
 
   const toggleAvailability = async (id: string) => {
+    // 1. Optimistic in-place update — row position NEVER changes
+    setMenuItems(prev =>
+      prev.map(item => (item.id === id ? { ...item, available: !item.available } : item))
+    );
+
     try {
-      await apiFetch(`${API_BASE}/menu/${id}/availability`, { method: 'PATCH', headers: getAuthHeaders(false) });
-      fetchMenuItems();
-    } catch { showNotification('Failed to toggle availability', 'error'); }
+      const res = await apiFetch(`${API_BASE}/menu/${id}/availability`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(false),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to toggle availability (${res.status})`);
+      }
+      const updated = await res.json().catch(() => null);
+      if (updated && updated.id) {
+        setMenuItems(prev =>
+          prev.map(item => (item.id === id ? { ...item, available: updated.available } : item))
+        );
+      }
+    } catch {
+      // Revert on failure
+      setMenuItems(prev =>
+        prev.map(item => (item.id === id ? { ...item, available: !item.available } : item))
+      );
+      showNotification('Failed to toggle availability. Changes reverted.', 'error');
+    }
   };
 
   const toggleMostLoved = async (id: string) => {
@@ -545,9 +765,12 @@ export default function AdminPage() {
       message: 'Are you sure you want to delete this item? This action cannot be undone.',
       onConfirm: async () => {
         try {
-          await apiFetch(`${API_BASE}/menu/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
+          const res = await apiFetch(`${API_BASE}/menu/${id}`, { method: 'DELETE', headers: getAuthHeaders(false) });
+          if (!res.ok) {
+            throw new Error(`Failed to delete item (${res.status})`);
+          }
           showNotification('Item deleted', 'success');
-          fetchMenuItems();
+          setMenuItems(prev => prev.filter(item => item.id !== id));
           setConfirmModal(p => ({ ...p, isOpen: false }));
         } catch { showNotification('Failed to delete item', 'error'); }
       }
@@ -594,17 +817,11 @@ export default function AdminPage() {
     } catch { showNotification('Failed to update review', 'error'); }
   };
 
-  const startEditItem = (item: MenuItem) => {
-    setEditingItem(item);
-    setMenuForm({
-      name: item.name,
-      description: item.description,
-      price: item.price.toString(),
-      category: item.category,
-      image: item.image,
-      available: item.available,
-    });
-    setShowMenuForm(true);
+  const resetMenuForm = () => {
+    setMenuForm({ name: '', description: '', price: '', category: '', image: '', available: true });
+    setEditingItem(null);
+    setShowMenuForm(false);
+    setMenuFormError('');
   };
 
   const startEditCategory = (cat: Category) => {
@@ -615,12 +832,6 @@ export default function AdminPage() {
       displayOrder: cat.displayOrder.toString(),
     });
     setShowCategoryForm(true);
-  };
-
-  const resetMenuForm = () => {
-    setMenuForm({ name: '', description: '', price: '', category: '', image: '', available: true });
-    setEditingItem(null);
-    setShowMenuForm(false);
   };
 
   const resetCategoryForm = () => {
@@ -1032,8 +1243,9 @@ export default function AdminPage() {
 
           <div className={styles.menuToolbar}>
             <button
+              type="button"
               className={styles.addBtn}
-              onClick={() => { resetMenuForm(); setShowMenuForm(true); }}
+              onClick={e => handleAddNewItem(e.currentTarget)}
             >
               + Add Item
             </button>
@@ -1071,108 +1283,6 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <AnimatePresence>
-            {showMenuForm && (
-              <motion.form
-                className={styles.formCard}
-                onSubmit={handleMenuSubmit}
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-              >
-                <h3>{editingItem ? 'Edit Menu Item' : 'New Menu Item'}</h3>
-                <div className={styles.formGrid}>
-                  <div className={styles.field}>
-                    <label>Name</label>
-                    <input
-                      type="text"
-                      value={menuForm.name}
-                      onChange={e => setMenuForm(p => ({ ...p, name: e.target.value }))}
-                      placeholder="Dish name"
-                      required
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <label>Price ($)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={menuForm.price}
-                      onChange={e => setMenuForm(p => ({ ...p, price: e.target.value }))}
-                      placeholder="0.00"
-                      required
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <label>Category</label>
-                    <select
-                      value={menuForm.category}
-                      onChange={e => setMenuForm(p => ({ ...p, category: e.target.value }))}
-                      required
-                    >
-                      <option value="">Select category</option>
-                      {categories.map(cat => (
-                        <option key={cat.id} value={cat.name}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className={styles.field}>
-                    <label>Availability</label>
-                    <div className={styles.toggleWrapper}>
-                      <button
-                        type="button"
-                        className={`${styles.toggle} ${menuForm.available ? styles.toggleOn : ''}`}
-                        onClick={() => setMenuForm(p => ({ ...p, available: !p.available }))}
-                      >
-                        <span className={styles.toggleKnob} />
-                      </button>
-                      <span>{menuForm.available ? 'Available' : 'Unavailable'}</span>
-                    </div>
-                  </div>
-                  <div className={`${styles.field} ${styles.fullWidth}`}>
-                    <label>Description</label>
-                    <textarea
-                      value={menuForm.description}
-                      onChange={e => setMenuForm(p => ({ ...p, description: e.target.value }))}
-                      placeholder="Describe the dish..."
-                      rows={3}
-                      required
-                    />
-                  </div>
-                  <div className={`${styles.field} ${styles.fullWidth}`}>
-                    <label>Image</label>
-                    <div className={styles.imageUploadArea}>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className={styles.fileInput}
-                        id="imageUpload"
-                      />
-                      <label htmlFor="imageUpload" className={styles.uploadLabel}>
-                        {menuForm.image ? '✅ Image set' : '📷 Choose Image'}
-                      </label>
-                      <span className={styles.orText}>or</span>
-                      <input
-                        type="text"
-                        value={menuForm.image}
-                        onChange={e => setMenuForm(p => ({ ...p, image: e.target.value }))}
-                        placeholder="Paste image URL"
-                        className={styles.urlInput}
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className={styles.formActions}>
-                  <button type="button" className={styles.cancelBtn} onClick={resetMenuForm}>Cancel</button>
-                  <button type="submit" className={styles.saveBtn}>
-                    {editingItem ? 'Update' : 'Create'} Item
-                  </button>
-                </div>
-              </motion.form>
-            )}
-          </AnimatePresence>
-
           <div className={styles.menuTable}>
             <div className={styles.tableHeader}>
               <span className={styles.colImage}>Image</span>
@@ -1187,10 +1297,10 @@ export default function AdminPage() {
                 <motion.div
                   key={item.id}
                   className={`${styles.tableRow} ${!item.available ? styles.unavailable : ''}`}
-                  layout
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 10 }}
+                  layout="position"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
                 >
                   <span className={styles.colImage}>
                     <div className={styles.thumbnail}>
@@ -1212,15 +1322,31 @@ export default function AdminPage() {
                   <span className={styles.colPrice}>${item.price.toFixed(2)}</span>
                   <span className={styles.colStatus}>
                     <button
+                      type="button"
                       className={`${styles.statusBadge} ${item.available ? styles.statusAvailable : styles.statusUnavailable}`}
                       onClick={() => toggleAvailability(item.id)}
+                      aria-label={`${item.name} is ${item.available ? 'available' : 'unavailable'}. Click to toggle.`}
                     >
                       {item.available ? 'Available' : 'Unavailable'}
                     </button>
                   </span>
                   <span className={styles.colActions}>
-                    <button className={styles.editBtn} onClick={() => startEditItem(item)}>Edit</button>
-                    <button className={styles.deleteBtn} onClick={() => deleteMenuItem(item.id)}>Delete</button>
+                    <button
+                      type="button"
+                      className={styles.editBtn}
+                      onClick={e => startEditItem(item, e.currentTarget)}
+                      aria-label={`Edit ${item.name}`}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.deleteBtn}
+                      onClick={() => deleteMenuItem(item.id)}
+                      aria-label={`Delete ${item.name}`}
+                    >
+                      Delete
+                    </button>
                   </span>
                 </motion.div>
               ))}
@@ -2055,6 +2181,171 @@ export default function AdminPage() {
                   {(!selectedOrder.messages || selectedOrder.messages.length === 0) && <p>No messages.</p>}
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Menu Item Edit / Create Modal */}
+      <AnimatePresence>
+        {showMenuForm && (
+          <div
+            className={styles.modalBackdrop}
+            onClick={handleMenuBackdropClick}
+            data-testid="menu-modal-backdrop"
+          >
+            <motion.div
+              ref={menuModalRef}
+              className={`${styles.menuModal} premium-card`}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="menuModalTitle"
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.2 }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className={styles.menuModalHeader}>
+                <h3 id="menuModalTitle">
+                  {editingItem ? 'Edit Menu Item' : 'New Menu Item'}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.menuModalCloseBtn}
+                  onClick={handleCloseMenuModal}
+                  aria-label="Close dialog"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleMenuSubmit} className={styles.menuModalForm}>
+                <div className={styles.menuModalBody}>
+                  {menuFormError && (
+                    <div className={styles.menuModalError} role="alert">
+                      {menuFormError}
+                    </div>
+                  )}
+
+                  <div className={styles.formGrid}>
+                    <div className={styles.field}>
+                      <label htmlFor="menuItemName">Name *</label>
+                      <input
+                        ref={menuItemNameInputRef}
+                        id="menuItemName"
+                        type="text"
+                        value={menuForm.name}
+                        onChange={e => setMenuForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="Dish name"
+                        required
+                        disabled={menuSaving}
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="menuItemPrice">Price ($) *</label>
+                      <input
+                        id="menuItemPrice"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={menuForm.price}
+                        onChange={e => setMenuForm(p => ({ ...p, price: e.target.value }))}
+                        placeholder="0.00"
+                        required
+                        disabled={menuSaving}
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="menuItemCategory">Category *</label>
+                      <select
+                        id="menuItemCategory"
+                        value={menuForm.category}
+                        onChange={e => setMenuForm(p => ({ ...p, category: e.target.value }))}
+                        required
+                        disabled={menuSaving}
+                      >
+                        <option value="">Select category</option>
+                        {categories.map(cat => (
+                          <option key={cat.id} value={cat.name}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className={styles.field}>
+                      <label>Availability</label>
+                      <div className={styles.toggleWrapper}>
+                        <button
+                          type="button"
+                          className={`${styles.toggle} ${menuForm.available ? styles.toggleOn : ''}`}
+                          onClick={() => setMenuForm(p => ({ ...p, available: !p.available }))}
+                          disabled={menuSaving}
+                          aria-label={`Toggle availability, currently ${menuForm.available ? 'available' : 'unavailable'}`}
+                        >
+                          <span className={styles.toggleKnob} />
+                        </button>
+                        <span>{menuForm.available ? 'Available' : 'Unavailable'}</span>
+                      </div>
+                    </div>
+                    <div className={`${styles.field} ${styles.fullWidth}`}>
+                      <label htmlFor="menuItemDescription">Description *</label>
+                      <textarea
+                        id="menuItemDescription"
+                        value={menuForm.description}
+                        onChange={e => setMenuForm(p => ({ ...p, description: e.target.value }))}
+                        placeholder="Describe the dish..."
+                        rows={3}
+                        required
+                        disabled={menuSaving}
+                      />
+                    </div>
+                    <div className={`${styles.field} ${styles.fullWidth}`}>
+                      <label>Image</label>
+                      <div className={styles.imageUploadArea}>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleImageUpload}
+                          className={styles.fileInput}
+                          id="imageUpload"
+                          disabled={menuSaving}
+                        />
+                        <label htmlFor="imageUpload" className={styles.uploadLabel}>
+                          {menuForm.image ? '✅ Image set' : '📷 Choose Image'}
+                        </label>
+                        <span className={styles.orText}>or</span>
+                        <input
+                          type="text"
+                          value={menuForm.image}
+                          onChange={e => setMenuForm(p => ({ ...p, image: e.target.value }))}
+                          placeholder="Paste image URL"
+                          className={styles.urlInput}
+                          disabled={menuSaving}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={styles.menuModalFooter}>
+                  <button
+                    type="button"
+                    className={styles.cancelBtn}
+                    onClick={handleCloseMenuModal}
+                    disabled={menuSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className={styles.saveBtn}
+                    disabled={menuSaving}
+                  >
+                    {menuSaving ? 'Saving...' : editingItem ? 'Update Item' : 'Create Item'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
