@@ -24,7 +24,8 @@ import {
   orderStatusLabel,
   sortOrders,
 } from '@/lib/orders';
-import { BarChart3, CalendarDays, Eye, EyeOff, MessageSquareText, MonitorCog, Search, Store, Trash2, UserRoundSearch } from 'lucide-react';
+import { BarChart3, CalendarDays, Eye, EyeOff, MessageSquareText, MonitorCog, Search, Store, Trash2, UserRoundSearch, X } from 'lucide-react';
+import { filterAdminMenuItems } from '@/lib/adminMenuSearch';
 
 const MAX_KDS_ALLOWED_IPS = 3;
 
@@ -172,6 +173,7 @@ export default function AdminPage() {
   const [orderPeriodFilter, setOrderPeriodFilter] = useState<'all' | 'today' | 'week'>('all');
   const [orderDateFilter, setOrderDateFilter] = useState(getTodayString());
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [menuSearchQuery, setMenuSearchQuery] = useState('');
   const orderHistoryDateRef = useRef<HTMLInputElement>(null);
   const [showMenuForm, setShowMenuForm] = useState(false);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
@@ -645,9 +647,10 @@ export default function AdminPage() {
     } catch { showNotification('Failed to upload image', 'error'); }
   };
 
-  const filteredItems = filterCategory === 'All'
-    ? menuItems
-    : menuItems.filter(item => item.category === filterCategory);
+  const filteredItems = useMemo(
+    () => filterAdminMenuItems(menuItems, filterCategory, menuSearchQuery),
+    [menuItems, filterCategory, menuSearchQuery],
+  );
 
   const kdsAllowedIps = useMemo(
     () => parseKdsAllowedIps(storeSettings.kdsAllowedIp),
@@ -1025,12 +1028,47 @@ export default function AdminPage() {
                 ))}
               </div>
             </div>
+          </div>
+
+          <div className={styles.menuToolbar}>
             <button
               className={styles.addBtn}
               onClick={() => { resetMenuForm(); setShowMenuForm(true); }}
             >
               + Add Item
             </button>
+
+            <div className={styles.menuSearchWrapper}>
+              <label className={styles.menuSearchField} htmlFor="menuItemSearch">
+                <Search size={16} aria-hidden />
+                <input
+                  id="menuItemSearch"
+                  type="search"
+                  value={menuSearchQuery}
+                  onChange={e => setMenuSearchQuery(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') setMenuSearchQuery('');
+                  }}
+                  placeholder="Search items by name, description, or category..."
+                  autoComplete="off"
+                />
+                {menuSearchQuery && (
+                  <button
+                    type="button"
+                    className={styles.searchClearBtn}
+                    onClick={() => setMenuSearchQuery('')}
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </label>
+              {menuSearchQuery.trim() && (
+                <span className={styles.searchCountBadge}>
+                  {filteredItems.length} {filteredItems.length === 1 ? 'item found' : 'items found'}
+                </span>
+              )}
+            </div>
           </div>
 
           <AnimatePresence>
@@ -1189,7 +1227,34 @@ export default function AdminPage() {
             </AnimatePresence>
             {filteredItems.length === 0 && (
               <div className={styles.emptyState}>
-                <p>No items found. Click &ldquo;+ Add Item&rdquo; to get started.</p>
+                {menuSearchQuery.trim() ? (
+                  <>
+                    <p>
+                      No menu items matching &ldquo;{menuSearchQuery}&rdquo;
+                      {filterCategory !== 'All' ? ` in ${filterCategory}` : ''}.
+                    </p>
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '0.5rem' }}>
+                      <button
+                        type="button"
+                        className={styles.pill}
+                        onClick={() => setMenuSearchQuery('')}
+                      >
+                        Clear search
+                      </button>
+                      {filterCategory !== 'All' && (
+                        <button
+                          type="button"
+                          className={styles.pill}
+                          onClick={() => setFilterCategory('All')}
+                        >
+                          Search in All Categories
+                        </button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p>No items found. Click &ldquo;+ Add Item&rdquo; to get started.</p>
+                )}
               </div>
             )}
           </div>

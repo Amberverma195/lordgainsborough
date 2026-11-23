@@ -241,6 +241,90 @@
   outline: none;
 }
 
+.menuToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+.menuSearchWrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  max-width: 480px;
+  min-width: 260px;
+}
+
+.menuSearchField {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.65rem 0.95rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-light);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.menuSearchField:focus-within {
+  border-color: var(--secondary);
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.15);
+  color: var(--secondary);
+}
+
+.menuSearchField input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.menuSearchField input::placeholder {
+  color: var(--text-light);
+}
+
+.menuSearchField input:focus {
+  outline: none;
+}
+
+.searchClearBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 50%;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.searchClearBtn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.searchCountBadge {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--secondary);
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .userSearchBar {
   display: flex;
   align-items: center;
