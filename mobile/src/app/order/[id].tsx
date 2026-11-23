@@ -151,7 +151,7 @@ export default function OrderDetailScreen() {
         />
       }
     >
-      <AppHeader title={confirmed ? 'Confirmed' : 'Order Details'} showBack />
+      <AppHeader title={confirmed ? 'Order received' : 'Order Details'} showBack />
       {order.isLoading && !display ? <LoadingState label="Loading your order" /> : null}
       {!display && !order.isLoading && !order.isError ? (
         <Text style={styles.note}>Sign in with the account that placed this order to view it.</Text>
@@ -165,7 +165,14 @@ export default function OrderDetailScreen() {
       ) : null}
       {display ? (
         <View style={styles.stack}>
-          {confirmed ? <Text style={styles.kicker}>Sent to the kitchen</Text> : null}
+          {confirmed ? (
+            <View style={styles.confirmationHeader}>
+              <Text style={styles.kicker}>Order received</Text>
+              <Text style={styles.confirmationSupporting}>
+                Your order has been received successfully. You can track its preparation status below.
+              </Text>
+            </View>
+          ) : null}
 
           {/* Row 1: Very first row: Order ID, then the date and time, and then the status */}
           <Card style={styles.heroCard}>
@@ -292,6 +299,15 @@ const styles = StyleSheet.create({
   stack: {
     gap: space.lg,
     paddingBottom: space.xl,
+  },
+  confirmationHeader: {
+    gap: space.xs,
+  },
+  confirmationSupporting: {
+    color: colors.textSecondary,
+    fontFamily: type.body,
+    fontSize: 14,
+    lineHeight: 20,
   },
   kicker: {
     color: colors.gold,

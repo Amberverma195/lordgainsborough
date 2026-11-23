@@ -355,4 +355,64 @@ describe('SignupScreen', () => {
     });
     expect(mockEstablishSession).not.toHaveBeenCalled();
   });
+
+  it('enforces 10-digit limit and prevents typing 11th digit in mobile signup', async () => {
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Phone number')).toBeTruthy();
+    });
+
+    const phoneInput = screen.getByLabelText('Phone number');
+
+    // Type 10 digits
+    await act(async () => {
+      fireEvent.changeText(phoneInput, '5195551234');
+    });
+    expect(phoneInput.props.value).toBe('+1 (519)-555-1234');
+
+    // Attempt to type an 11th digit
+    await act(async () => {
+      fireEvent.changeText(phoneInput, '+1 (519)-555-12345');
+    });
+    // Should remain 10 digits
+    expect(phoneInput.props.value).toBe('+1 (519)-555-1234');
+  });
+
+  it('rejects pasted overlength phone number without silent truncation', async () => {
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Phone number')).toBeTruthy();
+    });
+
+    const phoneInput = screen.getByLabelText('Phone number');
+
+    // Paste 11-digit overlength number
+    await act(async () => {
+      fireEvent.changeText(phoneInput, '51955512345');
+    });
+
+    // Not truncated: extra digit is kept and error is displayed
+    expect(phoneInput.props.value).toBe('+1 (519)-555-1234-5');
+    expect(screen.getByText('Phone number cannot exceed 10 digits.')).toBeTruthy();
+  });
+
+  it('displays error when submitting with fewer than 10 phone digits', async () => {
+    renderScreen();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Phone number')).toBeTruthy();
+    });
+
+    await fillForm({ phone: '519555123' });
+    await act(async () => {
+      fireEvent.press(screen.getByText('Continue'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Please enter a valid 10-digit phone number.')).toBeTruthy();
+    });
+    expect(mockSendSignupOtp).not.toHaveBeenCalled();
+  });
 });

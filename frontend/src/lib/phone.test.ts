@@ -7,7 +7,9 @@ import {
   isValidIdentifier,
   isValidPhoneNumber,
   normalizeIdentifier,
+  processPhoneInputChange,
   sanitizeIdentifierInput,
+  validatePhoneNumber,
 } from './phone';
 
 describe('phone validation and formatting', () => {
@@ -76,5 +78,136 @@ describe('identifier helpers', () => {
     expect(normalizeIdentifier('+1 (519)-555-1234')).toBe('+15195551234');
 
     expect(sanitizeIdentifierInput('  user\u200B@example.com  ')).toBe('user@example.com  ');
+  });
+});
+
+describe('10-digit phone limit and interaction scenarios', () => {
+  it('requirement 1: typing exactly 10 digits accumulates and formats properly', () => {
+    let current = '';
+    const digitsToType = '5195551234';
+
+    for (const char of digitsToType) {
+      const result = processPhoneInputChange(current, current + char, false);
+      expect(result.accepted).toBe(true);
+      expect(result.error).toBeUndefined();
+      current = result.formatted;
+    }
+
+    expect(current).toBe('+1 (519)-555-1234');
+    expect(validatePhoneNumber(current)).toEqual({ valid: true });
+    expect(isValidPhoneNumber(current)).toBe(true);
+  });
+
+  it('requirement 2: attempting to type an 11th national digit is prevented', () => {
+    const tenDigits = '+1 (519)-555-1234';
+    // User tries to type '5' at the end of a 10-digit phone number
+    const result = processPhoneInputChange(tenDigits, tenDigits + '5', false);
+    expect(result.accepted).toBe(false);
+    expect(result.formatted).toBe('+1 (519)-555-1234');
+    expect(result.digits).toBe('5195551234');
+    expect(result.error).toBeUndefined();
+    expect(isValidPhoneNumber(result.formatted)).toBe(true);
+  });
+
+  it('requirement 3: pasting a valid 10-digit number formats correctly', () => {
+    // Raw 10 digits
+    const res1 = processPhoneInputChange('', '5195551234', true);
+    expect(res1.accepted).toBe(true);
+    expect(res1.formatted).toBe('+1 (519)-555-1234');
+    expect(res1.error).toBeUndefined();
+    expect(validatePhoneNumber(res1.formatted)).toEqual({ valid: true });
+
+    // Pre-formatted
+    const res2 = processPhoneInputChange('', '(519) 555-1234', true);
+    expect(res2.accepted).toBe(true);
+    expect(res2.formatted).toBe('+1 (519)-555-1234');
+    expect(res2.error).toBeUndefined();
+  });
+
+  it('requirement 4: pasting a valid number with +1 or country code 1', () => {
+    // With +1 prefix
+    const res1 = processPhoneInputChange('', '+15195551234', true);
+    expect(res1.accepted).toBe(true);
+    expect(res1.formatted).toBe('+1 (519)-555-1234');
+    expect(res1.error).toBeUndefined();
+    expect(validatePhoneNumber(res1.formatted)).toEqual({ valid: true });
+
+    // With 1 prefix
+    const res2 = processPhoneInputChange('', '15195551234', true);
+    expect(res2.accepted).toBe(true);
+    expect(res2.formatted).toBe('+1 (519)-555-1234');
+    expect(res2.error).toBeUndefined();
+    expect(validatePhoneNumber(res2.formatted)).toEqual({ valid: true });
+
+    // Formatted with +1
+    const res3 = processPhoneInputChange('', '+1 (519) 555-1234', true);
+    expect(res3.accepted).toBe(true);
+    expect(res3.formatted).toBe('+1 (519)-555-1234');
+    expect(res3.error).toBeUndefined();
+  });
+
+  it('requirement 5: pasting an overlength number rejects with clear error without silent truncation', () => {
+    // 11 digits not starting with 1
+    const res1 = processPhoneInputChange('', '51955512345', true);
+    expect(res1.accepted).toBe(true);
+    expect(res1.formatted).toBe('+1 (519)-555-1234-5'); // extra digit visible!
+    expect(res1.error).toBe('Phone number cannot exceed 10 digits.');
+    expect(validatePhoneNumber(res1.formatted)).toEqual({
+      valid: false,
+      message: 'Phone number cannot exceed 10 digits.',
+    });
+
+    // 12 digits starting with country code 1 (1 + 11 national digits)
+    const res2 = processPhoneInputChange('', '151955512345', true);
+    expect(res2.accepted).toBe(true);
+    expect(res2.formatted).toBe('+1 (519)-555-1234-5');
+    expect(res2.error).toBe('Phone number cannot exceed 10 digits.');
+    expect(validatePhoneNumber(res2.formatted)).toEqual({
+      valid: false,
+      message: 'Phone number cannot exceed 10 digits.',
+    });
+
+    // Pasting with +1 prefix and overlength
+    const res3 = processPhoneInputChange('', '+1 (519) 555-12345', true);
+    expect(res3.accepted).toBe(true);
+    expect(res3.formatted).toBe('+1 (519)-555-1234-5');
+    expect(res3.error).toBe('Phone number cannot exceed 10 digits.');
+  });
+
+  it('requirement 6: backspacing and editing in the middle', () => {
+    // Backspacing from 10 digits to 9 digits
+    const res1 = processPhoneInputChange('+1 (519)-555-1234', '+1 (519)-555-123', false);
+    expect(res1.accepted).toBe(true);
+    expect(res1.formatted).toBe('+1 (519)-555-123');
+    expect(res1.error).toBeUndefined();
+
+    // Editing digits in the middle (replacing 555 with 444)
+    const res2 = processPhoneInputChange('+1 (519)-555-1234', '+1 (519)-444-1234', false);
+    expect(res2.accepted).toBe(true);
+    expect(res2.formatted).toBe('+1 (519)-444-1234');
+    expect(res2.error).toBeUndefined();
+
+    // Deleting overlength digit clears the error
+    const overlength = '+1 (519)-555-1234-5';
+    const res3 = processPhoneInputChange(overlength, '+1 (519)-555-1234', false);
+    expect(res3.accepted).toBe(true);
+    expect(res3.formatted).toBe('+1 (519)-555-1234');
+    expect(res3.error).toBeUndefined();
+    expect(validatePhoneNumber(res3.formatted)).toEqual({ valid: true });
+  });
+
+  it('requirement 7: invalid short numbers return appropriate validation error', () => {
+    expect(validatePhoneNumber('')).toEqual({
+      valid: false,
+      message: 'Please enter a valid 10-digit phone number.',
+    });
+    expect(validatePhoneNumber('519555123')).toEqual({
+      valid: false,
+      message: 'Please enter a valid 10-digit phone number.',
+    });
+    expect(validatePhoneNumber('+1 (519)-555-12')).toEqual({
+      valid: false,
+      message: 'Please enter a valid 10-digit phone number.',
+    });
   });
 });

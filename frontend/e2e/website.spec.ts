@@ -67,7 +67,7 @@ async function menuItem(page: Page, name = 'Cheesy Garlic Bread') {
 async function checkout(page: Page) {
   await page.getByRole('button',{name:'Proceed to Checkout',exact:true}).click();await expect(page).toHaveURL(/\/checkout$/);
   await page.getByRole('button',{name:/Confirm Pick-up Order/}).click();await expect(page).toHaveURL(/\/confirmation$/);
-  await expect(page.getByRole('heading',{name:'Sent to the kitchen'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'Order received'})).toBeVisible();
   const id=page.url().split('/').at(-2)!;
   await page.getByRole('link',{name:'Check Order',exact:true}).click();await expect(page.getByRole('heading',{level:1})).toContainText('ORD-');
   return id;
@@ -285,7 +285,7 @@ for(const [label,width,height] of [['desktop',1440,900],['tablet',768,1024],['mo
     await dialog.getByPlaceholder('Email or phone number',{exact:true}).fill(account.email);
     await dialog.locator('input[type=password]').fill(account.password);await dialog.getByRole('button',{name:'Sign In',exact:true}).click();
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByRole('heading',{name:'Sent to the kitchen',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Order received',exact:true})).toBeVisible();
     const id=page.url().split('/').at(-2)!;expect((await db('SELECT total FROM customer_orders WHERE id=$1',[id]))[0].total).toBe('1.70');
     await page.screenshot({path:`.e2e/responsive-${label}.png`,fullPage:true});
   });

@@ -105,7 +105,7 @@ describe('SignupScreen Legal Consent & Document Access', () => {
 
     // Verifies all unsent form fields remain intact
     expect(screen.getByDisplayValue('Arthur Pendelton')).toBeTruthy();
-    expect(screen.getByDisplayValue('519-555-0123')).toBeTruthy();
+    expect(screen.getByDisplayValue('+1 (519)-555-0123')).toBeTruthy();
     expect(screen.getByDisplayValue('arthur@example.com')).toBeTruthy();
     expect(screen.getAllByDisplayValue('ValidPass123!')).toHaveLength(2);
   });

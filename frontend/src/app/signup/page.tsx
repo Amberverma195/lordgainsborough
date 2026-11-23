@@ -24,7 +24,10 @@ import { persistAuth } from '@/lib/auth';
 import { isValidEmail, suggestEmailDomainTypo } from '@/lib/email';
 import { API_BASE } from '@/lib/orders';
 import { passwordsMatch, validatePassword } from '@/lib/password';
-import { formatPhoneInput, isValidPhoneNumber } from '@/lib/phone';
+import {
+  processPhoneInputChange,
+  validatePhoneNumber,
+} from '@/lib/phone';
 import {
   applyBackendChallengeState,
   clearAllSignupSession,
@@ -119,6 +122,7 @@ export default function SignupPage() {
   const confirmPasswordRef = useRef<HTMLInputElement>(null);
   const termsRef = useRef<HTMLInputElement>(null);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const isPastingPhoneRef = useRef(false);
 
   const crossTabRef = useRef<ReturnType<typeof subscribeSignupOtpCrossTab> | null>(null);
   const challengeRef = useRef<SignupOtpChallengeState | null>(null);
@@ -314,8 +318,9 @@ export default function SignupPage() {
       if (!firstInvalidRef) firstInvalidRef = nameRef;
     }
 
-    if (!isValidPhoneNumber(formData.phone)) {
-      newErrors.phone = 'Please enter a valid 10-digit phone number.';
+    const phoneValidation = validatePhoneNumber(formData.phone);
+    if (!phoneValidation.valid) {
+      newErrors.phone = phoneValidation.message || 'Please enter a valid 10-digit phone number.';
       if (!firstInvalidRef) firstInvalidRef = phoneRef;
     }
 
@@ -660,8 +665,49 @@ export default function SignupPage() {
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFieldErrors(prev => ({ ...prev, phone: '' }));
-    setFormData(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }));
+    const isPaste = isPastingPhoneRef.current;
+    isPastingPhoneRef.current = false;
+
+    const result = processPhoneInputChange(formData.phone, e.target.value, isPaste);
+    setFieldErrors(prev => ({ ...prev, phone: result.error || '' }));
+    setFormData(prev => ({ ...prev, phone: result.formatted }));
+  };
+
+  const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      const input = e.currentTarget;
+      const start = input.selectionStart;
+      const end = input.selectionEnd;
+      if (start !== null && start === end && start > 0) {
+        if (start <= 4 && input.value.startsWith('+1 (')) {
+          e.preventDefault();
+          setFieldErrors(prev => ({ ...prev, phone: '' }));
+          setFormData(prev => ({ ...prev, phone: '' }));
+          return;
+        }
+
+        const charBefore = input.value[start - 1];
+        if (charBefore && /\D/.test(charBefore)) {
+          let digitIndex = start - 1;
+          while (digitIndex >= 0 && /\D/.test(input.value[digitIndex])) {
+            digitIndex--;
+          }
+          if (digitIndex >= 0) {
+            e.preventDefault();
+            const sliced = input.value.slice(0, digitIndex) + input.value.slice(digitIndex + 1);
+            const result = processPhoneInputChange(formData.phone, sliced, false);
+            setFieldErrors(prev => ({ ...prev, phone: result.error || '' }));
+            setFormData(prev => ({ ...prev, phone: result.formatted }));
+            requestAnimationFrame(() => {
+              if (phoneRef.current) {
+                const newPos = Math.max(0, digitIndex);
+                phoneRef.current.setSelectionRange(newPos, newPos);
+              }
+            });
+          }
+        }
+      }
+    }
   };
 
   // Cooldown calculation
@@ -827,6 +873,10 @@ export default function SignupPage() {
                       placeholder="+1 (123)-456-7890"
                       value={formData.phone}
                       onChange={handlePhoneChange}
+                      onPaste={() => {
+                        isPastingPhoneRef.current = true;
+                      }}
+                      onKeyDown={handlePhoneKeyDown}
                       aria-invalid={!!fieldErrors.phone}
                       aria-describedby={fieldErrors.phone ? 'phone-error' : undefined}
                       className={fieldErrors.phone ? styles.inputInvalid : undefined}

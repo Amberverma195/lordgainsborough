@@ -39,6 +39,78 @@ export function isValidPhoneNumber(formatted: string): boolean {
   return extractNationalDigits(formatted).length === 10;
 }
 
+export function validatePhoneNumber(raw: string): { valid: boolean; message?: string } {
+  const digits = extractNationalDigits(raw);
+  if (digits.length === 0 || digits.length < 10) {
+    return { valid: false, message: 'Please enter a valid 10-digit phone number.' };
+  }
+  if (digits.length > 10) {
+    return { valid: false, message: 'Phone number cannot exceed 10 digits.' };
+  }
+  return { valid: true };
+}
+
+export interface PhoneInputProcessResult {
+  formatted: string;
+  digits: string;
+  error?: string;
+  accepted: boolean;
+}
+
+export function processPhoneInputChange(
+  previousFormatted: string,
+  incomingRaw: string,
+  isPaste = false
+): PhoneInputProcessResult {
+  const prevDigits = extractNationalDigits(previousFormatted);
+  const newDigits = extractNationalDigits(incomingRaw);
+
+  const isPastedOrAutofill = isPaste || Math.abs(newDigits.length - prevDigits.length) > 1;
+
+  if (isPastedOrAutofill) {
+    // Pasted or autofilled input:
+    // Support pasting formatted or raw numbers.
+    // If overlength (>10 national digits), do NOT silently truncate.
+    // Display a clear error and keep the formatted overlength input visible.
+    const formatted = formatPhoneInput(incomingRaw);
+    if (newDigits.length > 10) {
+      return {
+        formatted,
+        digits: newDigits,
+        error: 'Phone number cannot exceed 10 digits.',
+        accepted: true,
+      };
+    }
+    return {
+      formatted,
+      digits: newDigits,
+      error: undefined,
+      accepted: true,
+    };
+  }
+
+  // Normal typing or editing
+  if (newDigits.length > 10) {
+    // Attempted to type an 11th digit:
+    // Stop accepting additional digits once 10 national digits are entered.
+    return {
+      formatted: previousFormatted,
+      digits: prevDigits,
+      error: prevDigits.length > 10 ? 'Phone number cannot exceed 10 digits.' : undefined,
+      accepted: false,
+    };
+  }
+
+  // Normal typing within 10 digits, or deleting/backspacing
+  const formatted = formatPhoneInput(incomingRaw);
+  return {
+    formatted,
+    digits: newDigits,
+    error: undefined,
+    accepted: true,
+  };
+}
+
 /** Formats login input as a phone number when it looks numeric; otherwise leaves email text alone. */
 export function formatLoginIdentifier(raw: string): string {
   if (/[a-zA-Z@]/.test(raw)) {

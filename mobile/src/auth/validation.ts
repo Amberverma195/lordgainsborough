@@ -34,17 +34,101 @@ export function validatePassword(password: string): { valid: boolean; message?: 
   return { valid: true };
 }
 
-export function normalizePhone(raw: string): string {
+export function extractNationalDigits(raw: string): string {
   if (!raw) return '';
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) {
-    digits = digits.slice(1);
+  const allDigits = raw.replace(/\D/g, '');
+
+  if (allDigits.length >= 11 && allDigits.startsWith('1')) {
+    return allDigits.slice(1);
   }
-  return digits;
+
+  if (raw.trimStart().startsWith('+1')) {
+    return allDigits.startsWith('1') ? allDigits.slice(1) : allDigits;
+  }
+
+  return allDigits;
+}
+
+export function normalizePhone(raw: string): string {
+  return extractNationalDigits(raw);
+}
+
+export function formatPhoneInput(raw: string): string {
+  const digits = extractNationalDigits(raw);
+
+  if (digits.length === 0) return '';
+  if (digits.length <= 3) return `+1 (${digits}`;
+  if (digits.length <= 6) return `+1 (${digits.slice(0, 3)})-${digits.slice(3)}`;
+  if (digits.length <= 10) return `+1 (${digits.slice(0, 3)})-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  return `+1 (${digits.slice(0, 3)})-${digits.slice(3, 6)}-${digits.slice(6, 10)}-${digits.slice(10)}`;
+}
+
+export function validatePhone(phone: string): { valid: boolean; message?: string } {
+  const digits = extractNationalDigits(phone);
+  if (digits.length === 0 || digits.length < 10) {
+    return { valid: false, message: 'Please enter a valid 10-digit phone number.' };
+  }
+  if (digits.length > 10) {
+    return { valid: false, message: 'Phone number cannot exceed 10 digits.' };
+  }
+  return { valid: true };
 }
 
 export function isValidPhone(phone: string): boolean {
-  return normalizePhone(phone).length === 10;
+  return validatePhone(phone).valid;
+}
+
+export interface PhoneInputProcessResult {
+  formatted: string;
+  digits: string;
+  error?: string;
+  accepted: boolean;
+}
+
+export function processPhoneInputChange(
+  previousFormatted: string,
+  incomingRaw: string,
+  isPaste = false
+): PhoneInputProcessResult {
+  const prevDigits = extractNationalDigits(previousFormatted);
+  const newDigits = extractNationalDigits(incomingRaw);
+
+  const isPastedOrAutofill = isPaste || Math.abs(newDigits.length - prevDigits.length) > 1;
+
+  if (isPastedOrAutofill) {
+    const formatted = formatPhoneInput(incomingRaw);
+    if (newDigits.length > 10) {
+      return {
+        formatted,
+        digits: newDigits,
+        error: 'Phone number cannot exceed 10 digits.',
+        accepted: true,
+      };
+    }
+    return {
+      formatted,
+      digits: newDigits,
+      error: undefined,
+      accepted: true,
+    };
+  }
+
+  if (newDigits.length > 10) {
+    return {
+      formatted: previousFormatted,
+      digits: prevDigits,
+      error: prevDigits.length > 10 ? 'Phone number cannot exceed 10 digits.' : undefined,
+      accepted: false,
+    };
+  }
+
+  const formatted = formatPhoneInput(incomingRaw);
+  return {
+    formatted,
+    digits: newDigits,
+    error: undefined,
+    accepted: true,
+  };
 }
 
 export function isValidEmail(email: string): boolean {

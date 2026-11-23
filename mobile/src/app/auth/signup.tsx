@@ -7,7 +7,13 @@ import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput,
 import { sendSignupOtp, verifySignup } from '../../api/auth';
 import { ApiError } from '../../api/errors';
 import { useAuth } from '../../auth/AuthContext';
-import { isValidEmail, isValidPhone, normalizePhone, validatePassword } from '../../auth/validation';
+import {
+  isValidEmail,
+  normalizePhone,
+  processPhoneInputChange,
+  validatePassword,
+  validatePhone,
+} from '../../auth/validation';
 import { AppHeader } from '../../components/AppHeader';
 import { Button } from '../../components/Button';
 import { Screen } from '../../components/Screen';
@@ -77,8 +83,9 @@ export default function SignupScreen() {
       setError('Full name is required.');
       return;
     }
-    if (!isValidPhone(phone)) {
-      setError('Please enter a valid 10-digit phone number.');
+    const phoneCheck = validatePhone(phone);
+    if (!phoneCheck.valid) {
+      setError(phoneCheck.message ?? 'Please enter a valid 10-digit phone number.');
       return;
     }
     const cleanEmail = email.trim().toLowerCase();
@@ -239,13 +246,18 @@ export default function SignupScreen() {
             <TextInput
               value={phone}
               onChangeText={(val) => {
-                setPhone(val);
-                setError(null);
+                const result = processPhoneInputChange(phone, val);
+                setPhone(result.formatted);
+                if (result.error) {
+                  setError(result.error);
+                } else if (error && error.includes('phone')) {
+                  setError(null);
+                }
               }}
               keyboardType="phone-pad"
               textContentType="telephoneNumber"
               accessibilityLabel="Phone number"
-              placeholder="519-555-0100"
+              placeholder="+1 (519)-555-0100"
               placeholderTextColor={colors.textMuted}
               style={styles.input}
             />

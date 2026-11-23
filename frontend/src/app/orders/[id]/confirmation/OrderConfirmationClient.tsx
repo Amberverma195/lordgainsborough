@@ -90,8 +90,11 @@ export default function OrderConfirmationClient({ orderId }: OrderConfirmationCl
     <main className={styles.container}>
       <section className={styles.card} aria-live="polite">
         <CheckCircle2 className={styles.successIcon} size={64} aria-hidden />
-        <p className={styles.eyebrow}>Order confirmed</p>
-        <h1>Sent to the kitchen</h1>
+
+        <h1>Order received</h1>
+        <p className={styles.supportingText}>
+          Your order has been received successfully. You can track its preparation status below.
+        </p>
         <p className={styles.orderId}>#{formatOrderId(order.id)}</p>
 
         <div className={styles.details}>
